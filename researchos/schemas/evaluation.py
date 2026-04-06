@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RepeatDegree(str, Enum):
@@ -75,6 +75,13 @@ class EvaluationScores(BaseModel):
     differentiation: int = 0
     feasibility: int = 0
     falsifiability: int = 0
+
+    @field_validator('significance', 'novelty', 'differentiation', 'feasibility', 'falsifiability')
+    @classmethod
+    def check_score_range(cls, v: int) -> int:
+        if not (0 <= v <= 3):
+            raise ValueError(f'Score must be 0-3, got {v}')
+        return v
 
     @property
     def total(self) -> int:

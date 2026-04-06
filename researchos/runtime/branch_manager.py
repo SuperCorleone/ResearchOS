@@ -117,6 +117,11 @@ class BranchManager:
                         if artifact_name == "results.json":
                             entry["results"] = json.loads(content)
                         else:
+                            if len(content) > 2000:
+                                logger.warning(
+                                    "Truncating %s to 2000 chars for branch %d (original: %d chars)",
+                                    artifact_name, branch.branch_id, len(content),
+                                )
                             entry[artifact_name.replace(".", "_")] = content[:2000]
                     except Exception:
                         pass

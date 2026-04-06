@@ -205,7 +205,15 @@ class WorkflowConfig:
         if config_path.exists():
             try:
                 raw = yaml.safe_load(config_path.read_text()) or {}
-                return cls._from_raw(raw)
+                config = cls._from_raw(raw)
+                errors = config.validate()
+                if errors:
+                    logger.warning(
+                        "Workflow config %s has validation errors: %s; falling back to defaults",
+                        config_path, errors,
+                    )
+                    return cls._from_defaults()
+                return config
             except Exception:
                 logger.warning(
                     "Failed to parse %s; falling back to defaults", config_path,

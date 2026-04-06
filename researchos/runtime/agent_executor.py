@@ -5,8 +5,8 @@ DeepSeek, OpenAI, etc.) to run research agents in a tool-use loop.
 
 Environment variables:
     RESEARCHOS_API_KEY   - API key (required)
-    RESEARCHOS_BASE_URL  - API base URL (default: https://api.deepseek.com)
-    RESEARCHOS_MODEL     - Model name (default: deepseek-chat)
+    RESEARCHOS_BASE_URL  - API base URL (default: https://openrouter.ai/api/v1)
+    RESEARCHOS_MODEL     - Model name (default: qwen/qwen3.6-plus:free)
 """
 
 from __future__ import annotations
@@ -487,7 +487,7 @@ class AgentExecutor:
                 except Exception as e:
                     err_str = str(e)
                     if "429" in err_str or "rate" in err_str.lower():
-                        wait = 30
+                        wait = min(30 * (2 ** _retry), 300)
                         logger.warning("Rate limited on turn %d, waiting %ds (retry %d/10)...", turn, wait, _retry + 1)
                         time.sleep(wait)
                         continue
@@ -545,7 +545,7 @@ class AgentExecutor:
                 })
 
         total_tokens = total_input_tokens + total_output_tokens
-        credits_used = max(1, total_tokens // 1000)
+        credits_used = max(1, (total_tokens + 999) // 1000)
         duration = time.monotonic() - start_time
         record_budget_usage(pipeline_id, credits_used, project_root=self.project_root)
 

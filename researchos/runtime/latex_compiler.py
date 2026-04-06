@@ -72,13 +72,13 @@ def md_to_latex(md_content: str, title: str, pipeline_id: str) -> str:
             latex_body.append(" | ".join(cells) + "\\\\")
             continue
 
-        # Bold / italic
-        line = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", line)
-        line = re.sub(r"\*(.+?)\*", r"\\textit{\1}", line)
-
-        # Regular text
+        # Regular text: escape special chars first, then apply formatting
         if stripped:
-            latex_body.append(_tex_safe(line))
+            line = _tex_safe(line)
+            # Bold / italic (applied after escaping so LaTeX commands are clean)
+            line = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", line)
+            line = re.sub(r"\*(.+?)\*", r"\\textit{\1}", line)
+            latex_body.append(line)
         else:
             latex_body.append("")
 

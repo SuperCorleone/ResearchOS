@@ -80,15 +80,21 @@ def _flatten_metrics(data: dict, prefix: str = "") -> dict[str, float]:
 
 
 def _number_matches(draft_val: float, result_val: float, tolerance: float = 0.02) -> bool:
-    """Check if two numbers match within tolerance (handles % vs decimal)."""
+    """Check if two numbers match within relative tolerance (handles % vs decimal)."""
+    def _close(a: float, b: float) -> bool:
+        if a == b:
+            return True
+        denom = max(abs(a), abs(b), 1e-9)
+        return abs(a - b) / denom < tolerance
+
     # Direct match
-    if abs(draft_val - result_val) < tolerance:
+    if _close(draft_val, result_val):
         return True
     # Percentage match: draft says "85.3%" (85.3) and result is 0.853
-    if abs(draft_val / 100.0 - result_val) < tolerance:
+    if _close(draft_val / 100.0, result_val):
         return True
     # Reverse: draft says "0.853" and result is 85.3%
-    if abs(draft_val * 100.0 - result_val) < tolerance:
+    if _close(draft_val * 100.0, result_val):
         return True
     return False
 

@@ -67,6 +67,8 @@ class PipelineState(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+    """Reference papers/evidence that motivated this pipeline."""
 
     # Parallel branching support
     active_branch_count: int = 0

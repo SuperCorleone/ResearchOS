@@ -171,8 +171,8 @@ def _passes_impact_filter(paper: dict, min_citations: int) -> bool:
 
     citations = _get_citation_count(paper["arxiv_id"])
     if citations is None:
-        logger.debug("Citation lookup failed for %s — accepted by default", paper["arxiv_id"])
-        return True
+        logger.warning("Citation lookup failed for %s — skipping (conservative filter)", paper["arxiv_id"])
+        return False
 
     passed = citations >= min_citations
     logger.debug(
@@ -255,6 +255,7 @@ def fetch_papers(config: dict | None = None) -> list[Path]:
     min_citations = config.get("filters", {}).get("min_citations", MIN_CITATIONS_THRESHOLD)
 
     saved: list[Path] = []
+    seen_ids: set[str] = set()
     for i, direction in enumerate(directions):
         if len(saved) >= max_total:
             break
@@ -274,6 +275,13 @@ def fetch_papers(config: dict | None = None) -> list[Path]:
                 break
             if downloaded_this_direction >= max_per_direction:
                 break
+
+            # Deduplicate across directions
+            arxiv_id = paper.get("arxiv_id", "")
+            if arxiv_id in seen_ids:
+                continue
+            if arxiv_id:
+                seen_ids.add(arxiv_id)
 
             # Filter by impact
             if not _passes_impact_filter(paper, min_citations):

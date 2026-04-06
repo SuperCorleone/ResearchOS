@@ -71,6 +71,9 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     # 5. Data source consistency
     checks["data_source_match"] = _check_data_source(code_text, plan, pipeline_dir, project_root, issues)
 
+    # 5b. Reference data consistency
+    checks["reference_data_consistency"] = _check_reference_data_consistency(code_text, plan, issues)
+
     # 6. Seed parameter
     checks["seed_parameter_accepted"] = _check_seed_param(code_text, issues)
 
@@ -210,8 +213,9 @@ def _check_models(code: str, plan: dict, issues: list[dict]) -> bool:
 
     missing = []
     for model in planned_models:
-        # Fuzzy match: check if model name appears anywhere in code
-        if model not in code_lower.replace("_", ""):
+        # Word-boundary match to avoid "bert" matching "albert"
+        code_words = code_lower.replace("_", " ")
+        if not re.search(r'\b' + re.escape(model) + r'\b', code_words):
             missing.append(model)
 
     if missing:
@@ -312,6 +316,69 @@ def _check_data_source(
                 "severity": "WARN",
                 "check": "data_source",
                 "detail": f"Plan says data.source='{source}' but code doesn't reference data/raw/",
+            })
+            return False
+
+    return True
+
+
+def _check_reference_data_consistency(
+    code: str, plan: dict, issues: list[dict]
+) -> bool:
+    """Check that code does not generate synthetic data when reference data consistency is required."""
+    cons_req = plan.get("data", {}).get("consistency_requirement")
+    if not cons_req:
+        return True  # No consistency requirement, skip
+
+    ref_paper = cons_req.get("reference_paper", "unknown")
+    code_lower = code.lower()
+
+    # Patterns that suggest synthetic data generation
+    synthetic_patterns = [
+        ("make_classification", "sklearn.datasets.make_classification"),
+        ("make_regression", "sklearn.datasets.make_regression"),
+        ("make_blobs", "sklearn.datasets.make_blobs"),
+        ("np.random.randn", "numpy random data generation"),
+        ("np.random.rand(", "numpy random data generation"),
+        ("np.random.normal", "numpy random data generation"),
+        ("torch.randn", "PyTorch random tensor generation"),
+        ("random.gauss", "random.gauss data generation"),
+        ("fake.", "faker library data generation"),
+        ("generate_data", "custom data generation function"),
+        ("simulate_data", "custom data simulation function"),
+        ("create_synthetic", "synthetic data creation"),
+    ]
+
+    found_synthetic = []
+    for pattern, description in synthetic_patterns:
+        if pattern in code_lower:
+            found_synthetic.append(description)
+
+    if found_synthetic:
+        issues.append({
+            "severity": "ERROR",
+            "check": "reference_data_consistency",
+            "detail": (
+                f"data.consistency_requirement references '{ref_paper}' but code "
+                f"appears to generate synthetic data: {', '.join(set(found_synthetic))}. "
+                f"When improving upon a reference paper, you MUST use the same dataset. "
+                f"Use fetch_dataset to download the reference data."
+            ),
+        })
+        return False
+
+    # Also check that code references data/raw/ or fetch_dataset
+    source = plan.get("data", {}).get("source", "")
+    if source in ("file", "api"):
+        if "data/raw" not in code and "fetch_dataset" not in code_lower:
+            issues.append({
+                "severity": "WARN",
+                "check": "reference_data_consistency",
+                "detail": (
+                    f"data.consistency_requirement references '{ref_paper}' but code "
+                    f"does not reference data/raw/ directory or fetch_dataset. "
+                    f"Ensure the reference paper's data is being loaded."
+                ),
             })
             return False
 

@@ -201,6 +201,10 @@ def validate_budget(
 
     allocated = budget.allocations.get(pipeline_id, 0)
     used = budget.usage.get(pipeline_id, 0)
+
+    if allocated == 0:
+        return {"allowed": True, "reason": "No budget allocated — running without limit."}
+
     remaining = allocated - used
 
     if estimated_cost > 0 and estimated_cost > remaining:

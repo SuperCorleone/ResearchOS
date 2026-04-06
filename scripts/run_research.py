@@ -66,6 +66,7 @@ def cmd_create(args: argparse.Namespace) -> None:
         research_question=args.question,
         budget_request=args.budget,
         source="user",
+        evidence_refs=args.refs,
     )
 
     RUNTIME_PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
@@ -516,6 +517,7 @@ def cmd_inject(args: argparse.Namespace) -> None:
             research_question=args.question,
             budget_request=args.budget,
             source="user_inject",
+            evidence_refs=args.papers,
         )
 
         RUNTIME_PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
@@ -965,6 +967,7 @@ def main() -> None:
     p_create.add_argument("--title", required=True, help="Research title")
     p_create.add_argument("--question", required=True, help="Research question")
     p_create.add_argument("--budget", type=int, default=20000, help="Budget in credits (default 20000)")
+    p_create.add_argument("--refs", nargs="*", default=[], help="Reference paper files or identifiers")
 
     # run
     p_run = subparsers.add_parser("run", help="Run the research scheduler")

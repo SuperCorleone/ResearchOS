@@ -16,6 +16,58 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _check_data_consistency(plan: dict, issues: list[dict]) -> bool:
+    """Check that data consistency requirement is properly specified when referencing papers."""
+    data = plan.get("data", {})
+    cons_req = data.get("consistency_requirement")
+
+    # If no consistency requirement, check if there are reference papers that suggest one is needed
+    ref_code = plan.get("reference_code", {})
+    ref_papers = ref_code.get("papers", [])
+
+    if ref_papers and not cons_req:
+        # Reference papers exist but no consistency requirement — warn
+        issues.append({
+            "severity": "WARN",
+            "check": "data_consistency",
+            "detail": (
+                "experiment_plan references papers in reference_code.papers but "
+                "data.consistency_requirement is missing. If improving upon these papers, "
+                "you should specify which data aspects must match."
+            ),
+        })
+        return False
+
+    if cons_req:
+        # Validate consistency requirement fields
+        ok = True
+        if not cons_req.get("reference_paper"):
+            issues.append({
+                "severity": "WARN",
+                "check": "data_consistency",
+                "detail": "data.consistency_requirement.reference_paper is empty",
+            })
+            ok = False
+        must_match = cons_req.get("must_match", [])
+        if not must_match:
+            issues.append({
+                "severity": "WARN",
+                "check": "data_consistency",
+                "detail": "data.consistency_requirement.must_match is empty — specify what must match (dataset_version, train_test_split, preprocessing_pipeline)",
+            })
+            ok = False
+        if not cons_req.get("verification"):
+            issues.append({
+                "severity": "WARN",
+                "check": "data_consistency",
+                "detail": "data.consistency_requirement.verification is empty — specify how to verify data matches reference",
+            })
+            ok = False
+        return ok
+
+    return True  # No reference papers, no consistency needed
+
+
 def validate_design(pipeline_dir: Path) -> dict:
     """Validate experiment_plan.yaml structural completeness.
 
@@ -140,7 +192,10 @@ def validate_design(pipeline_dir: Path) -> dict:
     else:
         checks["resource_budget"] = True
 
-    # 10. Metrics defined
+    # 10. Data consistency
+    checks["data_consistency"] = _check_data_consistency(plan, issues)
+
+    # 11. Metrics defined
     metrics = plan.get("evaluation", {}).get("metrics", [])
     deps = plan.get("variables", {}).get("dependent", [])
     if not metrics and not deps:

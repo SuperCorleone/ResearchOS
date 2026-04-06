@@ -670,8 +670,8 @@ tracking:
 | 变量 | 用途 | 默认值 |
 |------|------|--------|
 | `RESEARCHOS_API_KEY` | LLM API 密钥 | （必填） |
-| `RESEARCHOS_BASE_URL` | API 基础 URL | `https://api.deepseek.com` |
-| `RESEARCHOS_MODEL` | 模型名称 | `deepseek-chat` |
+| `RESEARCHOS_BASE_URL` | API 基础 URL | `https://openrouter.ai/api/v1` |
+| `RESEARCHOS_MODEL` | 模型名称 | `qwen/qwen3.6-plus:free` |
 | `RESEARCHOS_VLM_MODEL` | 视觉语言模型（图表审查） | 回退到 RESEARCHOS_MODEL |
 
 ## 依赖

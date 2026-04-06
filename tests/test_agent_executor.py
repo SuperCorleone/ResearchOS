@@ -20,14 +20,49 @@ def _make_text_block(text: str):
 
 
 def _make_tool_use_block(tool_id: str, name: str, tool_input: dict):
-    return SimpleNamespace(type="tool_use", id=tool_id, name=name, input=tool_input)
+    """Create a mock OpenAI-format tool call."""
+    return SimpleNamespace(
+        id=tool_id,
+        function=SimpleNamespace(name=name, arguments=json.dumps(tool_input)),
+    )
 
 
 def _make_response(content, stop_reason="end_turn", input_tokens=100, output_tokens=50):
+    """Create a mock OpenAI-format chat completion response.
+
+    Maps from the old Anthropic-style test helpers to the OpenAI format
+    that agent_executor.py actually uses.
+    """
+    # Separate text blocks and tool-use blocks
+    text_parts = [c for c in content if getattr(c, "type", None) == "text"]
+    tool_calls = [c for c in content if hasattr(c, "function")]
+
+    # Build the message
+    message_text = text_parts[0].text if text_parts else None
+    finish_reason = "tool_calls" if stop_reason == "tool_use" else "stop"
+
+    message = SimpleNamespace(
+        content=message_text,
+        tool_calls=tool_calls if tool_calls else None,
+    )
+    # Add model_dump for OpenAI message serialization
+    message.model_dump = lambda: {
+        "role": "assistant",
+        "content": message_text,
+        "tool_calls": [
+            {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+            for tc in (tool_calls or [])
+        ] or None,
+    }
+
+    choice = SimpleNamespace(
+        message=message,
+        finish_reason=finish_reason,
+    )
+
     return SimpleNamespace(
-        content=content,
-        stop_reason=stop_reason,
-        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+        choices=[choice],
+        usage=SimpleNamespace(prompt_tokens=input_tokens, completion_tokens=output_tokens),
     )
 
 
@@ -59,7 +94,7 @@ def project_dir(tmp_path):
         "pipeline_id": "test_pipe",
         "title": "Test Pipeline",
         "research_question": "Does testing work?",
-        "stage": "MAIN",
+        "stage": "main",
         "step": None,
         "retry_count": 0,
         "max_retries": 3,
@@ -101,7 +136,7 @@ def test_executor_basic_flow(project_dir, pipeline_dir):
     ]
 
     mock_client = MagicMock()
-    mock_client.messages.create = MagicMock(side_effect=responses)
+    mock_client.chat.completions.create = MagicMock(side_effect=responses)
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
         with patch("researchos.runtime.agent_executor.AgentExecutor.__init__", return_value=None):
@@ -139,7 +174,7 @@ def test_executor_blocks_state_json_write(project_dir, pipeline_dir):
     ]
 
     mock_client = MagicMock()
-    mock_client.messages.create = MagicMock(side_effect=responses)
+    mock_client.chat.completions.create = MagicMock(side_effect=responses)
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
         with patch("researchos.runtime.agent_executor.AgentExecutor.__init__", return_value=None):
@@ -158,7 +193,7 @@ def test_executor_blocks_state_json_write(project_dir, pipeline_dir):
 
     # state.json should NOT have been overwritten
     state = json.loads((pipeline_dir / "state.json").read_text())
-    assert state["stage"] == "MAIN"  # unchanged
+    assert state["stage"] == "main"  # unchanged
     assert "state.json" not in result["artifacts_written"]
 
 
@@ -180,7 +215,7 @@ def test_executor_blocks_wiki_direct_read(project_dir, pipeline_dir):
     ]
 
     mock_client = MagicMock()
-    mock_client.messages.create = MagicMock(side_effect=responses)
+    mock_client.chat.completions.create = MagicMock(side_effect=responses)
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
         with patch("researchos.runtime.agent_executor.AgentExecutor.__init__", return_value=None):
@@ -210,7 +245,7 @@ def test_executor_max_turns(project_dir, pipeline_dir):
     )
 
     mock_client = MagicMock()
-    mock_client.messages.create = MagicMock(return_value=infinite_response)
+    mock_client.chat.completions.create = MagicMock(return_value=infinite_response)
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
         with patch("researchos.runtime.agent_executor.AgentExecutor.__init__", return_value=None):
@@ -229,7 +264,7 @@ def test_executor_max_turns(project_dir, pipeline_dir):
 
     # Should terminate after max_turns
     assert result["success"] is True
-    assert mock_client.messages.create.call_count == 3
+    assert mock_client.chat.completions.create.call_count == 3
 
 
 def test_executor_budget_block(project_dir, pipeline_dir):
@@ -272,7 +307,7 @@ def test_executor_path_escape_blocked(project_dir, pipeline_dir):
     ]
 
     mock_client = MagicMock()
-    mock_client.messages.create = MagicMock(side_effect=responses)
+    mock_client.chat.completions.create = MagicMock(side_effect=responses)
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
         with patch("researchos.runtime.agent_executor.AgentExecutor.__init__", return_value=None):

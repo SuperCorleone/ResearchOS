@@ -421,13 +421,21 @@ class Dispatcher:
         report_path = pdir / "preflight_report.json"
         report_path.write_text(json.dumps(report, indent=2))
 
+        verdict = report["verdict"]
         logger.info(
             "Code preflight for %s: %s (%d issues)",
             pipeline.pipeline_id,
-            report["verdict"],
+            verdict,
             len(report.get("issues", [])),
         )
-        return True  # Always succeed — issues are advisory, don't block
+        if verdict == "BLOCK":
+            logger.warning(
+                "Code preflight BLOCKED pipeline %s: %s",
+                pipeline.pipeline_id,
+                [i["detail"] for i in report.get("issues", []) if i["severity"] == "ERROR"],
+            )
+            return False
+        return True
 
     def _simulate_professor(self, pipeline_id: str) -> None:
         """Write a mock professor approval decision."""
@@ -525,6 +533,43 @@ class Dispatcher:
                     f"Use it directly — do NOT substitute with built-in loaders.\n"
                 )
 
+        # Build reference paper context
+        ref_notice = ""
+        if pipeline.evidence_refs:
+            refs_list = "\n".join(f"  - {ref}" for ref in pipeline.evidence_refs)
+            ref_notice = (
+                f"\n## Reference Papers\n"
+                f"This pipeline is based on / aims to improve upon:\n{refs_list}\n"
+                f"**Data Consistency Rule**: When improving upon a referenced paper, "
+                f"you MUST use the same dataset, same train/test splits, and same "
+                f"preprocessing pipeline as the reference. Do NOT generate synthetic "
+                f"data or substitute with different datasets.\n"
+            )
+
+        # For CODE/RUN/CRITIC: extract consistency_requirement from experiment_plan
+        consistency_notice = ""
+        if step in (PipelineStep.CODE, PipelineStep.RUN, PipelineStep.CRITIC):
+            plan_path = pdir / "experiment_plan.yaml"
+            if plan_path.exists():
+                try:
+                    import yaml as _yaml
+                    plan_data = _yaml.safe_load(plan_path.read_text()) or {}
+                    cons_req = plan_data.get("data", {}).get("consistency_requirement")
+                    if cons_req:
+                        ref_paper = cons_req.get("reference_paper", "unknown")
+                        must_match = cons_req.get("must_match", [])
+                        verification = cons_req.get("verification", "")
+                        consistency_notice = (
+                            f"\n## ⚠ DATA CONSISTENCY REQUIREMENT\n"
+                            f"Reference paper: **{ref_paper}**\n"
+                            f"Must match: {', '.join(must_match)}\n"
+                            f"Verification: {verification}\n"
+                            f"You MUST use the exact same data as the reference paper. "
+                            f"Do NOT generate your own data or use alternative datasets.\n"
+                        )
+                except Exception:
+                    pass
+
         return f"""You are executing an atomic research step as the **{agent_name}** agent.
 
 ## Task
@@ -534,7 +579,7 @@ Execute step: **{step.value}** for pipeline: **{pipeline.pipeline_id}**
 - Title: {pipeline.title}
 - Research Question: {pipeline.research_question}
 - Current Stage: {pipeline.stage.value}
-{design_check_notice}{data_notice}
+{design_check_notice}{data_notice}{ref_notice}{consistency_notice}
 ## CRITICAL: Required Output
 You MUST write exactly this file using file_write: **{expected_output}**
 Use the filename as-is (relative path). Do NOT use absolute paths.

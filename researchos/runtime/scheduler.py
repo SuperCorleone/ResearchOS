@@ -529,7 +529,10 @@ class ResearchScheduler:
             research_question=proposal.research_question,
             stage=PipelineStage.PROPOSAL,
             budget_allocated=proposal.budget_request,
+            evidence_refs=proposal.evidence_refs,
         )
+        if proposal.hypothesis:
+            pipeline.metadata["initial_hypothesis"] = proposal.hypothesis
         self.state.save_pipeline(pipeline)
 
         # Allocate budget

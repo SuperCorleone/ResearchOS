@@ -176,7 +176,8 @@ def _ngram_similarity(query: str, doc: str, n: int = 3) -> float:
     if not q_ngrams or not d_ngrams:
         return 0.0
     intersection = len(q_ngrams & d_ngrams)
-    return intersection / len(q_ngrams)  # asymmetric: fraction of query covered
+    union = len(q_ngrams | d_ngrams)
+    return intersection / union if union > 0 else 0.0  # symmetric Jaccard
 
 
 def _load_vector_config() -> float:
@@ -292,7 +293,7 @@ def search_wiki(query: str, max_results: int = 5, max_tokens: int = 4000) -> str
     query_text = query.lower()
     for i, (path, content) in enumerate(pages):
         ngram_sim = _ngram_similarity(query_text, content)
-        if ngram_sim > 0.3:  # reasonable overlap threshold
+        if ngram_sim > 0.15:  # reasonable overlap threshold (symmetric Jaccard)
             # Check if already in scored
             already = any(p == path for _, _, p, _ in scored)
             if not already:

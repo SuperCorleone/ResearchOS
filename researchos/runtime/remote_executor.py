@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -291,7 +292,7 @@ class SSHBackend(ExecutionBackend):
         try:
             # Ensure remote directory exists
             subprocess.run(
-                self._ssh_base() + [f"mkdir -p {self.remote_dir}"],
+                self._ssh_base() + [f"mkdir -p {shlex.quote(self.remote_dir)}"],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -311,7 +312,7 @@ class SSHBackend(ExecutionBackend):
             # Execute remotely
             result = subprocess.run(
                 self._ssh_base()
-                + [f"cd {self.remote_dir} && python3 {remote_script}"],
+                + [f"cd {shlex.quote(self.remote_dir)} && python3 {shlex.quote(remote_script)}"],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -332,7 +333,7 @@ class SSHBackend(ExecutionBackend):
             # Cleanup remote script (best-effort)
             try:
                 subprocess.run(
-                    self._ssh_base() + [f"rm -f {remote_script}"],
+                    self._ssh_base() + [f"rm -f {shlex.quote(remote_script)}"],
                     capture_output=True,
                     timeout=15,
                 )

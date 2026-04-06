@@ -79,7 +79,10 @@ class StateManager:
             os.close(fd)
             os.replace(tmp, dest)
         except BaseException:
-            os.close(fd) if not os.get_inheritable(fd) else None
+            try:
+                os.close(fd)
+            except OSError:
+                pass
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
