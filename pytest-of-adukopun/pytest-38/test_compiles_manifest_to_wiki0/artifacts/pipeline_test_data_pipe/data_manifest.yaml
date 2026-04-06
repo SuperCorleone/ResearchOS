@@ -1,0 +1,6 @@
+dataset_name: TestDataset
+directory_hash: sha256:abc123
+license: MIT
+source_url: https://example.com/data.csv
+total_files: 3
+total_rows: 1000

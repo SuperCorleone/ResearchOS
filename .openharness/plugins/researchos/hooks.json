@@ -1,0 +1,20 @@
+{
+  "pre_tool_use": [
+    {
+      "type": "command",
+      "command": "python -c \"from researchos.runtime.hooks import validate_knowledge_access; import json, sys; r=validate_knowledge_access('${TOOL_NAME}', json.loads('${ARGUMENTS}')); sys.exit(0 if r['allowed'] else 1)\"",
+      "matcher": "read|grep|glob",
+      "timeout_seconds": 5,
+      "block_on_failure": true
+    }
+  ],
+  "post_tool_use": [
+    {
+      "type": "command",
+      "command": "python -c \"from researchos.runtime.hooks import validate_artifact_write; import sys; r=validate_artifact_write('${FILE_PATH}'); print(r.get('reason','')); sys.exit(0 if r['allowed'] else 1)\"",
+      "matcher": "file_write|write|edit",
+      "timeout_seconds": 5,
+      "block_on_failure": false
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+attention mechanism transformer architecture multi head attention self attention cross attention scaled dot product attention key query value positional encoding layer normalisation

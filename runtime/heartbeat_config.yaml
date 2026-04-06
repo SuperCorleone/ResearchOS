@@ -1,0 +1,58 @@
+# ResearchOS Heartbeat Configuration
+# Daily paper fetcher from arXiv
+#
+# Toggle: set enabled to true/false to start/stop
+# Professor: one professor per domain (single domain mode)
+# Directions: specific sub-topics within the domain to track
+
+enabled: false
+
+# Fetch schedule (24h format, local time)
+fetch_hour: 6
+fetch_minute: 0
+
+# arXiv configuration
+source: arxiv
+max_papers_per_direction: 10
+max_total_per_day: 30
+
+# Professor domain assignment
+professor:
+  name: "Professor Alpha"
+  domain: "cs.AI"                    # arXiv category (e.g., cs.AI, cs.SE, cs.LG)
+  domain_description: "Artificial Intelligence"
+
+# Research directions to track (within the professor's domain)
+# Each direction has a name and search keywords
+directions:
+  - name: "agentic-workflow-optimization"
+    keywords:
+      - "multi-agent systems"
+      - "agent orchestration"
+      - "workflow optimization"
+      - "agent collaboration"
+      - "task decomposition"
+    priority: high
+
+  - name: "multimodal-reasoning"
+    keywords:
+      - "multimodal reasoning"
+      - "vision-language models"
+      - "cross-modal alignment"
+      - "visual question answering"
+      - "multimodal chain-of-thought"
+    priority: medium 
+
+  - name: "self-adaptive-systems"
+    keywords:
+      - "self-adaptive systems"
+      - "security"
+      - "MAPE-K"
+    priority: low  
+
+# Filters
+filters:
+  # Only fetch papers from the last N days
+  lookback_days: 7
+  # Minimum relevance score (0-1) to include
+  min_relevance: 0.3

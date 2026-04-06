@@ -1,0 +1,9 @@
+falsification:
+  baseline: Method Y
+  expected_signal: 5%
+  failure_condition: improvement < 2%
+  hypothesis: X is better than Y
+  metric: accuracy
+  min_budget_ratio: 0.1
+proposal_id: test_pipeline
+title: Test Pipeline

@@ -1,0 +1,8 @@
+{
+  "total_credits": 100000,
+  "allocations": {
+    "budget_test": 5000
+  },
+  "usage": {},
+  "reserve": 50000
+}

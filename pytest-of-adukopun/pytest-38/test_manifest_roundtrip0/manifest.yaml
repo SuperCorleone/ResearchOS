@@ -1,0 +1,15 @@
+data_snapshot_id: '20260405_195320'
+dataset_name: TestCSV
+directory_hash: sha256:ab70b7230ec0f86d7d764664db2c51c88cfb6b888d5f4c994c3c54c13143c37a
+download_date: '2026-04-05T19:53:20.831518+00:00'
+files:
+- hash: sha256:ea7b69d23240ee069c18009bc3c0c6b4da6c2aba5902f018d9a77d38327b555a
+  path: data.csv
+  rows: 3
+  size_bytes: 24
+license: ''
+pipeline_id: roundtrip
+source_url: ''
+total_files: 1
+total_rows: 3
+version: v1

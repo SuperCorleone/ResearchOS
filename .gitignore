@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Runtime data (keep structure via .gitkeep, ignore content)
+runtime/logs/*.log
+runtime/checkpoints/
+runtime/pipelines/archived/
+scratch/*
+!scratch/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment
+.env
+.venv/
+venv/

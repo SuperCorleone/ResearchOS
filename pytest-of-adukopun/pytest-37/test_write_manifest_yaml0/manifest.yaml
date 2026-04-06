@@ -1,0 +1,15 @@
+data_snapshot_id: '20260405_191705'
+dataset_name: unknown
+directory_hash: sha256:4dd86e1c8cd4ce1c6700fc467ef38f8a533dce6eba16e0a6560a03c5d578cdf3
+download_date: '2026-04-05T19:17:05.223425+00:00'
+files:
+- hash: sha256:492d5ea496056f1a6a6592241032fab764c321596317930b4fa0e1e8bc3b7470
+  path: data.csv
+  rows: 1
+  size_bytes: 8
+license: ''
+pipeline_id: p1
+source_url: ''
+total_files: 1
+total_rows: 1
+version: v1

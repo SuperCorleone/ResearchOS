@@ -1,0 +1,6 @@
+budget_adjustment: 5000
+comment: Looks good
+created_at: '2026-04-05T19:53:20.874000+00:00'
+decision: approve
+next_milestone: paper
+pipeline_id: test_pipe

@@ -1,0 +1,22 @@
+{
+  "pipeline_id": "hold_test",
+  "title": "Hold Test",
+  "research_question": "?",
+  "stage": "blocked",
+  "step": null,
+  "retry_count": 0,
+  "max_retries": 3,
+  "last_error": "On hold: Wait for baseline results",
+  "artifacts": {},
+  "priority": 0,
+  "budget_allocated": 0,
+  "budget_used": 0,
+  "milestone_count": 0,
+  "created_at": "2026-04-05T19:53:20.793978+00:00",
+  "updated_at": "2026-04-05T19:53:20.794797+00:00",
+  "metadata": {
+    "hold_reason": "Wait for baseline results"
+  },
+  "active_branch_count": 0,
+  "selected_branch": null
+}

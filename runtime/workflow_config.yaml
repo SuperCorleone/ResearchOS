@@ -1,0 +1,156 @@
+# ============================================================================
+# ResearchOS Workflow Configuration
+# ============================================================================
+#
+# This file defines the pipeline step routing that the scheduler uses.
+# If this file is missing or invalid, the scheduler falls back to hardcoded
+# defaults that match the behavior encoded here.
+#
+# HOW TO CUSTOMIZE:
+#   - Add/remove steps in the `steps` section. Each step needs an agent,
+#     output filename, and optionally timeout, retries, and type.
+#   - Edit stage sequences to change the order steps execute in.
+#   - Use `dynamic_routing` within a stage to branch based on conditions
+#     (e.g., skip design_review in fast_fail).
+#   - The `type` field controls whether the step runs an LLM agent ("llm")
+#     or a Python function ("python"). Default is "llm".
+#   - The `output` field for the report step supports "{n}" as a placeholder
+#     for the milestone number (e.g., "milestone_{n}.md").
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Step definitions
+# ---------------------------------------------------------------------------
+# Each step has:
+#   agent    - name of the agent definition (or Python function for type: python)
+#   output   - expected output artifact filename
+#   timeout  - max seconds before the step is killed (default: 300)
+#   retries  - max retry attempts on failure (default: 3)
+#   type     - "llm" (default) or "python"
+
+steps:
+  hypothesis:
+    agent: hypothesis_gen
+    output: hypothesis.md
+    timeout: 300
+    retries: 3
+    type: llm
+
+  design:
+    agent: exp_designer
+    output: experiment_plan.yaml
+    timeout: 300
+    retries: 3
+    type: llm
+
+  design_review:
+    agent: design_reviewer
+    output: design_review.md
+    timeout: 300
+    retries: 3
+    type: llm
+
+  code:
+    agent: coder
+    output: code_patch.diff
+    timeout: 300
+    retries: 3
+    type: llm
+
+  code_preflight:
+    agent: code_preflight
+    output: preflight_report.json
+    timeout: 120
+    retries: 3
+    type: python
+
+  run:
+    agent: experiment_runner
+    output: results.json
+    timeout: 600
+    retries: 3
+    type: llm
+
+  critic:
+    agent: critic
+    output: analysis_report.md
+    timeout: 300
+    retries: 3
+    type: llm
+
+  interrogation:
+    agent: interrogator
+    output: interrogation_report.md
+    timeout: 300
+    retries: 3
+    type: llm
+
+  report:
+    agent: reporter
+    output: "milestone_{n}.md"
+    timeout: 300
+    retries: 3
+    type: llm
+
+  waiting_approval:
+    # Terminal step -- no agent runs; the scheduler waits for a professor decision.
+    agent: null
+    output: null
+    timeout: 0
+    retries: 0
+    type: llm
+
+# ---------------------------------------------------------------------------
+# Stage definitions
+# ---------------------------------------------------------------------------
+# Each stage has:
+#   sequence        - ordered list of step names executed in this stage
+#   dynamic_routing - optional overrides where one step can branch to
+#                     different next steps based on runtime conditions.
+#                     Each entry maps a step to its possible next-step targets
+#                     and a description of when each target is chosen.
+#
+# The scheduler resolves dynamic_routing BEFORE falling back to sequence order.
+# If a step appears in dynamic_routing, the scheduler calls its routing logic
+# instead of blindly following the sequence list.
+
+stages:
+  main:
+    sequence:
+      - hypothesis
+      - design
+      - design_review
+      - code
+      - code_preflight
+      - run
+      - critic
+      - interrogation
+      - report
+      - waiting_approval
+    dynamic_routing:
+      # After DESIGN, the scheduler checks whether to go to DESIGN_REVIEW
+      # (normal path) or skip directly to CODE (e.g., when design was reused).
+      design:
+        default: design_review
+        alternatives:
+          - next: code
+            condition: "design already reviewed or reused from prior milestone"
+
+  fast_fail:
+    sequence:
+      - hypothesis
+      - design
+      - code
+      - run
+      - critic
+      - report
+      - waiting_approval
+    dynamic_routing:
+      # After DESIGN in fast_fail, go directly to CODE (no review step).
+      # The dynamic_routing here documents that DESIGN -> CODE is intentional,
+      # skipping design_review, code_preflight, and interrogation for speed.
+      design:
+        default: code
+        alternatives:
+          - next: run
+            condition: "code already exists from prior iteration"

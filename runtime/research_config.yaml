@@ -1,0 +1,108 @@
+## Topic Evaluator & Gating Configuration
+
+topic_gating:
+  # Minimum total score (out of 15) to pass the gate
+  min_total_score: 9
+  # Minimum per-dimension scores
+  min_significance: 2
+  min_falsifiability: 2
+
+  # Direct reject conditions (any true -> reject)
+  direct_reject_if:
+    novelty_zero: true
+    falsifiability_zero: true
+    significance_lte_1: true
+    repeat_degree_high: true
+
+  # Professor review conditions (any true -> professor_review)
+  professor_review_if:
+    repeat_degree_medium: true
+    differentiation_lte_1: true
+
+  # Backlog range: total_score >= 5 and < min_total_score
+  backlog_min_score: 5
+
+retrieval:
+  cache_ttl_hours: 24
+  max_results: 10
+  time_decay_factor: 0.8
+  citation_threshold: 3
+  # Vector search weight: 0.0 = BM25 only, 1.0 = vector only, 0.3 = recommended hybrid
+  # Requires: pip install researchos[vector]
+  vector_weight: 0.3
+  top_venues:
+    - "NeurIPS"
+    - "ICML"
+    - "ICLR"
+    - "CVPR"
+    - "ACL"
+    - "EMNLP"
+    - "AAAI"
+    - "IJCAI"
+
+similarity:
+  axes:
+    - "problem"
+    - "method"
+    - "setting"
+    - "metric"
+
+backlog:
+  max_age_days: 30
+  re_eval_interval_hours: 168   # weekly re-evaluation
+  max_re_evals: 3
+
+## Topic Selection
+topic_selection:
+  # false (default): proposals go to runtime/candidates/ for user review
+  # true: proposals auto-create pipelines (legacy behavior)
+  auto_select: false
+  # Maximum candidates to present per cycle
+  max_candidates: 10
+
+## Interrogation Protocol (MAIN stage only)
+interrogation:
+  # Number of interrogation rounds (1-3)
+  rounds: 2
+  # Question categories to always include
+  required_categories:
+    - "anomaly"
+    - "methodology"
+
+## VLM Figure Review
+vlm:
+  enabled: true
+  # Model for figure review (empty = use RESEARCHOS_VLM_MODEL or RESEARCHOS_MODEL)
+  model: ""
+
+## Experiment Tracking
+tracking:
+  backend: "none"  # none | wandb | mlflow
+  wandb_project: "researchos"
+  wandb_entity: null  # W&B team/user (null = personal default)
+  mlflow_uri: "mlruns"  # MLflow tracking URI
+  mlflow_experiment: "researchos"
+
+## Execution Backend
+execution:
+  backend: "local"  # local | docker | ssh
+  docker:
+    image: "python:3.11-slim"
+    gpu: false
+    memory_limit: "4g"
+  ssh:
+    host: ""
+    user: "researchos"
+    key_path: "~/.ssh/id_rsa"
+    remote_dir: "/tmp/researchos"
+
+## Parallel Branching (MAIN stage)
+branching:
+  enabled: false
+  max_branches: 3
+
+## Innovation Scoring Bonus
+innovation:
+  # Bonus points for cross-domain/cross-method innovation types in topic evaluation
+  cross_domain_bonus: 1
+  cross_method_bonus: 1

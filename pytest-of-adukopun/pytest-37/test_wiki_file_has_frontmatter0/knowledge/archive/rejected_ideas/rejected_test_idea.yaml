@@ -1,0 +1,32 @@
+direction: general
+evaluated_at: '2026-04-05T19:17:05.190618+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Y
+  expected_signal: 5% improvement
+  failure_condition: improvement < 2%
+  hypothesis: X outperforms Y on metric Z
+  metric: Z
+  min_budget_ratio: 0.1
+gate_reasons:
+- test reason
+gate_result: reject
+innovation:
+  our_delta: We propose ...
+  problem_gap: Existing methods fail because ...
+  why_it_matters: Which improves ... under ...
+kb_duplicates: []
+kb_related: []
+proposal_id: test_idea
+re_eval_count: 0
+repeat_degree: high
+research_question: Is X better than Y?
+retrieval_cache_key: ''
+scores:
+  differentiation: 1
+  falsifiability: 0
+  feasibility: 1
+  novelty: 0
+  significance: 1
+similar_papers: []
+title: Test Idea

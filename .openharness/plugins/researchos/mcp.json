@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kb": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "researchos.mcp_servers.kb_server"]
+    }
+  }
+}
