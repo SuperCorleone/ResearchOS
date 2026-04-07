@@ -53,6 +53,14 @@ Write `hypothesis.md` to the pipeline directory:
 ## Potential Risks
 - <risk 1>
 - <risk 2>
+
+## Reference Paper Details (if improving upon existing work)
+- **Paper**: <exact title of the reference paper>
+- **Their Method**: <describe the reference method in detail: model space, algorithms, key parameters>
+- **Their Data**: <describe what data they use: dataset name, source, format, key statistics>
+- **Their Evaluation**: <list their evaluation metrics and experimental setup>
+- **What We Change**: <describe exactly what we propose to change and why>
+- **What Must Stay Same**: <data, baseline implementation, evaluation metrics that must match for fair comparison>
 ```
 
 ## G1 Claim-Experiment Consistency (mandatory self-check)
@@ -72,6 +80,22 @@ Before finalizing, verify:
 3. **Measurement mapping**: Each testable prediction must name the exact metric and threshold.
    Do NOT write vague predictions like "performance improves" — write "accuracy > 85% on dataset X".
 
+## Reference Paper Analysis (mandatory when evidence_refs exist)
+
+If the pipeline's research question or context mentions a specific paper to improve upon:
+
+1. Use `kb_retrieve` to find the reference paper's details in the knowledge base
+2. Extract and document in `hypothesis.md`:
+   - The exact method the paper uses (model space, algorithms, parameters)
+   - The exact data the paper uses (dataset name, format, how to obtain)
+   - The exact evaluation metrics and experimental setup
+3. This information is CRITICAL for downstream agents (exp_designer, coder) to:
+   - Faithfully reproduce the reference method as a baseline
+   - Use the same data for fair comparison
+   - Include the same evaluation metrics
+
+Without this information, the experiment designer may simplify the baseline or use different data, invalidating the comparison.
+
 ## Rules
 
 1. The hypothesis MUST be falsifiable
@@ -80,3 +104,4 @@ Before finalizing, verify:
 4. Write ONLY to the specified pipeline directory
 5. Every key term MUST have an operationalized definition (G1 check)
 6. Every prediction MUST name a concrete metric and threshold (G1 check)
+7. When improving upon a reference paper, document their method, data, and metrics in detail — this is essential for fair comparison downstream

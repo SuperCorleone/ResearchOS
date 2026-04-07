@@ -68,6 +68,66 @@ def _check_data_consistency(plan: dict, issues: list[dict]) -> bool:
     return True  # No reference papers, no consistency needed
 
 
+def _check_baseline_faithfulness(plan: dict, issues: list[dict]) -> bool:
+    """Check that baseline methodology matches reference paper when specified."""
+    ref_methodology = plan.get("reference_methodology", {})
+    ref_code = plan.get("reference_code", {})
+
+    if not ref_methodology and not ref_code:
+        return True  # No reference paper, skip
+
+    ok = True
+    baselines = plan.get("baselines", [])
+
+    # Check 1: If reference methodology exists, baselines should reflect it
+    if ref_methodology:
+        ref_metrics = ref_methodology.get("evaluation_metrics", [])
+        plan_metrics = [m.get("name", "") for m in plan.get("evaluation", {}).get("metrics", [])]
+
+        # Check that reference paper's evaluation metrics are included
+        missing_metrics = [m for m in ref_metrics if m.lower() not in [p.lower() for p in plan_metrics]]
+        if missing_metrics:
+            issues.append({
+                "severity": "WARN",
+                "check": "baseline_faithfulness",
+                "detail": (
+                    f"Reference paper uses metrics {ref_metrics} but experiment plan "
+                    f"is missing: {missing_metrics}. Include reference metrics for fair comparison."
+                ),
+            })
+            ok = False
+
+        # Check that reference paper's CV strategy matches
+        ref_cv = ref_methodology.get("cv_strategy", "")
+        plan_split = plan.get("data", {}).get("split", {}).get("strategy", "")
+        if ref_cv and plan_split and ref_cv.lower() != plan_split.lower():
+            issues.append({
+                "severity": "WARN",
+                "check": "baseline_faithfulness",
+                "detail": (
+                    f"Reference paper uses '{ref_cv}' but experiment plan uses '{plan_split}'. "
+                    f"Use the same CV strategy for fair comparison unless justified."
+                ),
+            })
+            ok = False
+
+    # Check 2: If reference provides data files, data.source should not be "synthetic"
+    ref_data_files = ref_methodology.get("data_files", []) if ref_methodology else []
+    data_source = plan.get("data", {}).get("source", "")
+    if ref_data_files and data_source == "synthetic":
+        issues.append({
+            "severity": "ERROR",
+            "check": "baseline_faithfulness",
+            "detail": (
+                f"Reference paper provides data files {ref_data_files} but experiment plan "
+                f"uses data.source='synthetic'. Use the reference paper's actual data."
+            ),
+        })
+        ok = False
+
+    return ok
+
+
 def validate_design(pipeline_dir: Path) -> dict:
     """Validate experiment_plan.yaml structural completeness.
 
@@ -194,6 +254,8 @@ def validate_design(pipeline_dir: Path) -> dict:
 
     # 10. Data consistency
     checks["data_consistency"] = _check_data_consistency(plan, issues)
+
+    checks["baseline_faithfulness"] = _check_baseline_faithfulness(plan, issues)
 
     # 11. Metrics defined
     metrics = plan.get("evaluation", {}).get("metrics", [])

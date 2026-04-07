@@ -94,6 +94,30 @@ Additional rules:
    write_manifest(manifest, "artifacts/pipeline_<id>/data_manifest.yaml")
    ```
 
+## Reference Paper Baseline Faithfulness (mandatory)
+
+When `experiment_plan.yaml` contains `reference_methodology` or `reference_code`:
+
+1. **Baseline implementation MUST match the reference paper's actual methodology**:
+   - If reference uses "all 2^p variable subsets", the code must enumerate all subsets — do NOT substitute with 3 fixed models
+   - If reference uses "Occam's window + BIC", implement that — do NOT approximate with simple softmax
+   - If reference uses "10-fold CV", use 10-fold — do NOT switch to LOO-CV without justification
+   - The baseline should produce results COMPARABLE to those reported in the reference paper
+
+2. **Do NOT over-simplify the baseline** to make the proposed method look better:
+   - A simplified baseline is a strawman — it invalidates the comparison
+   - If the reference method is complex, implement it faithfully or reuse their code (see Reference Code Reuse below)
+
+3. **Avoid redundant or near-identical models as "diversity"**:
+   - Do NOT use linear regression + logistic regression + Poisson regression as "three different models" for binary classification — they are essentially the same
+   - Model diversity should reflect genuinely different assumptions or approaches
+
+4. **Use reference paper's data, not synthetic substitutes**:
+   - If `data.source` is "file" and `data.consistency_requirement` exists, the code MUST load the reference paper's actual data
+   - Do NOT call `np.random.randn()`, `make_classification()`, `make_regression()`, or any data generation function
+   - Do NOT write a `generate_data()` or `simulate_data()` function
+   - The ONLY acceptable data generation is when the reference paper itself generates data via specific simulation code — in that case, reproduce their exact parameters
+
 ## Reference Code Reuse
 
 If `experiment_plan.yaml` contains a `reference_code` section:
@@ -136,3 +160,5 @@ Mark applied directives by noting them in the code comments.
 8. Use fetch_dataset for external data; generate data_manifest.yaml for versioning (G9)
 9. Reuse reference code when experiment plan specifies it — don't reinvent the wheel
 10. Read and apply user_directives.yaml if present
+11. Baseline implementation MUST faithfully reproduce the reference paper — do NOT simplify model space or algorithms
+12. NEVER generate synthetic data when reference paper provides real data or specific simulation parameters

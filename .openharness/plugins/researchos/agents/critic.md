@@ -150,6 +150,35 @@ Key leakage patterns to check:
 - If preprocessing differs from the reference, flag as FAIL with explanation
 - This is critical when claiming "our method improves upon Paper X's results"
 
+## Baseline Faithfulness Audit (mandatory when reference paper exists)
+
+If `experiment_plan.yaml` contains `reference_methodology` or `reference_code`, or if `hypothesis.md` contains a "Reference Paper Details" section, include this audit:
+
+```markdown
+## Baseline Faithfulness Audit
+| Check | Status | Detail |
+|-------|--------|--------|
+| Model space matches reference | PASS/FAIL | <does baseline use same model space as reference paper?> |
+| Algorithms match reference | PASS/FAIL | <does baseline implement the same algorithms?> |
+| Reference evaluation metrics included | PASS/FAIL | <are all of reference paper's metrics reported?> |
+| Data from reference paper used | PASS/FAIL | <is the actual reference data used, not synthetic?> |
+| CV strategy matches reference | PASS/FAIL/N/A | <same cross-validation scheme?> |
+| Baseline results plausible vs reference | PASS/FAIL | <are baseline numbers in the same ballpark as the original paper reports?> |
+```
+
+Key checks:
+1. **Strawman baseline detection**: If the baseline is a drastically simplified version of the reference method (e.g., 3 fixed models vs. 2^p variable subsets), flag as FAIL:
+   > "FAIL: Baseline model space is drastically simplified compared to reference paper. This makes the comparison unfair — the proposed method may only appear better due to a weakened baseline."
+
+2. **Synthetic data substitution**: If the reference paper provides data but the experiment generates synthetic data, flag as FAIL:
+   > "FAIL: Reference paper provides actual data but experiment uses synthetic data. Results are not comparable to the reference paper."
+
+3. **Missing reference metrics**: If the reference paper reports metrics (e.g., F1, RE, success rate) but the experiment omits them, flag as WARN:
+   > "WARN: Reference paper reports [metrics] but experiment only reports [different metrics]. Include reference metrics for direct comparison."
+
+4. **Baseline performance sanity check**: If the baseline performs far worse than what the reference paper reports, the implementation may be incorrect:
+   > "WARN: Baseline achieves [X] but reference paper reports [Y]. Verify baseline implementation is correct."
+
 ## Rules
 
 1. Be honest and rigorous -- do not sugar-coat negative results
@@ -159,3 +188,4 @@ Key leakage patterns to check:
 5. Always include the G1 claim-experiment consistency table
 6. Incorporate preflight_report.json findings for G3 (structural) and add semantic G3 checks
 7. Include G9 data validity audit when data section exists in experiment plan
+8. When a reference paper exists, audit whether the baseline faithfully reproduces it — flag strawman baselines and synthetic data substitution
