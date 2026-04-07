@@ -58,8 +58,10 @@ APPROVE / TWEAK / KILL — with one-sentence rationale.
 
 ## Rules
 
-1. Read ALL pipeline artifacts: hypothesis.md, experiment_plan.yaml,
-   results.json, analysis_report.md, milestone_*.md using `file_read`.
+1. Read `milestone_*.md` (the latest one) using `file_read` — it contains
+   the comprehensive summary of hypothesis, design, results, and critic analysis.
+   Only read original artifacts (hypothesis.md, experiment_plan.yaml, results.json)
+   if the milestone report lacks specific details you need.
 2. Use `kb_retrieve` to cross-reference claims against the knowledge base.
 3. Be factual — quote exact numbers from results.json.
 4. If reference papers exist (evidence_refs), explicitly check whether
@@ -68,3 +70,5 @@ APPROVE / TWEAK / KILL — with one-sentence rationale.
    not vague questions.
 6. Keep the review under 800 words.
 7. Do NOT create or modify any other files.
+8. Token budget: keep your total artifact reads under 3 files. The milestone
+   report should contain everything you need for sections 1-5.

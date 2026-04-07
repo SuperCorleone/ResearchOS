@@ -600,6 +600,23 @@ class Dispatcher:
                 except Exception:
                     pass
 
+        # Only inject artifacts relevant to this step to save tokens
+        _relevant_artifacts = {
+            PipelineStep.HYPOTHESIS: set(),  # reads from KB only
+            PipelineStep.DESIGN: {"hypothesis"},
+            PipelineStep.DESIGN_REVIEW: {"hypothesis", "design"},
+            PipelineStep.CODE: {"hypothesis", "design"},
+            PipelineStep.RUN: {"design", "code"},
+            PipelineStep.CRITIC: {"hypothesis", "design", "run", "code_preflight"},
+            PipelineStep.INTERROGATION: {"run", "critic"},
+            PipelineStep.REPORT: {"hypothesis", "design", "run", "critic", "interrogation"},
+        }
+        relevant_keys = _relevant_artifacts.get(step)
+        if relevant_keys is not None:
+            filtered = {k: v for k, v in pipeline.artifacts.items() if k in relevant_keys}
+        else:
+            filtered = pipeline.artifacts
+
         return f"""You are executing an atomic research step as the **{agent_name}** agent.
 
 ## Task
@@ -622,7 +639,7 @@ Use the filename as-is (relative path). Do NOT use absolute paths.
 5. Do NOT modify state.json
 
 ## Existing Artifacts
-{json.dumps(pipeline.artifacts, indent=2)}
+{json.dumps(filtered, indent=2)}
 {agent_instructions}"""
 
     def _build_professor_prompt(
