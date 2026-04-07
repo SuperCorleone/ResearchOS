@@ -718,6 +718,13 @@ def cmd_candidates(args: argparse.Namespace) -> None:
                 print(f"       Motivation: {data.get('motivation', '')[:80]}")
                 if data.get('innovation_type'):
                     print(f"       Innovation: {data['innovation_type']}")
+                # Show research brief if available
+                brief_path = candidates_dir / f"research_brief_{data['pipeline_id']}.md"
+                if brief_path.exists():
+                    print(f"       Brief: {brief_path.name}")
+                    for line in brief_path.read_text().splitlines()[:8]:
+                        print(f"         {line}")
+                    print(f"         ...")
                 print()
 
     elif args.action == "select":
@@ -736,6 +743,7 @@ def cmd_candidates(args: argparse.Namespace) -> None:
             research_question=data["research_question"],
             budget_request=data.get("budget_request", 20000),
             source="user_selected",
+            evidence_refs=data.get("evidence", []),
         )
         RUNTIME_PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
         out = RUNTIME_PIPELINES_DIR / f"new_{pid}.json"
@@ -765,6 +773,23 @@ def cmd_candidates(args: argparse.Namespace) -> None:
         print(f"  Rejected: {data['title']}")
         if feedback:
             print(f"  Feedback recorded for learning.")
+
+    elif args.action == "brief":
+        idx = args.index
+        if not pending or idx < 1 or idx > len(pending):
+            print(f"  Invalid index.")
+            return
+        f = pending[idx - 1]
+        data = json.loads(f.read_text())
+        pid = data["pipeline_id"]
+
+        # Check if brief already exists
+        brief_path = candidates_dir / f"research_brief_{pid}.md"
+        if brief_path.exists():
+            print(f"\n{brief_path.read_text()}")
+        else:
+            print(f"  No research brief found for {pid}.")
+            print(f"  Run the scheduler to generate briefs, or use 'candidates list -v'.")
 
 
 def _record_topic_feedback(pipeline_id: str, title: str, decision: str, feedback: str) -> None:
@@ -798,6 +823,82 @@ def _record_topic_feedback(pipeline_id: str, title: str, decision: str, feedback
 
     with open(feedback_file, "a") as fh:
         fh.write(entry)
+
+
+# ── review (pre-MAIN user decision) ────────────────────────────
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Review a pipeline after FAST_FAIL and decide: approve / tweak / kill."""
+    pipeline_id = args.pipeline
+    pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
+    if not pdir.exists():
+        print(f"  ERROR: Pipeline '{pipeline_id}' not found.")
+        return
+
+    state_file = pdir / "state.json"
+    if not state_file.exists():
+        print(f"  ERROR: No state.json for pipeline '{pipeline_id}'.")
+        return
+
+    # Show pre_main_review if it exists
+    review_path = pdir / "pre_main_review.md"
+    if review_path.exists() and not (args.approve or args.tweak or args.kill):
+        print(f"\n{'='*60}")
+        print(review_path.read_text())
+        print(f"{'='*60}")
+        print(f"\n  Actions:")
+        print(f"    review --pipeline {pipeline_id} --approve")
+        print(f"    review --pipeline {pipeline_id} --tweak \"your directive here\"")
+        print(f"    review --pipeline {pipeline_id} --kill")
+        return
+
+    # Write decision
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc)
+    fname = f"approval_{pipeline_id}_{ts.strftime('%Y%m%d%H%M%S')}.yaml"
+    decision_path = DECISIONS_DIR / fname
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.approve:
+        decision = {
+            "pipeline_id": pipeline_id,
+            "decision": "approve",
+            "comment": "User approved after pre-MAIN review.",
+            "created_at": ts.isoformat(),
+        }
+        decision_path.write_text(yaml.dump(decision, default_flow_style=False))
+        print(f"  Pipeline '{pipeline_id}' approved → will enter MAIN stage on next tick.")
+
+    elif args.tweak:
+        decision = {
+            "pipeline_id": pipeline_id,
+            "decision": "tweak",
+            "comment": args.tweak,
+            "created_at": ts.isoformat(),
+        }
+        decision_path.write_text(yaml.dump(decision, default_flow_style=False))
+        print(f"  Pipeline '{pipeline_id}' tweaked → will re-run from DESIGN with directive:")
+        print(f"    \"{args.tweak}\"")
+
+    elif args.kill:
+        decision = {
+            "pipeline_id": pipeline_id,
+            "decision": "kill",
+            "comment": args.kill if isinstance(args.kill, str) and args.kill != "True" else "Killed by user after pre-MAIN review.",
+            "created_at": ts.isoformat(),
+        }
+        decision_path.write_text(yaml.dump(decision, default_flow_style=False))
+        print(f"  Pipeline '{pipeline_id}' killed.")
+
+    else:
+        if review_path.exists():
+            print(f"\n{'='*60}")
+            print(review_path.read_text())
+            print(f"{'='*60}")
+        print(f"\n  Use --approve, --tweak \"directive\", or --kill to decide.")
+
+    print(f"\n  Next: python scripts/run_research.py run autonomous --max-ticks 50")
 
 
 # ── query / tweak / explore (Feature 4: deep interaction) ─────
@@ -1023,6 +1124,15 @@ def main() -> None:
     p_cand_reject = p_cand_sub.add_parser("reject", help="Reject a candidate")
     p_cand_reject.add_argument("index", type=int, help="Candidate number (from 'list')")
     p_cand_reject.add_argument("--feedback", "-f", help="Why you rejected this topic")
+    p_cand_brief = p_cand_sub.add_parser("brief", help="Generate detailed brief for a candidate")
+    p_cand_brief.add_argument("index", type=int, help="Candidate number (from 'list')")
+
+    # review
+    p_review = subparsers.add_parser("review", help="Review pipeline after FAST_FAIL (approve/tweak/kill)")
+    p_review.add_argument("--pipeline", required=True, help="Pipeline ID")
+    p_review.add_argument("--approve", action="store_true", help="Approve → enter MAIN stage")
+    p_review.add_argument("--tweak", metavar="DIRECTIVE", help="Tweak → re-run DESIGN with directive")
+    p_review.add_argument("--kill", nargs="?", const=True, help="Kill pipeline (optional reason)")
 
     # query
     p_query = subparsers.add_parser("query", help="Ask a question about a pipeline")
@@ -1094,6 +1204,7 @@ def main() -> None:
         "launch": cmd_launch,
         "trial": cmd_trial,
         "candidates": cmd_candidates,
+        "review": cmd_review,
         "query": cmd_query,
         "tweak": cmd_tweak,
         "explore": cmd_explore,

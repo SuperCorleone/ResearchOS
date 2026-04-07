@@ -546,6 +546,36 @@ class Dispatcher:
                 f"data or substitute with different datasets.\n"
             )
 
+        # Inject pending user directives for DESIGN/CODE/RUN steps
+        directives_notice = ""
+        if step in (PipelineStep.DESIGN, PipelineStep.CODE, PipelineStep.RUN):
+            directives_path = pdir / "user_directives.yaml"
+            if directives_path.exists():
+                try:
+                    all_dirs = yaml.safe_load(directives_path.read_text()) or []
+                    if isinstance(all_dirs, list):
+                        pending = [d for d in all_dirs if not d.get("applied", False)]
+                        if pending:
+                            items = "\n".join(
+                                f"  {i+1}. {d['directive']}"
+                                for i, d in enumerate(pending)
+                            )
+                            directives_notice = (
+                                f"\n## ⚠ USER DIRECTIVES\n"
+                                f"The user has provided the following instructions "
+                                f"that you MUST incorporate:\n{items}\n"
+                                f"Integrate these directives into your output.\n"
+                            )
+                            # Mark directives as applied
+                            for d in all_dirs:
+                                if not d.get("applied", False):
+                                    d["applied"] = True
+                            directives_path.write_text(
+                                yaml.dump(all_dirs, default_flow_style=False)
+                            )
+                except Exception:
+                    pass
+
         # For CODE/RUN/CRITIC: extract consistency_requirement from experiment_plan
         consistency_notice = ""
         if step in (PipelineStep.CODE, PipelineStep.RUN, PipelineStep.CRITIC):
@@ -579,7 +609,7 @@ Execute step: **{step.value}** for pipeline: **{pipeline.pipeline_id}**
 - Title: {pipeline.title}
 - Research Question: {pipeline.research_question}
 - Current Stage: {pipeline.stage.value}
-{design_check_notice}{data_notice}{ref_notice}{consistency_notice}
+{design_check_notice}{data_notice}{ref_notice}{consistency_notice}{directives_notice}
 ## CRITICAL: Required Output
 You MUST write exactly this file using file_write: **{expected_output}**
 Use the filename as-is (relative path). Do NOT use absolute paths.

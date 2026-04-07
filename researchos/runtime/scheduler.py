@@ -466,6 +466,48 @@ class ResearchScheduler:
             pipeline.last_error = f"On hold: {decision.comment}"
             pipeline.metadata["hold_reason"] = decision.comment
 
+        elif decision.decision == DecisionType.TWEAK:
+            # Tweak: write user directive and reset to DESIGN step for re-run
+            import yaml as _tweak_yaml
+            pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+            directives_path = pdir / "user_directives.yaml"
+            existing = []
+            if directives_path.exists():
+                existing = _tweak_yaml.safe_load(directives_path.read_text()) or []
+                if not isinstance(existing, list):
+                    existing = [existing]
+            if decision.comment:
+                from datetime import datetime, timezone
+                existing.append({
+                    "directive": decision.comment,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "applied": False,
+                })
+                directives_path.write_text(
+                    _tweak_yaml.dump(existing, default_flow_style=False)
+                )
+
+            # Remove stale artifacts so DESIGN re-runs from scratch
+            for stale in ("experiment_plan.yaml", "design_review.md",
+                          "code_patch.diff", "preflight_report.json",
+                          "results.json", "analysis_report.md",
+                          "interrogation_report.md"):
+                stale_path = pdir / stale
+                if stale_path.exists():
+                    stale_path.unlink()
+
+            # Clean artifact registry for removed files
+            for key in ("design", "design_review", "code", "code_preflight",
+                        "run", "critic", "interrogation"):
+                pipeline.artifacts.pop(key, None)
+
+            # Reset to re-run from DESIGN in the appropriate stage
+            if pipeline.stage in (PipelineStage.MILESTONE, PipelineStage.BLOCKED):
+                pipeline.stage = PipelineStage.MAIN
+            pipeline.step = PipelineStep.HYPOTHESIS  # will advance to DESIGN on next tick
+            pipeline.last_error = None
+            pipeline.retry_count = 0
+
         # Apply budget allocation (explicit amount overrides adjustment)
         if decision.allocated_budget is not None:
             budget = self.state.load_budget()
@@ -485,6 +527,139 @@ class ResearchScheduler:
             f"Decision applied: {decision.decision.value} for {decision.pipeline_id}",
             decision.pipeline_id,
         )
+
+    async def _generate_pre_main_review(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> None:
+        """Generate pre_main_review.md summarising FAST_FAIL results."""
+        if self.simulate:
+            self._simulate_pre_main_review(pipeline, pdir)
+            return
+
+        # Build a prompt for the pre_main_reviewer agent
+        artifacts = [f.name for f in pdir.iterdir() if f.is_file() and f.name != "state.json"]
+        refs_info = ""
+        if pipeline.evidence_refs:
+            refs_list = "\n".join(f"  - {r}" for r in pipeline.evidence_refs)
+            refs_info = f"\n## Reference Papers\n{refs_list}\n"
+
+        prompt = (
+            f"Generate a pre-MAIN review for pipeline: {pipeline.pipeline_id}\n\n"
+            f"## Pipeline Info\n"
+            f"- Title: {pipeline.title}\n"
+            f"- Research Question: {pipeline.research_question}\n"
+            f"{refs_info}"
+            f"\n## Available Artifacts (use file_read with relative names)\n"
+            + "\n".join(f"- {a}" for a in artifacts)
+            + "\n\n## Instructions\n"
+            f"Read all artifacts, then write pre_main_review.md following "
+            f"the pre_main_reviewer agent protocol.\n"
+        )
+
+        try:
+            result = await self.dispatcher.dispatch_via_executor(
+                "pre_main_reviewer", prompt, pipeline.pipeline_id
+            )
+            if not result["success"]:
+                logger.error("Pre-main reviewer failed: %s", result.get("output", ""))
+                # Write a minimal fallback review
+                self._simulate_pre_main_review(pipeline, pdir)
+        except Exception:
+            logger.exception("Pre-main review generation error")
+            self._simulate_pre_main_review(pipeline, pdir)
+
+    def _simulate_pre_main_review(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> None:
+        """Write a mock pre_main_review.md for simulation / fallback."""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+
+        # Try to read results.json for metrics
+        metrics_table = "| (no results available) | - | - | - |"
+        results_path = pdir / "results.json"
+        if results_path.exists():
+            import json as _json
+            try:
+                results = _json.loads(results_path.read_text())
+                rows = []
+                for k, v in results.get("metrics", {}).items():
+                    if isinstance(v, (int, float)):
+                        rows.append(f"| {k} | - | {v} | - |")
+                if rows:
+                    metrics_table = "\n".join(rows)
+            except Exception:
+                pass
+
+        refs_note = ""
+        if pipeline.evidence_refs:
+            refs_note = (
+                f"Reference papers: {', '.join(pipeline.evidence_refs)}\n"
+                f"Data consistency check: **pending user confirmation**\n\n"
+            )
+
+        (pdir / "pre_main_review.md").write_text(
+            f"# Pre-MAIN Review: {pipeline.title}\n\n"
+            f"## 1. Executive Summary\n"
+            f"FAST_FAIL completed for pipeline {pipeline.pipeline_id}. "
+            f"Preliminary results are available for review.\n\n"
+            f"## 2. Data Source\n"
+            f"{refs_note}"
+            f"See experiment_plan.yaml for data configuration.\n\n"
+            f"## 3. Baseline & Method\n"
+            f"See hypothesis.md and experiment_plan.yaml for details.\n\n"
+            f"## 4. Preliminary Results\n"
+            f"| Metric | Baseline | Proposed | Δ |\n"
+            f"|--------|----------|----------|---|\n"
+            f"{metrics_table}\n\n"
+            f"## 5. Professor Assessment\n"
+            f"Automated review — see analysis_report.md for critic assessment.\n\n"
+            f"## 6. MAIN Stage Plan\n"
+            f"Full-scale experiments with additional seeds, ablations, "
+            f"and comprehensive evaluation.\n\n"
+            f"## 7. Key Decisions for User\n"
+            f"- [ ] Approve data source and splits?\n"
+            f"- [ ] Approve baseline method?\n"
+            f"- [ ] Approve evaluation metrics?\n"
+            f"- [ ] Any methodology changes requested?\n\n"
+            f"## Recommendation\n"
+            f"Review the artifacts and decide: `approve` / `tweak` / `kill`\n\n"
+            f"_Generated at {ts} (simulation mode)_\n"
+        )
+
+    def _simulate_research_brief(
+        self, candidate: dict, pipeline_id: str, candidates_dir: Path
+    ) -> None:
+        """Write a basic research_brief from candidate metadata."""
+        brief = (
+            f"# Research Brief: {candidate.get('title', 'Untitled')}\n\n"
+            f"## Background & Context\n"
+            f"Research question: {candidate.get('research_question', 'N/A')}\n"
+            f"Motivation: {candidate.get('motivation', 'N/A')}\n\n"
+            f"## Core Innovation\n"
+            f"Innovation type: {candidate.get('innovation_type', 'N/A')}\n"
+            f"Hypothesis: {candidate.get('hypothesis', 'N/A')}\n\n"
+            f"## Feasibility Assessment\n"
+            f"| Dimension | Rating | Notes |\n"
+            f"|-----------|--------|-------|\n"
+            f"| Budget    | -      | {candidate.get('budget_request', 20000)} credits requested |\n\n"
+            f"## Alignment with Research Directions\n"
+            f"Direction: {candidate.get('direction', 'unspecified')}\n\n"
+            f"## Evidence\n"
+        )
+        evidence = candidate.get("evidence", [])
+        if evidence:
+            for e in evidence:
+                brief += f"- {e}\n"
+        else:
+            brief += "- No evidence refs provided\n"
+        brief += (
+            f"\n## Recommendation\n"
+            f"Review via `candidates list -v` or run full briefing with "
+            f"`candidates brief {pipeline_id}`.\n"
+        )
+        brief_path = candidates_dir / f"research_brief_{pipeline_id}.md"
+        brief_path.write_text(brief)
 
     def _propagate_falsification_design(self, pipeline: PipelineState) -> None:
         """Copy falsification_design from evaluated_<id>.yaml to pipeline artifact dir.
@@ -631,6 +806,7 @@ class ResearchScheduler:
 
         # Waiting for professor? Dispatch professor agent or auto-decide.
         if pipeline.step == PipelineStep.WAITING_APPROVAL:
+            was_fast_fail = pipeline.stage == PipelineStage.FAST_FAIL
             pipeline.stage = PipelineStage.MILESTONE
             pipeline.milestone_count += 1
             self.state.save_pipeline(pipeline)
@@ -649,19 +825,40 @@ class ResearchScheduler:
                 logger.exception("Checkpoint creation failed")
 
             pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
-            milestones = sorted(pdir.glob("milestone_*.md"))
-            context = [str(m) for m in milestones[-3:]]  # Last 3 milestones
-            state_file = str(pdir / "state.json")
-            context.append(state_file)
 
-            if self.auto_professor:
-                await self._auto_professor_decision(pipeline, context)
+            if was_fast_fail:
+                # After FAST_FAIL: generate pre_main_review.md, then block
+                # for user approval (approve / tweak / kill)
+                await self._generate_pre_main_review(pipeline, pdir)
+                self._write_default_decision(
+                    pipeline.pipeline_id,
+                    "pause",
+                    comment=(
+                        "FAST_FAIL complete. Pre-MAIN review generated. "
+                        "Awaiting user decision: approve / tweak / kill. "
+                        "See artifacts/pipeline_"
+                        f"{pipeline.pipeline_id}/pre_main_review.md"
+                    ),
+                )
+                self.state.append_log(
+                    "FAST_FAIL complete → pre_main_review.md generated, awaiting user decision",
+                    pipeline.pipeline_id,
+                )
             else:
-                await self.dispatcher.dispatch_professor(pipeline.pipeline_id, context)
-            self.state.append_log(
-                f"Professor dispatched for milestone review",
-                pipeline.pipeline_id,
-            )
+                # After MAIN milestone: professor review (existing flow)
+                milestones = sorted(pdir.glob("milestone_*.md"))
+                context = [str(m) for m in milestones[-3:]]
+                state_file = str(pdir / "state.json")
+                context.append(state_file)
+
+                if self.auto_professor:
+                    await self._auto_professor_decision(pipeline, context)
+                else:
+                    await self.dispatcher.dispatch_professor(pipeline.pipeline_id, context)
+                self.state.append_log(
+                    f"Professor dispatched for milestone review",
+                    pipeline.pipeline_id,
+                )
             return
 
         # Determine next step using WorkflowConfig (falls back to legacy dict)
@@ -919,6 +1116,9 @@ class ResearchScheduler:
         }
         out = candidates_dir / f"candidate_{pipeline_id}.json"
         out.write_text(_json.dumps(candidate, indent=2, ensure_ascii=False))
+
+        # Generate a basic research brief from candidate data
+        self._simulate_research_brief(candidate, pipeline_id, candidates_dir)
 
     async def _intake_knowledge_proposals(self) -> None:
         """Evaluate miner proposals via TopicEvaluator + Professor gating.

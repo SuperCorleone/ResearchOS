@@ -14,6 +14,7 @@ class DecisionType(str, Enum):
     PIVOT = "pivot"
     PAUSE = "pause"
     HOLD = "hold"
+    TWEAK = "tweak"
 
 
 class ProfessorDecision(BaseModel):
