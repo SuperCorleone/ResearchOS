@@ -24,6 +24,8 @@ from pathlib import Path
 
 import yaml
 
+from researchos.runtime.design_checks import check_four_slot_plan
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,14 +47,31 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
             issues.append({"severity": "ERROR", "check": "plan_parse",
                            "detail": "Failed to parse experiment_plan.yaml"})
 
+    # 0. Four-slot plan schema: plan_dataset / plan_model / plan_training / plan_testing
+    # Run this regardless of whether code is present — a missing slot must BLOCK.
+    four_slot_issues = check_four_slot_plan(plan)
+    issues.extend(four_slot_issues)
+    checks["four_slot_plan"] = not any(
+        i["severity"] == "ERROR" for i in four_slot_issues
+    )
+
     # Find experiment code
     code_text = _load_code(pipeline_dir)
     if not code_text:
+        issues.append({
+            "severity": "WARN",
+            "check": "code_found",
+            "detail": "No experiment code found (code_patch.diff or run_experiment.py)",
+        })
+        # Preserve four-slot verdict escalation even when no code is present.
+        if any(i["severity"] == "ERROR" for i in issues):
+            early_verdict = "BLOCK"
+        else:
+            early_verdict = "WARN"
         return {
-            "verdict": "WARN",
-            "checks": {},
-            "issues": [{"severity": "WARN", "check": "code_found",
-                        "detail": "No experiment code found (code_patch.diff or run_experiment.py)"}],
+            "verdict": early_verdict,
+            "checks": checks,
+            "issues": issues,
             "g3_implementation_coverage": {},
         }
 
@@ -81,7 +100,7 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     checks["timeout_risk"] = _estimate_timeout_risk(code_text, plan)
 
     # 8. G3 claim-to-code mapping
-    g3 = _check_g3_mapping(code_text, pipeline_dir)
+    g3 = _check_g3_mapping(code_text, pipeline_dir, issues)
 
     # 9. G3 trivial implementation detection (AST-based)
     trivial = _detect_trivial_implementations(code_text, issues)
@@ -432,20 +451,181 @@ def _estimate_timeout_risk(code: str, plan: dict) -> str:
     return "LOW"
 
 
-def _check_g3_mapping(code: str, pipeline_dir: Path) -> dict:
+def _extract_mapping_rows(code: str) -> list[str]:
+    """Return the raw text of rows inside the CLAIM-TO-CODE MAPPING block."""
+    rows: list[str] = []
+    in_mapping = False
+    for line in code.splitlines():
+        if "CLAIM-TO-CODE MAPPING" in line:
+            in_mapping = True
+            continue
+        if in_mapping and "END MAPPING" in line:
+            break
+        if in_mapping:
+            rows.append(line)
+    return rows
+
+
+def _check_g3_mapping(code: str, pipeline_dir: Path, issues: list[dict] | None = None) -> dict:
     """Check G3 claim-to-code mapping completeness.
 
-    Reads hypothesis.md for claims, checks if code has mapping table
-    and whether all claims are covered.
+    Prefers loading ``concepts.yaml`` (A12 atomic-concept ontology). If present,
+    every ``AtomicConcept.id`` must appear as a row in the CLAIM-TO-CODE MAPPING
+    comment block — either mapped to a real file/function that exists in
+    ``code_text`` (substring check), or explicitly marked ``SKIPPED``.
+
+    Falls back to the original hypothesis.md regex + row-count behaviour when
+    ``concepts.yaml`` is missing (e.g., FAST_FAIL stage).
+
+    Missing concept (not SKIPPED, not mapped) -> ERROR severity -> BLOCK.
     """
-    result = {
+    if issues is None:
+        issues = []
+
+    result: dict = {
         "claims_total": 0,
         "claims_mapped": 0,
         "trivial_implementations": 0,
         "missing_claims": [],
+        "per_concept": {},
     }
 
-    # Read hypothesis for claims
+    has_table = "CLAIM-TO-CODE MAPPING" in code
+    rows = _extract_mapping_rows(code) if has_table else []
+
+    # ── New path: concepts.yaml exists ──────────────────────────────
+    concepts_path = pipeline_dir / "concepts.yaml"
+    if concepts_path.exists():
+        try:
+            concepts = yaml.safe_load(concepts_path.read_text()) or []
+        except Exception:
+            concepts = []
+            issues.append({
+                "severity": "WARN",
+                "check": "g3_concepts_parse",
+                "detail": "Failed to parse concepts.yaml — falling back to legacy G3 check",
+            })
+
+        if isinstance(concepts, list) and concepts:
+            result["claims_total"] = len(concepts)
+
+            if not has_table:
+                # No mapping block at all — every concept is missing
+                for c in concepts:
+                    cid = str(c.get("id", "")) if isinstance(c, dict) else ""
+                    if not cid:
+                        continue
+                    result["per_concept"][cid] = {
+                        "status": "missing",
+                        "locator": "",
+                    }
+                    result["missing_claims"].append(cid)
+                issues.append({
+                    "severity": "ERROR",
+                    "check": "g3_mapping",
+                    "detail": (
+                        "G3: No CLAIM-TO-CODE MAPPING block in code, but "
+                        f"{len(concepts)} atomic concepts are declared in concepts.yaml"
+                    ),
+                })
+                return result
+
+            for c in concepts:
+                if not isinstance(c, dict):
+                    continue
+                cid = str(c.get("id", ""))
+                if not cid:
+                    continue
+
+                # Find the row that references this concept id.
+                # A row "matches" if the concept id appears as a word.
+                matching_row = None
+                for raw in rows:
+                    stripped = raw.lstrip("# \t")
+                    if re.search(r"\b" + re.escape(cid) + r"\b", stripped):
+                        matching_row = stripped
+                        break
+
+                if matching_row is None:
+                    result["per_concept"][cid] = {
+                        "status": "missing",
+                        "locator": "",
+                    }
+                    result["missing_claims"].append(cid)
+                    issues.append({
+                        "severity": "ERROR",
+                        "check": "g3_mapping",
+                        "detail": (
+                            f"G3: Concept '{cid}' from concepts.yaml has no row in "
+                            f"CLAIM-TO-CODE MAPPING. Either map it to a file/function "
+                            f"or mark it '{cid}: SKIPPED because <reason>'."
+                        ),
+                    })
+                    continue
+
+                if "SKIPPED" in matching_row.upper():
+                    result["per_concept"][cid] = {
+                        "status": "skipped",
+                        "locator": matching_row.strip(),
+                    }
+                    result["claims_mapped"] += 1
+                    continue
+
+                # Extract a locator: prefer explicit code_implementation from the
+                # concept, fall back to cells of the row.
+                locator = str(c.get("code_implementation", "")).strip()
+                row_cells = [
+                    cell.strip() for cell in matching_row.split("|") if cell.strip()
+                ]
+                locator_candidates = [locator] if locator else []
+                locator_candidates.extend(row_cells)
+
+                # Substring check against code_text — strip common separators.
+                found = False
+                chosen = ""
+                for cand in locator_candidates:
+                    if not cand or cand == cid:
+                        continue
+                    # Try the raw candidate and its file::func / file:func / func parts.
+                    parts = re.split(r"::|[:\s]+", cand)
+                    tokens = [cand] + [p for p in parts if p and len(p) > 2]
+                    for tok in tokens:
+                        # Drop trivial punctuation
+                        tok_clean = tok.strip("()`\"' ")
+                        if len(tok_clean) < 3:
+                            continue
+                        if tok_clean in code:
+                            found = True
+                            chosen = tok_clean
+                            break
+                    if found:
+                        break
+
+                if found:
+                    result["per_concept"][cid] = {
+                        "status": "mapped",
+                        "locator": chosen,
+                    }
+                    result["claims_mapped"] += 1
+                else:
+                    # Row exists but locator doesn't appear in code — treat as missing.
+                    result["per_concept"][cid] = {
+                        "status": "missing",
+                        "locator": matching_row.strip(),
+                    }
+                    result["missing_claims"].append(cid)
+                    issues.append({
+                        "severity": "ERROR",
+                        "check": "g3_mapping",
+                        "detail": (
+                            f"G3: Concept '{cid}' is listed in CLAIM-TO-CODE MAPPING "
+                            f"but its locator does not appear in the code body."
+                        ),
+                    })
+
+            return result
+
+    # ── Fallback path: legacy hypothesis.md regex ──────────────────
     hyp_path = pipeline_dir / "hypothesis.md"
     if not hyp_path.exists():
         return result
@@ -476,22 +656,16 @@ def _check_g3_mapping(code: str, pipeline_dir: Path) -> dict:
     result["claims_total"] = len(claims)
 
     # Check if code has CLAIM-TO-CODE MAPPING table
-    if "CLAIM-TO-CODE MAPPING" in code:
+    if has_table:
         # Count mapping entries (lines with | delimiters inside mapping block)
-        in_mapping = False
         mapped = 0
-        for line in code.splitlines():
-            if "CLAIM-TO-CODE MAPPING" in line:
-                in_mapping = True
+        for line in rows:
+            if "|" not in line:
                 continue
-            if in_mapping and "END MAPPING" in line:
-                break
-            if in_mapping and "|" in line:
-                # Strip comment prefix (# ) before parsing
-                stripped = line.lstrip("# \t")
-                cells = [c.strip() for c in stripped.split("|") if c.strip()]
-                if len(cells) >= 2 and not cells[0].startswith("-"):
-                    mapped += 1
+            stripped = line.lstrip("# \t")
+            cells = [c.strip() for c in stripped.split("|") if c.strip()]
+            if len(cells) >= 2 and not cells[0].startswith("-"):
+                mapped += 1
         result["claims_mapped"] = mapped
     else:
         result["missing_claims"] = ["No CLAIM-TO-CODE MAPPING table found in code"]

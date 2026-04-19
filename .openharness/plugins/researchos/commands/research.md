@@ -29,6 +29,14 @@ If only files are given, Knowledge Miner discovers topics. If title+question als
 Run: `python scripts/run_research.py fix --pipeline <id>`
 Reads professor review report, fixes experiment code, reruns experiment, writes correction report.
 
+### `/research continue --pipeline <id>` — Resume inject-mode pipeline after user feedback
+Run: `python scripts/run_research.py continue --pipeline <id>`
+Only applies to inject-mode pipelines paused after FAST_FAIL. Before running,
+the user edits `artifacts/pipeline_<id>/user_approve/feedback.md` with their
+modification opinions. The command then dispatches the fixer agent with the
+user's feedback as the authoritative directive (overrides professor suggestion),
+re-runs the experiment, and unblocks the pipeline into the MAIN stage.
+
 ### `/research publish --pipeline <id>` — Package for publication
 Run: `python scripts/run_research.py publish --pipeline <id>`
 Creates submission-ready package with clean code, paper, data, process report.

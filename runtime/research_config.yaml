@@ -22,6 +22,13 @@ topic_gating:
   # Backlog range: total_score >= 5 and < min_total_score
   backlog_min_score: 5
 
+## A1 — Independent CLI re-execution verification
+## Disabled by default: re-running every experiment in a fresh subprocess
+## doubles wall-clock time. Enable only when you need to catch silent-failure
+## classes. Env var RESEARCHOS_REVERIFY=1 also enables it.
+reverify:
+  enabled: false
+
 retrieval:
   cache_ttl_hours: 24
   max_results: 10

@@ -26,14 +26,18 @@ class PipelineStep(str, Enum):
     HYPOTHESIS = "hypothesis"
     DESIGN = "design"
     DESIGN_REVIEW = "design_review"
+    CONCEPT_EXTRACT = "concept_extract"  # Stream C — atomic concept decomposition
     CODE = "code"
     CODE_PREFLIGHT = "code_preflight"
     RUN = "run"
+    RESULTS_REVERIFY = "results_reverify"  # Stream D — reproducibility rerun
     CRITIC = "critic"
     INTERROGATION = "interrogation"
     REPORT = "report"
     WAITING_APPROVAL = "waiting_approval"
     BRANCH_SELECT = "branch_select"
+    BASELINE_CONFIRM = "baseline_confirm"  # Stream F / A17 — baseline lock-in
+    PRE_PUBLISH_GATE = "pre_publish_gate"  # Stream E / A11 — HITL before paper publish
 
 
 def _now_iso() -> str:

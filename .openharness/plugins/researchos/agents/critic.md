@@ -179,6 +179,55 @@ Key checks:
 4. **Baseline performance sanity check**: If the baseline performs far worse than what the reference paper reports, the implementation may be incorrect:
    > "WARN: Baseline achieves [X] but reference paper reports [Y]. Verify baseline implementation is correct."
 
+## A16 Advisor Per-Concept Verdict (mandatory side-output)
+
+In addition to `analysis_report.md`, you MUST also emit
+`advisor_verdict.yaml` in the pipeline directory. This is a per-concept
+pass/fail scorecard consumed by the professor and by downstream milestone
+evaluation. The schema is `researchos.schemas.concept.AdvisorVerdict`.
+
+Procedure:
+
+1. Read `concepts.yaml` from the pipeline directory if it exists.
+   - If absent (e.g., FAST_FAIL stage), emit an `advisor_verdict.yaml` with
+     empty `per_concept` and `suggestions` dicts, `fully_correct=True`, and
+     `created_at` set to the current UTC ISO timestamp. Do NOT skip the file.
+2. For every `concept.id` in `concepts.yaml`:
+   - Inspect the CLAIM-TO-CODE MAPPING (via `preflight_report.json` if
+     available, otherwise by reading the code directly) and the results in
+     `results.json`.
+   - Assign a verdict:
+     - `"pass"` — the concept is faithfully implemented AND its predicted
+       behaviour shows up in the results.
+     - `"fail"` — the concept is missing, trivially implemented, contradicted
+       by the results, or otherwise unsupported.
+     - `"skipped"` — the coder marked the row `SKIPPED` and the skip is
+       justified in context.
+   - Write a one-sentence improvement suggestion in `suggestions[concept_id]`.
+     For passing concepts, the suggestion may be a brief reinforcement (e.g.,
+     `"Keep as-is; add an ablation in the next iteration."`).
+3. Set `fully_correct = True` iff every entry in `per_concept` is `"pass"` or
+   `"skipped"`. Any `"fail"` forces `fully_correct = False`.
+4. Set `pipeline_id` to the pipeline id embedded in the artifact directory
+   name (strip the `pipeline_` prefix).
+5. Set `created_at` to the current UTC ISO-8601 timestamp.
+
+Example `advisor_verdict.yaml`:
+
+```yaml
+pipeline_id: "abc123"
+fully_correct: false
+per_concept:
+  C1: "pass"
+  C2: "fail"
+  C3: "skipped"
+suggestions:
+  C1: "Softmax policy looks correct; consider reporting entropy over time."
+  C2: "Majority vote is never actually invoked — add a call site in run_ensemble()."
+  C3: "Glue concept was intentionally omitted; no action needed."
+created_at: "2026-04-16T12:34:56+00:00"
+```
+
 ## Rules
 
 1. Be honest and rigorous -- do not sugar-coat negative results
@@ -189,3 +238,4 @@ Key checks:
 6. Incorporate preflight_report.json findings for G3 (structural) and add semantic G3 checks
 7. Include G9 data validity audit when data section exists in experiment plan
 8. When a reference paper exists, audit whether the baseline faithfully reproduces it — flag strawman baselines and synthetic data substitution
+9. Always emit `advisor_verdict.yaml` alongside `analysis_report.md` — one entry per atomic concept from `concepts.yaml`

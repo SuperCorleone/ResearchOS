@@ -12,6 +12,9 @@ export interface ResearchPipeline {
 	budget_used: number;
 	budget_allocated: number;
 	last_error: string | null;
+	source?: string | null;
+	user_approve_pending?: boolean;
+	user_approve_dir?: string;
 }
 
 export interface ResearchState {
@@ -109,6 +112,19 @@ export function ResearchDashboard({state}: {state: ResearchState}): React.JSX.El
 						{p.last_error && (
 							<Box paddingLeft={4}>
 								<Text color="red">{p.last_error.substring(0, 60)}</Text>
+							</Box>
+						)}
+						{p.user_approve_pending && (
+							<Box paddingLeft={4} flexDirection="column">
+								<Text color="yellow" bold>
+									{'\u270F\uFE0F'} User feedback required
+								</Text>
+								<Text dimColor>
+									Edit {p.user_approve_dir ?? `artifacts/pipeline_${p.id}/user_approve`}/feedback.md
+								</Text>
+								<Text dimColor>
+									then: /research continue --pipeline {p.id}
+								</Text>
 							</Box>
 						)}
 					</Box>

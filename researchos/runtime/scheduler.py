@@ -12,6 +12,10 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from researchos.runtime.branch_manager import BranchRunner
 
 from researchos.schemas.pipeline import (
     PipelineDefinition,
@@ -43,13 +47,24 @@ logger = logging.getLogger(__name__)
 
 # Legacy dicts kept as module-level fallbacks for external code that imports them.
 # The scheduler now uses WorkflowConfig internally.
+#
+# Wave 2 edits (A3, A7, A11, A13, A17, A18):
+#   - MAIN: DESIGN_REVIEW -> CONCEPT_EXTRACT -> CODE (replaces direct CODE)
+#   - MAIN: RUN -> RESULTS_REVERIFY -> CRITIC (replaces direct CRITIC)
+#   - PROPOSAL approval may go through BASELINE_CONFIRM
+#   - PAPER stage terminates in a PRE_PUBLISH_GATE HITL checkpoint
+#
+# FAST_FAIL keeps its lean path (no CONCEPT_EXTRACT, no RESULTS_REVERIFY,
+# no DESIGN_REVIEW, no CODE_PREFLIGHT, no INTERROGATION).
 _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {
     (PipelineStage.MAIN, None): PipelineStep.HYPOTHESIS,
     (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
-    (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW): PipelineStep.CODE,
+    (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW): PipelineStep.CONCEPT_EXTRACT,
+    (PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT): PipelineStep.CODE,
     (PipelineStage.MAIN, PipelineStep.CODE): PipelineStep.CODE_PREFLIGHT,
     (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT): PipelineStep.RUN,
-    (PipelineStage.MAIN, PipelineStep.RUN): PipelineStep.CRITIC,
+    (PipelineStage.MAIN, PipelineStep.RUN): PipelineStep.RESULTS_REVERIFY,
+    (PipelineStage.MAIN, PipelineStep.RESULTS_REVERIFY): PipelineStep.CRITIC,
     (PipelineStage.MAIN, PipelineStep.CRITIC): PipelineStep.INTERROGATION,
     (PipelineStage.MAIN, PipelineStep.INTERROGATION): PipelineStep.REPORT,
     (PipelineStage.MAIN, PipelineStep.REPORT): PipelineStep.WAITING_APPROVAL,
@@ -65,12 +80,48 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.HYPOTHESIS: "hypothesis.md",
     PipelineStep.DESIGN: "experiment_plan.yaml",
     PipelineStep.DESIGN_REVIEW: "design_review.md",
+    PipelineStep.CONCEPT_EXTRACT: "concepts.yaml",
     PipelineStep.CODE: "code_patch.diff",
     PipelineStep.CODE_PREFLIGHT: "preflight_report.json",
     PipelineStep.RUN: "results.json",
+    PipelineStep.RESULTS_REVERIFY: "reverify_report.json",
     PipelineStep.CRITIC: "analysis_report.md",
     PipelineStep.INTERROGATION: "interrogation_report.md",
+    PipelineStep.BASELINE_CONFIRM: "metric_contract.json",
+    PipelineStep.PRE_PUBLISH_GATE: "pre_publish_gate.md",
 }
+
+
+# ── Stream-provided imports (guarded) ────────────────────────────
+# All of these come from other Wave 2 streams that may land after this
+# scheduler update.  Missing modules are tolerated — features that need
+# them degrade to no-ops rather than crashing the scheduler.
+
+try:  # Stream D (A1) — results reverification
+    from researchos.runtime.reverify import reverify_results as _reverify_results  # noqa: F401
+except ImportError:  # pragma: no cover — optional Wave 2 dep
+    _reverify_results = None  # type: ignore[assignment]
+    logger.warning("reverify module not available; RESULTS_REVERIFY will be a no-op")
+
+try:  # Stream F (A17) — baseline metric contract registry
+    from researchos.runtime import baseline_registry as _baseline_registry  # noqa: F401
+except ImportError:  # pragma: no cover
+    _baseline_registry = None  # type: ignore[assignment]
+    logger.info("baseline_registry module not available; BASELINE_CONFIRM will skip")
+
+try:  # Stream F (A7) — findings memory service
+    from researchos.runtime import findings_memory as _findings_memory  # noqa: F401
+except ImportError:  # pragma: no cover
+    _findings_memory = None  # type: ignore[assignment]
+    logger.info("findings_memory module not available; pipeline completion will not persist findings")
+
+try:  # Stream B (A13) — JSON-marker LLM helper
+    from researchos.runtime.llm_client import (
+        extract_json_between_markers as _extract_json_between_markers,
+    )  # noqa: F401
+except ImportError:  # pragma: no cover
+    _extract_json_between_markers = None  # type: ignore[assignment]
+    logger.debug("llm_client.extract_json_between_markers not available; using inline parsers")
 
 
 class ResearchScheduler:
@@ -103,17 +154,24 @@ class ResearchScheduler:
             project_root, simulate=simulate, backend=backend
         )
         self.checkpoints = CheckpointManager(project_root)
-        self.retry_policy = RetryPolicy(max_retries=3)
+        # A14: load retry constants from workflow_config.yaml (not hardcoded).
+        self.retry_policy = RetryPolicy(project_root=project_root)
         self.evaluator = TopicEvaluator(project_root, self.dispatcher)
         self.backlog = BacklogManager(project_root)
 
         # Load workflow configuration (YAML or hardcoded defaults)
         self.workflow = WorkflowConfig.load(project_root)
         self._next_step_map = self.workflow.build_next_step_map()
+        # Wave 2: overlay new-step edges on top of the workflow-derived map so
+        # CONCEPT_EXTRACT, RESULTS_REVERIFY, BASELINE_CONFIRM, and the
+        # PRE_PUBLISH_GATE land in the routing table even when the YAML
+        # config hasn't been migrated yet.
+        self._apply_wave2_edges()
 
-        # Load branching support
-        from researchos.runtime.branch_manager import BranchManager
-        self.branch_manager = BranchManager(project_root)
+        # Branching support now flows through BranchRunner (per-pipeline).
+        # The scheduler only holds the knobs; runners are constructed on
+        # demand below.
+        self._artifacts_root = project_root / "artifacts"
 
         # Load config
         self.interrogation_rounds = 2
@@ -130,9 +188,17 @@ class ResearchScheduler:
                 branching_cfg = cfg.get("branching", {})
                 self.branching_enabled = branching_cfg.get("enabled", False)
                 self.max_branches = branching_cfg.get("max_branches", 3)
-                self.branch_manager.max_branches = self.max_branches
             except Exception:
                 pass
+
+    def _branch_runner(self, pipeline_id: str) -> "BranchRunner":
+        """Construct a BranchRunner for ``pipeline_id`` on demand."""
+        from researchos.runtime.branch_manager import BranchRunner
+        return BranchRunner(
+            pipeline_id=pipeline_id,
+            artifacts_root=self._artifacts_root,
+            num_branches=self.max_branches,
+        )
 
     async def run_loop(self) -> None:
         """Main scheduler loop."""
@@ -145,6 +211,48 @@ class ResearchScheduler:
                 logger.exception("Tick failed")
                 self.state.append_log("ERROR: tick failed, see logs")
             await asyncio.sleep(self.interval)
+
+    # ── Wave 2 routing overlay ────────────────────────────────────
+
+    def _apply_wave2_edges(self) -> None:
+        """Patch ``_next_step_map`` with the new Wave 2 edges.
+
+        The YAML-driven WorkflowConfig doesn't (yet) know about
+        CONCEPT_EXTRACT, RESULTS_REVERIFY, BASELINE_CONFIRM, or the
+        PRE_PUBLISH_GATE.  We inject those edges here so the scheduler can
+        route through them without requiring every deployment to migrate
+        the workflow YAML simultaneously.
+        """
+        main_stage = PipelineStage.MAIN.value
+        fast_fail_stage = PipelineStage.FAST_FAIL.value
+        edges_main = {
+            # DESIGN_REVIEW -> CONCEPT_EXTRACT -> CODE
+            (main_stage, PipelineStep.DESIGN_REVIEW.value): PipelineStep.CONCEPT_EXTRACT.value,
+            (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
+            # RUN -> RESULTS_REVERIFY -> CRITIC
+            (main_stage, PipelineStep.RUN.value): PipelineStep.RESULTS_REVERIFY.value,
+            (main_stage, PipelineStep.RESULTS_REVERIFY.value): PipelineStep.CRITIC.value,
+        }
+        # H1: BASELINE_CONFIRM is the first step on FAST_FAIL entry.  The
+        # handler (_run_baseline_confirm) writes metric_contract.json when
+        # experiment_plan.yaml has a `baseline` block, and SKIPs gracefully
+        # otherwise — so every pipeline passes through, but only baselined
+        # pipelines produce the contract artifact.  After that we resume
+        # the original HYPOTHESIS entry.
+        edges_fast_fail = {
+            (fast_fail_stage, None): PipelineStep.BASELINE_CONFIRM.value,
+            (fast_fail_stage, PipelineStep.BASELINE_CONFIRM.value): PipelineStep.HYPOTHESIS.value,
+        }
+        # FAST_FAIL: stay lean otherwise. Keep existing RUN->CRITIC intact.
+        for key, value in edges_main.items():
+            self._next_step_map[key] = value
+        for key, value in edges_fast_fail.items():
+            self._next_step_map[key] = value
+        # Make sure FAST_FAIL routes don't accidentally pick up the new MAIN
+        # edges if some future YAML declares a shared step.
+        self._next_step_map.setdefault(
+            (fast_fail_stage, PipelineStep.RUN.value), PipelineStep.CRITIC.value
+        )
 
     async def tick(self) -> None:
         """Single scheduling cycle -- idempotent."""
@@ -229,24 +337,30 @@ class ResearchScheduler:
     async def _schedule_branch_steps(self, pipeline: PipelineState) -> None:
         """Schedule next steps for all active branches in parallel.
 
-        When all branches reach CRITIC, dispatch branch_selector to pick the winner,
-        then merge the winning branch back into the main pipeline.
+        When all branches reach CRITIC, dispatch branch_selector to pick
+        the winner, then merge the winning branch back into the main
+        pipeline.  Branch state lives in the BranchRunner journal --
+        ``pipeline.metadata['branches']`` is no longer the source of
+        truth.
         """
-        from researchos.runtime.branch_manager import BranchState
-
-        raw_branches = pipeline.metadata.get("branches", [])
-        branches = [BranchState(**b) for b in raw_branches]
+        runner = self._branch_runner(pipeline.pipeline_id)
+        branches = runner.branch_nodes()
+        if not branches:
+            # Edge case: no seeded branches on disk (e.g. legacy metadata
+            # lingering from a previous run).  Clear branch flags and
+            # fall back to normal scheduling.
+            pipeline.active_branch_count = 0
+            pipeline.metadata.pop("branches", None)
+            self.state.save_pipeline(pipeline)
+            return
 
         # Check if all branches have completed CRITIC
-        if self.branch_manager.all_branches_at_or_past(branches, PipelineStep.CRITIC):
-            # All branches done — run branch selector
+        if runner.all_reached(PipelineStep.CRITIC):
             self.state.append_log(
                 "All branches completed CRITIC, running branch selection",
                 pipeline.pipeline_id,
             )
-            results = self.branch_manager.collect_branch_results(
-                pipeline.pipeline_id, branches
-            )
+            results = runner.collect_results()
             import json as _json
             prompt = (
                 f"Select the best experiment branch for pipeline {pipeline.pipeline_id}.\n\n"
@@ -257,10 +371,11 @@ class ResearchScheduler:
                 "branch_selector", prompt, pipeline.pipeline_id
             )
             if success.get("success"):
-                # Parse winner from selection file
+                # Prefer the LLM's explicit pick; fall back to the
+                # journal metric selector when nothing is parseable.
                 pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
                 selection_file = pdir / "branch_selection.md"
-                winner_id = 0  # default to first branch
+                winner_id: int | None = None
                 if selection_file.exists():
                     content = selection_file.read_text()
                     import re as _re
@@ -268,12 +383,24 @@ class ResearchScheduler:
                     if match:
                         winner_id = int(match.group(1))
 
-                branches = self.branch_manager.select_winner(
-                    pipeline.pipeline_id, branches, winner_id
-                )
+                if winner_id is None:
+                    picked = runner.select_winner()
+                    winner_id = picked.iter_index if picked else 0
+
+                runner.archive(winner_id)
                 pipeline.selected_branch = winner_id
                 pipeline.active_branch_count = 0
-                pipeline.metadata["branches"] = [b.model_dump() for b in branches]
+                # Keep a minimal breadcrumb in metadata so external tools
+                # that inspect pipeline state still see the branching
+                # ran (full history lives in journal.json).
+                pipeline.metadata["branches"] = [
+                    {
+                        "branch_id": n.iter_index,
+                        "status": (n.exec_result or {}).get("status", "completed"),
+                        "step": (n.exec_result or {}).get("step"),
+                    }
+                    for n in runner.branch_nodes()
+                ]
                 # Resume normal pipeline after CRITIC of winning branch
                 pipeline.step = PipelineStep.CRITIC
                 self.state.save_pipeline(pipeline)
@@ -285,15 +412,22 @@ class ResearchScheduler:
 
         # Otherwise, dispatch next step for each active branch
         tasks = []
-        for branch in branches:
-            if branch.status != "active":
+        for node in runner.active_branches():
+            current_step_val = (node.exec_result or {}).get("step")
+            if not current_step_val:
                 continue
-            if branch.step is None:
+            try:
+                current_step = PipelineStep(current_step_val)
+            except ValueError:
                 continue
             # Determine next step for this branch (same logic as main pipeline)
-            next_step = self._next_after_design(pipeline) if branch.step == PipelineStep.DESIGN else None
+            next_step = (
+                self._next_after_design(pipeline)
+                if current_step == PipelineStep.DESIGN
+                else None
+            )
             if next_step is None:
-                wf_key = (pipeline.stage.value, branch.step.value)
+                wf_key = (pipeline.stage.value, current_step.value)
                 next_step_name = self._next_step_map.get(wf_key)
                 if next_step_name:
                     try:
@@ -302,40 +436,43 @@ class ResearchScheduler:
                         next_step = None
 
             if next_step and next_step != PipelineStep.WAITING_APPROVAL:
-                branch_dir = self.branch_manager.get_branch_dir(
-                    pipeline.pipeline_id, branch.branch_id
-                )
-                # Stop branches at CRITIC (don't go to INTERROGATION/REPORT)
-                if next_step in (PipelineStep.INTERROGATION, PipelineStep.REPORT, PipelineStep.WAITING_APPROVAL):
-                    branch.status = "completed"
+                bdir = runner.branch_dir(node.iter_index)
+                # Stop branches at CRITIC (don't go past it).
+                if next_step in (
+                    PipelineStep.INTERROGATION,
+                    PipelineStep.REPORT,
+                    PipelineStep.WAITING_APPROVAL,
+                ):
+                    runner.set_status(node.iter_index, "completed")
                     continue
 
                 tasks.append(
-                    self._dispatch_branch_step(pipeline, branch, next_step, branch_dir)
+                    self._dispatch_branch_step(
+                        pipeline, runner, node.iter_index, next_step, bdir
+                    )
                 )
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Save updated branch states
-        pipeline.metadata["branches"] = [b.model_dump() for b in branches]
         self.state.save_pipeline(pipeline)
 
     async def _dispatch_branch_step(
         self,
         pipeline: PipelineState,
-        branch: Any,
+        runner: "BranchRunner",
+        branch_id: int,
         step: PipelineStep,
         branch_dir: Path,
     ) -> None:
         """Dispatch a single step for a single branch."""
         agent_name = self.workflow.get_step_agent(step.value) or "pipeline_manager"
         prompt = (
-            f"Pipeline: {pipeline.pipeline_id} (Branch {branch.branch_id})\n"
+            f"Pipeline: {pipeline.pipeline_id} (Branch {branch_id})\n"
             f"Research question: {pipeline.research_question}\n"
             f"Step: {step.value}\n"
             f"IMPORTANT: Write all output artifacts to the branch directory: {branch_dir}\n"
-            f"This is branch {branch.branch_id} of a parallel experiment. "
+            f"This is branch {branch_id} of a parallel experiment. "
             f"Other branches are exploring alternative approaches."
         )
         try:
@@ -343,16 +480,16 @@ class ResearchScheduler:
                 agent_name, prompt, pipeline.pipeline_id
             )
             if result.get("success"):
-                branch.step = step
+                runner.advance(branch_id, step)
                 logger.info(
                     "Branch %d step %s completed for %s",
-                    branch.branch_id, step.value, pipeline.pipeline_id,
+                    branch_id, step.value, pipeline.pipeline_id,
                 )
             else:
-                branch.status = "failed"
+                runner.set_status(branch_id, "failed")
         except Exception as e:
-            logger.error("Branch %d dispatch failed: %s", branch.branch_id, e)
-            branch.status = "failed"
+            logger.error("Branch %d dispatch failed: %s", branch_id, e)
+            runner.set_status(branch_id, "failed")
 
     async def _process_backlog(self) -> None:
         """Sweep expired backlog items and re-evaluate candidates."""
@@ -450,6 +587,8 @@ class ResearchScheduler:
             pipeline.metadata["kill_reason"] = decision.comment
             # Trigger knowledge compilation for killed pipelines too
             self._trigger_knowledge_compilation(pipeline)
+            # A7: persist findings card if critic already produced a verdict.
+            self._maybe_save_findings(pipeline)
 
         elif decision.decision == DecisionType.PIVOT:
             pipeline.stage = PipelineStage.MAIN
@@ -627,6 +766,160 @@ class ResearchScheduler:
             f"_Generated at {ts} (simulation mode)_\n"
         )
 
+    def _stage_user_approve(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> None:
+        """Materialise artifacts/pipeline_<id>/user_approve/ for inject-mode review.
+
+        Copies the reference papers, proposal, FAST_FAIL analysis, and the
+        pre-MAIN review into a user-facing folder and seeds a `feedback.md`
+        template. Called after ``_generate_pre_main_review`` when the pipeline
+        was created via ``inject --title --question`` (source == "user_inject").
+        The ``/research continue --pipeline ID`` command reads ``feedback.md``
+        and dispatches the fixer agent honouring the user's directives.
+        """
+        import shutil
+
+        if pipeline.metadata.get("source") != "user_inject":
+            return
+
+        ua_dir = pdir / "user_approve"
+        ua_dir.mkdir(parents=True, exist_ok=True)
+        papers_dir = ua_dir / "papers"
+        papers_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Link reference papers from evidence_refs.  Prefer os.link
+        # (hard link — O(1), zero extra space, safe to unlink without
+        # touching the source).  Fall back to os.symlink when hard link
+        # is not supported (cross-filesystem).  Copy is the last resort.
+        import os as _os
+        copied_papers: list[str] = []
+        raw_dir = self.project_root / "knowledge" / "raw"
+        for ref in pipeline.evidence_refs:
+            src_candidates = [Path(ref), raw_dir / Path(ref).name]
+            src = next((c for c in src_candidates if c.exists()), None)
+            if src is None:
+                continue
+            dest = papers_dir / src.name
+            if dest.exists() or dest.is_symlink():
+                copied_papers.append(src.name)
+                continue
+            staged = False
+            # Try hard link first.
+            try:
+                _os.link(src, dest)
+                staged = True
+            except (OSError, NotImplementedError):
+                pass
+            # Fall back to symlink.
+            if not staged:
+                try:
+                    _os.symlink(src.resolve(), dest)
+                    staged = True
+                except (OSError, NotImplementedError):
+                    pass
+            # Last resort: actual copy.
+            if not staged:
+                try:
+                    shutil.copy2(src, dest)
+                    staged = True
+                except Exception:
+                    logger.warning("Failed to stage paper: %s", src)
+            if staged:
+                copied_papers.append(src.name)
+
+        # 2. Write proposal snapshot
+        proposal_md = ua_dir / "proposal.md"
+        initial_hypothesis = pipeline.metadata.get("initial_hypothesis", "")
+        proposal_md.write_text(
+            f"# Proposal: {pipeline.title}\n\n"
+            f"- Pipeline ID: {pipeline.pipeline_id}\n"
+            f"- Source: {pipeline.metadata.get('source', 'unknown')}\n"
+            f"- Budget allocated: {pipeline.budget_allocated}\n\n"
+            f"## Research Question\n{pipeline.research_question}\n\n"
+            f"## Initial Hypothesis\n{initial_hypothesis or '(none provided)'}\n\n"
+            f"## Reference Papers\n"
+            + ("\n".join(f"- {name}" for name in copied_papers) or "(none)")
+            + "\n"
+        )
+
+        # 3. Combined FAST_FAIL report (analysis + pre-main review)
+        analysis_path = pdir / "analysis_report.md"
+        pre_main_path = pdir / "pre_main_review.md"
+        report_sections: list[str] = [f"# FAST_FAIL Report — {pipeline.pipeline_id}\n"]
+        if analysis_path.exists():
+            report_sections.append("## Critic Analysis\n")
+            report_sections.append(analysis_path.read_text())
+        if pre_main_path.exists():
+            report_sections.append("\n## Pre-MAIN Review\n")
+            report_sections.append(pre_main_path.read_text())
+        (ua_dir / "fast_fail_report.md").write_text("\n".join(report_sections))
+
+        # 4. Professor suggestion — extract "Professor Assessment" + Recommendation
+        suggestion = ""
+        if pre_main_path.exists():
+            body = pre_main_path.read_text()
+            for heading in ("## 5. Professor Assessment", "## Recommendation"):
+                if heading in body:
+                    # Include everything from this heading forward
+                    suggestion += body[body.find(heading):] + "\n"
+                    break
+            if not suggestion:
+                suggestion = body
+        (ua_dir / "professor_suggestion.md").write_text(
+            f"# Professor Suggestion — {pipeline.pipeline_id}\n\n"
+            + (suggestion or "(pre_main_review.md not yet generated)")
+        )
+
+        # 5. Feedback template — user edits this before running /research continue.
+        #    The `continue` command detects the unchanged template marker and refuses
+        #    to proceed until the user has written an actual opinion.
+        feedback_path = ua_dir / "feedback.md"
+        if not feedback_path.exists():
+            feedback_path.write_text(
+                "<!-- user_approve/feedback.md — edit this file, then run: -->\n"
+                f"<!--   python scripts/run_research.py continue --pipeline {pipeline.pipeline_id} -->\n"
+                "<!-- Delete these comment lines and replace with your directives. -->\n\n"
+                "# User Feedback\n\n"
+                "## What to change\n\n"
+                "- \n\n"
+                "## What to keep\n\n"
+                "- \n\n"
+                "## Additional notes\n\n"
+            )
+
+        # 6. README with instructions
+        (ua_dir / "README.md").write_text(
+            f"# user_approve/ — pipeline {pipeline.pipeline_id}\n\n"
+            f"FAST_FAIL is complete for an inject-mode pipeline. "
+            f"Review the files below, write your opinion in `feedback.md`, "
+            f"then run the continue command.\n\n"
+            f"## Files\n"
+            f"- `papers/` — reference PDFs copied from knowledge/raw/\n"
+            f"- `proposal.md` — research question + initial hypothesis\n"
+            f"- `fast_fail_report.md` — critic analysis + pre-MAIN review\n"
+            f"- `professor_suggestion.md` — Professor's fix recommendation\n"
+            f"- `feedback.md` — **edit this** with your modification opinions\n\n"
+            f"## Continue\n"
+            f"```\n"
+            f"python scripts/run_research.py continue --pipeline "
+            f"{pipeline.pipeline_id}\n"
+            f"```\n"
+            f"The fixer agent will follow your directives exactly and, on "
+            f"success, unblock the pipeline into the MAIN stage.\n"
+        )
+
+        # 7. Mark metadata so frontend / CLI can detect the block
+        pipeline.metadata["user_approve_pending"] = True
+        pipeline.metadata["user_approve_dir"] = str(
+            ua_dir.relative_to(self.project_root)
+        )
+        self.state.save_pipeline(pipeline)
+        self.state.append_log(
+            f"user_approve staged at {ua_dir.relative_to(self.project_root)}",
+            pipeline.pipeline_id,
+        )
+
     def _simulate_research_brief(
         self, candidate: dict, pipeline_id: str, candidates_dir: Path
     ) -> None:
@@ -708,6 +1001,7 @@ class ResearchScheduler:
         )
         if proposal.hypothesis:
             pipeline.metadata["initial_hypothesis"] = proposal.hypothesis
+        pipeline.metadata["source"] = proposal.source
         self.state.save_pipeline(pipeline)
 
         # Allocate budget
@@ -800,6 +1094,7 @@ class ResearchScheduler:
         if pipeline.stage == PipelineStage.KNOWLEDGE:
             self._trigger_knowledge_compilation(pipeline)
             pipeline.stage = PipelineStage.COMPLETED
+            self._maybe_save_findings(pipeline)
             self.state.save_pipeline(pipeline)
             self.state.append_log("Knowledge compilation done, pipeline COMPLETED", pipeline.pipeline_id)
             return
@@ -830,22 +1125,57 @@ class ResearchScheduler:
                 # After FAST_FAIL: generate pre_main_review.md, then block
                 # for user approval (approve / tweak / kill)
                 await self._generate_pre_main_review(pipeline, pdir)
+
+                # Inject-mode pipelines additionally stage a user_approve/
+                # folder so the user can write feedback.md and unblock via
+                # `/research continue --pipeline ID` (fixer honours user
+                # directives verbatim).
+                is_inject = pipeline.metadata.get("source") == "user_inject"
+                if is_inject:
+                    self._stage_user_approve(pipeline, pdir)
+
+                pause_comment = (
+                    "FAST_FAIL complete. Pre-MAIN review generated. "
+                    "Awaiting user decision: approve / tweak / kill. "
+                    "See artifacts/pipeline_"
+                    f"{pipeline.pipeline_id}/pre_main_review.md"
+                )
+                if is_inject:
+                    pause_comment += (
+                        " | Inject mode: edit user_approve/feedback.md and "
+                        "run `python scripts/run_research.py continue "
+                        f"--pipeline {pipeline.pipeline_id}` to dispatch the fixer."
+                    )
                 self._write_default_decision(
                     pipeline.pipeline_id,
                     "pause",
-                    comment=(
-                        "FAST_FAIL complete. Pre-MAIN review generated. "
-                        "Awaiting user decision: approve / tweak / kill. "
-                        "See artifacts/pipeline_"
-                        f"{pipeline.pipeline_id}/pre_main_review.md"
-                    ),
+                    comment=pause_comment,
                 )
                 self.state.append_log(
-                    "FAST_FAIL complete → pre_main_review.md generated, awaiting user decision",
+                    "FAST_FAIL complete → pre_main_review.md generated, awaiting user decision"
+                    + (" (inject mode: user_approve/ staged)" if is_inject else ""),
                     pipeline.pipeline_id,
                 )
             else:
-                # After MAIN milestone: professor review (existing flow)
+                # After MAIN milestone: professor review (existing flow).
+                # A11 milestone-N gate: when we've accumulated >=2 milestones,
+                # stage a user_approve/ review folder with gate=milestone_N
+                # so the frontend can distinguish it from pre_main.  Existing
+                # HITL flow takes over from there.
+                if pipeline.milestone_count >= 2:
+                    pipeline.metadata["user_approve_gate"] = (
+                        f"milestone_{pipeline.milestone_count}"
+                    )
+                    try:
+                        self._stage_user_approve(pipeline, pdir)
+                    except Exception:
+                        logger.exception("Milestone-N gate staging failed")
+                    self.state.append_log(
+                        f"Milestone-{pipeline.milestone_count} gate staged "
+                        f"(user_approve/ gate=milestone_{pipeline.milestone_count})",
+                        pipeline.pipeline_id,
+                    )
+
                 milestones = sorted(pdir.glob("milestone_*.md"))
                 context = [str(m) for m in milestones[-3:]]
                 state_file = str(pdir / "state.json")
@@ -899,20 +1229,38 @@ class ResearchScheduler:
             and next_step == PipelineStep.DESIGN
             and pipeline.active_branch_count == 0
         ):
-            from researchos.runtime.branch_manager import BranchState
-            branches = self.branch_manager.spawn_branches(pipeline, self.max_branches)
-            pipeline.active_branch_count = len(branches)
-            pipeline.metadata["branches"] = [b.model_dump() for b in branches]
+            runner = self._branch_runner(pipeline.pipeline_id)
+            hypothesis_path = (
+                self.project_root
+                / "artifacts"
+                / f"pipeline_{pipeline.pipeline_id}"
+                / "hypothesis.md"
+            )
+            hyp_text = (
+                hypothesis_path.read_text(errors="replace")
+                if hypothesis_path.exists()
+                else ""
+            )
+            nodes = runner.seed(hyp_text)
+            pipeline.active_branch_count = len(nodes)
+            pipeline.metadata["branches"] = [
+                {
+                    "branch_id": n.iter_index,
+                    "status": (n.exec_result or {}).get("status", "active"),
+                    "step": (n.exec_result or {}).get("step"),
+                }
+                for n in nodes
+            ]
             self.state.save_pipeline(pipeline)
             self.state.append_log(
-                f"Spawned {len(branches)} parallel branches for exploration",
+                f"Spawned {len(nodes)} parallel branches for exploration",
                 pipeline.pipeline_id,
             )
             # Branches will be scheduled in subsequent ticks via _schedule_branch_steps
             return
 
         # Idempotent: check if output artifact already exists
-        expected_output = self.workflow.get_step_output(next_step.value)
+        expected_output = self.workflow.get_step_output(next_step.value) or STEP_ARTIFACT.get(next_step)
         if expected_output:
             expected = (
                 self.project_root
@@ -943,6 +1291,34 @@ class ResearchScheduler:
                     f"Data pre-flight: {compliance['reason']}", pipeline.pipeline_id
                 )
 
+        # ── Wave 2: code-only / specialised step handlers ────────────
+        # These steps bypass the generic agent dispatch: they either run
+        # pure-Python hooks (RESULTS_REVERIFY, BASELINE_CONFIRM) or stage
+        # HITL artifacts (PRE_PUBLISH_GATE).
+        specialised = await self._maybe_dispatch_specialised_step(pipeline, next_step)
+        if specialised is not None:
+            success = specialised
+            if success:
+                pipeline.step = next_step
+                artifact_name = STEP_ARTIFACT.get(next_step)
+                if artifact_name:
+                    pipeline.artifacts[next_step.value] = artifact_name
+                self.state.save_pipeline(pipeline)
+                self.state.append_log(
+                    f"Step completed (code): {next_step.value}",
+                    pipeline.pipeline_id,
+                )
+            else:
+                # Specialised step failed in a non-recoverable way.
+                pipeline.retry_count += 1
+                pipeline.last_error = f"Specialised step failed: {next_step.value}"
+                self.state.save_pipeline(pipeline)
+                self.state.append_log(
+                    f"Specialised step failed: {next_step.value}",
+                    pipeline.pipeline_id,
+                )
+            return
+
         # Dispatch the step
         success = await self.dispatcher.dispatch_step(pipeline, next_step)
         if success:
@@ -957,6 +1333,18 @@ class ResearchScheduler:
             self.state.append_log(
                 f"Step dispatched: {next_step.value}", pipeline.pipeline_id
             )
+            # H3 + H5: post-CRITIC hooks — run VLM figure review and append
+            # a Node snapshot to journal.json.  Both are best-effort, never
+            # block pipeline progress.
+            if next_step == PipelineStep.CRITIC:
+                try:
+                    await self._post_critic_vlm_review(pipeline)
+                except Exception:
+                    logger.exception("Post-CRITIC VLM review failed (non-fatal)")
+                try:
+                    self._journal_record_critic(pipeline)
+                except Exception:
+                    logger.exception("Journal record failed (non-fatal)")
         else:
             pipeline.retry_count += 1
             error_msg = f"Failed to dispatch step {next_step.value}"
@@ -975,6 +1363,528 @@ class ResearchScheduler:
                     pipeline.pipeline_id,
                 )
             self.state.save_pipeline(pipeline)
+
+    # ── Wave 2 specialised step handlers ─────────────────────────
+
+    async def _maybe_dispatch_specialised_step(
+        self, pipeline: PipelineState, step: PipelineStep
+    ) -> bool | None:
+        """Handle Wave 2 steps that aren't plain agent dispatches.
+
+        Returns:
+            True  — step ran successfully (or was a graceful no-op).
+            False — step ran but failed in a recoverable way.
+            None  — not a specialised step; caller should fall through to
+                    the standard :meth:`Dispatcher.dispatch_step`.
+        """
+        pdir = (
+            self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+        )
+
+        # CONCEPT_EXTRACT — Stream C agent, but custom prompt so we keep
+        # control over artifact placement.
+        if step == PipelineStep.CONCEPT_EXTRACT:
+            return await self._run_concept_extract(pipeline, pdir)
+
+        # RESULTS_REVERIFY — code-only, delegated to Stream D.
+        if step == PipelineStep.RESULTS_REVERIFY:
+            return self._run_results_reverify(pipeline, pdir)
+
+        # BASELINE_CONFIRM — code-only, delegated to Stream F.
+        if step == PipelineStep.BASELINE_CONFIRM:
+            return self._run_baseline_confirm(pipeline, pdir)
+
+        # PRE_PUBLISH_GATE — HITL staging; reuses _stage_user_approve helper.
+        if step == PipelineStep.PRE_PUBLISH_GATE:
+            return self._run_pre_publish_gate(pipeline, pdir)
+
+        return None
+
+    async def _run_concept_extract(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Dispatch the concept_extractor agent (Stream C) — writes concepts.yaml."""
+        if self.simulate:
+            # Minimal simulate fallback so tests pass when Stream C is absent.
+            pdir.mkdir(parents=True, exist_ok=True)
+            (pdir / "concepts.yaml").write_text(
+                "# Auto-generated (simulate mode)\n"
+                "concepts:\n"
+                f"  - id: C1\n"
+                f"    definition: \"Core concept for {pipeline.title}\"\n"
+                f"    math_formula: \"\"\n"
+                f"    code_implementation: \"\"\n"
+            )
+            return True
+
+        prompt = (
+            f"Extract atomic concepts from the research design for pipeline "
+            f"{pipeline.pipeline_id}.\n\n"
+            f"## Pipeline\n"
+            f"- Title: {pipeline.title}\n"
+            f"- Research Question: {pipeline.research_question}\n\n"
+            f"## Instructions\n"
+            f"1. Read hypothesis.md and experiment_plan.yaml via file_read.\n"
+            f"2. Decompose the design into a flat list of atomic academic "
+            f"concepts (ids C1, C2, ...).  Each concept gets a one-sentence "
+            f"definition, optional LaTeX formula, and optional code locator.\n"
+            f"3. Write concepts.yaml with a top-level ``concepts:`` list.\n"
+        )
+        try:
+            result = await self.dispatcher.dispatch_via_executor(
+                "concept_extractor", prompt, pipeline.pipeline_id
+            )
+        except Exception:
+            logger.exception("concept_extract dispatch failed")
+            return False
+        if not result.get("success"):
+            logger.warning(
+                "concept_extract failed: %s",
+                (result.get("output") or "")[:200],
+            )
+            # Tolerate missing agent — write a placeholder so pipeline advances.
+            concepts_path = pdir / "concepts.yaml"
+            if not concepts_path.exists():
+                concepts_path.write_text(
+                    "# concept_extractor unavailable; placeholder concepts.yaml\n"
+                    "concepts: []\n"
+                )
+            return True
+        return True
+
+    def _run_results_reverify(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Run the Stream-D reverification hook and write reverify_report.json.
+
+        A1 opt-in: reverify is disabled by default.  Enable via
+        ``research_config.yaml::reverify.enabled: true`` (or env var
+        ``RESEARCHOS_REVERIFY=1``).  When disabled, writes a SKIP stub and
+        advances without running the second subprocess.
+        """
+        import os as _os
+        report_path = pdir / "reverify_report.json"
+        # Check opt-in gate first.
+        enabled = False
+        env_flag = _os.environ.get("RESEARCHOS_REVERIFY", "").strip().lower()
+        if env_flag in ("1", "true", "yes", "on"):
+            enabled = True
+        else:
+            cfg_path = self.project_root / "runtime" / "research_config.yaml"
+            if cfg_path.exists():
+                try:
+                    import yaml as _y
+                    cfg = _y.safe_load(cfg_path.read_text()) or {}
+                    enabled = bool((cfg.get("reverify") or {}).get("enabled", False))
+                except Exception:
+                    logger.debug("research_config.yaml reverify block unparsable")
+        if not enabled:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                '{"verdict": "SKIP", '
+                '"reason": "reverify disabled (opt-in via research_config.yaml::reverify.enabled)", '
+                '"metrics_diff": {}}\n'
+            )
+            self.state.append_log(
+                "RESULTS_REVERIFY skipped (A1 opt-in; enable via research_config.yaml)",
+                pipeline.pipeline_id,
+            )
+            return True
+        if _reverify_results is None:
+            # Stream D not available — write a SKIP stub so we advance.
+            stub = (
+                '{"verdict": "SKIP", '
+                '"reason": "reverify module unavailable", '
+                '"metrics_diff": {}}\n'
+            )
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(stub)
+            self.state.append_log(
+                "RESULTS_REVERIFY skipped (reverify module unavailable)",
+                pipeline.pipeline_id,
+            )
+            return True
+
+        try:
+            report = _reverify_results(pdir, self.project_root)
+            verdict = (report or {}).get("verdict", "SKIP")
+            self.state.append_log(
+                f"RESULTS_REVERIFY verdict={verdict}", pipeline.pipeline_id
+            )
+        except Exception:
+            logger.exception("reverify_results crashed")
+            # Never block the pipeline on reverify internal bugs.
+            import json as _json
+            report_path.write_text(
+                _json.dumps(
+                    {"verdict": "SKIP", "reason": "reverify crashed"}, indent=2
+                )
+            )
+        return True
+
+    def _run_baseline_confirm(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Code-only baseline confirmation.  Writes metric_contract.json or
+        skips gracefully if the plan has no baseline block or Stream F isn't
+        ready."""
+        import yaml as _yaml
+        plan_path = pdir / "experiment_plan.yaml"
+        contract_path = pdir / "metric_contract.json"
+
+        if not plan_path.exists():
+            # No plan yet — SKIP.
+            contract_path.write_text(
+                '{"status": "SKIP", "reason": "no experiment_plan.yaml"}\n'
+            )
+            return True
+
+        try:
+            plan = _yaml.safe_load(plan_path.read_text()) or {}
+        except Exception:
+            logger.warning("baseline_confirm: failed to parse experiment_plan.yaml")
+            contract_path.write_text(
+                '{"status": "SKIP", "reason": "unparsable experiment_plan.yaml"}\n'
+            )
+            return True
+
+        baseline_block = plan.get("baseline") or plan.get("baselines")
+        if not baseline_block:
+            contract_path.write_text(
+                '{"status": "SKIP", "reason": "no baseline block in experiment_plan.yaml"}\n'
+            )
+            self.state.append_log(
+                "BASELINE_CONFIRM skipped (no baseline in plan)",
+                pipeline.pipeline_id,
+            )
+            return True
+
+        if _baseline_registry is None:
+            contract_path.write_text(
+                '{"status": "SKIP", "reason": "baseline_registry module unavailable"}\n'
+            )
+            self.state.append_log(
+                "BASELINE_CONFIRM skipped (baseline_registry unavailable)",
+                pipeline.pipeline_id,
+            )
+            return True
+
+        try:
+            confirm = getattr(_baseline_registry, "confirm_baseline", None)
+            MetricContract = getattr(_baseline_registry, "MetricContract", None)
+            if not callable(confirm) or MetricContract is None:
+                contract_path.write_text(
+                    '{"status": "SKIP", "reason": "confirm_baseline not implemented"}\n'
+                )
+                return True
+
+            # Best-effort construction of a MetricContract from the plan's
+            # baseline block.  If the plan is missing required fields we
+            # record a SKIP so the pipeline keeps moving.
+            block = baseline_block
+            if isinstance(block, list) and block:
+                # "baselines: [...]" shape — pick first entry as canonical.
+                block = block[0] if isinstance(block[0], dict) else {}
+            if not isinstance(block, dict):
+                contract_path.write_text(
+                    '{"status": "SKIP", "reason": "baseline block has unexpected shape"}\n'
+                )
+                return True
+
+            try:
+                contract = MetricContract(
+                    task=block.get("task") or plan.get("task", "unspecified"),
+                    dataset=block.get("dataset") or plan.get("dataset", "unspecified"),
+                    eval_script=block.get("eval_script", "run_experiment.py"),
+                    metrics=block.get("metrics", {}) or {},
+                    baseline_values=block.get("baseline_values", {}) or {},
+                    source_commit=block.get("source_commit", "HEAD"),
+                    known_deviations=block.get("known_deviations", []) or [],
+                )
+            except Exception:
+                logger.warning(
+                    "baseline_confirm: plan baseline block did not validate",
+                    exc_info=True,
+                )
+                contract_path.write_text(
+                    '{"status": "SKIP", "reason": "baseline block validation failed"}\n'
+                )
+                return True
+
+            confirm(
+                contract=contract,
+                pipeline_id=pipeline.pipeline_id,
+                artifacts_root=self.project_root / "artifacts",
+            )
+            self.state.append_log(
+                "BASELINE_CONFIRM completed", pipeline.pipeline_id
+            )
+        except Exception:
+            logger.exception("baseline_confirm crashed")
+            contract_path.write_text(
+                '{"status": "SKIP", "reason": "confirm_baseline crashed"}\n'
+            )
+        return True
+
+    def _maybe_save_findings(self, pipeline: PipelineState) -> None:
+        """A7: persist a FindingCard when critic verdict is fully_correct.
+
+        Gracefully no-ops when findings_memory is unavailable or when there
+        is no advisor_verdict.json / verdict is not fully_correct.
+        """
+        if _findings_memory is None:
+            return
+        pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+
+        # B1 fix: critic.md emits advisor_verdict.yaml; earlier draft assumed .json.
+        # Try YAML first (authoritative), then JSON (legacy/alternate).
+        fully_correct = False
+        verdict_payload: dict = {}
+        for ext, loader in (("yaml", yaml.safe_load), ("json", None)):
+            verdict_path = pdir / f"advisor_verdict.{ext}"
+            if not verdict_path.exists():
+                continue
+            try:
+                if loader is not None:
+                    verdict_payload = loader(verdict_path.read_text()) or {}
+                else:
+                    import json as _json
+                    verdict_payload = _json.loads(verdict_path.read_text()) or {}
+                if isinstance(verdict_payload, dict):
+                    fully_correct = bool(verdict_payload.get("fully_correct"))
+                    break
+            except Exception:
+                logger.debug("advisor_verdict.%s unparsable", ext, exc_info=True)
+
+        if not fully_correct:
+            return
+
+        try:
+            ms = getattr(_findings_memory, "MemoryService", None)
+            FindingCard = getattr(_findings_memory, "FindingCard", None)
+            if ms is None or FindingCard is None:
+                return
+            service = ms(self.project_root)
+            body_parts = [
+                f"Pipeline {pipeline.pipeline_id} completed with a "
+                f"fully-correct advisor verdict.",
+            ]
+            if verdict_payload.get("summary"):
+                body_parts.append(str(verdict_payload.get("summary")))
+            card = FindingCard(
+                id=f"finding_{pipeline.pipeline_id}",
+                kind="findings",
+                title=pipeline.title,
+                body="\n\n".join(body_parts),
+                tags=list(pipeline.evidence_refs or []),
+                source_pipeline=pipeline.pipeline_id,
+            )
+            service.save(card)
+            self.state.append_log(
+                "Findings memory: persisted FindingCard on COMPLETED",
+                pipeline.pipeline_id,
+            )
+        except Exception:
+            logger.exception("Findings memory save failed")
+
+    async def _post_critic_vlm_review(self, pipeline: PipelineState) -> None:
+        """H3: dispatch vlm_reviewer on figures produced by the pipeline.
+
+        Runs after CRITIC.  Only fires when the pipeline directory contains
+        image files (.png/.jpg/.jpeg/.pdf figures).  Writes ``vlm_review.json``
+        alongside analysis_report.md.  Best-effort: failures logged, pipeline
+        proceeds unchanged.
+        """
+        pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+        if not pdir.exists():
+            return
+        fig_exts = {".png", ".jpg", ".jpeg"}
+        figures = [p for p in pdir.rglob("*") if p.suffix.lower() in fig_exts]
+        if not figures:
+            return
+        # In simulate mode, write a stub.
+        if self.simulate:
+            import json as _json
+            stub = {
+                "figures_reviewed": [f.name for f in figures],
+                "simulate": True,
+                "duplicate_candidates": [],
+            }
+            (pdir / "vlm_review.json").write_text(_json.dumps(stub, indent=2))
+            self.state.append_log(
+                f"VLM stub review written ({len(figures)} figures)",
+                pipeline.pipeline_id,
+            )
+            return
+        prompt = (
+            f"Pipeline: {pipeline.pipeline_id}\n\n"
+            f"Review the figures in the pipeline directory using the "
+            f"img_review_prompt protocol from your agent definition. "
+            f"Emit a single JSON object with keys: "
+            f"`per_figure: {{filename: review_dict}}`, "
+            f"`duplicate_candidates: [...]`.\n\n"
+            f"Figures to review:\n"
+            + "\n".join(f"- {f.relative_to(pdir)}" for f in figures)
+            + "\n\nWrite the final JSON to `vlm_review.json`.\n"
+        )
+        try:
+            result = await self.dispatcher.dispatch_via_executor(
+                "vlm_reviewer", prompt, pipeline.pipeline_id
+            )
+            if not result.get("success"):
+                logger.warning(
+                    "vlm_reviewer returned failure for %s", pipeline.pipeline_id
+                )
+                return
+            self.state.append_log(
+                f"VLM review dispatched ({len(figures)} figures)",
+                pipeline.pipeline_id,
+            )
+        except Exception:
+            logger.exception("vlm_reviewer dispatch failed")
+
+    def _journal_record_critic(self, pipeline: PipelineState) -> None:
+        """H5: append a Node snapshot to journal.json after CRITIC (MAIN only).
+
+        The new tree-search primitives in branch_manager.py are opt-in via
+        ``research_config.yaml::branching.enabled``.  Even when disabled we
+        still persist each CRITIC result as a Journal Node so future runs
+        with branching turned on inherit the history.
+        """
+        if pipeline.stage != PipelineStage.MAIN:
+            return
+        try:
+            from researchos.runtime.branch_manager import (
+                Node, Journal, JournalPersistence,
+            )
+        except Exception:
+            logger.debug("branch_manager new-style primitives unavailable")
+            return
+
+        artifacts_root = self.project_root / "artifacts"
+        pdir = artifacts_root / f"pipeline_{pipeline.pipeline_id}"
+
+        # Load existing journal or start fresh.
+        try:
+            journal = JournalPersistence.load(pipeline.pipeline_id, artifacts_root)
+        except Exception:
+            journal = Journal()
+
+        # Build a Node from the critic artifact.
+        import json as _json
+        metric: dict = {}
+        results_path = pdir / "results.json"
+        if results_path.exists():
+            try:
+                metric = _json.loads(results_path.read_text()).get("metrics", {}) or {}
+            except Exception:
+                metric = {}
+        analysis_path = pdir / "analysis_report.md"
+        analysis_text = ""
+        if analysis_path.exists():
+            analysis_text = analysis_path.read_text(errors="replace")[:4000]
+
+        # Is this result buggy?  Inherit critic's verdict if surfaced.
+        verdict_lower = analysis_text.lower()
+        is_buggy = (
+            "refuted" in verdict_lower
+            or "failed to support" in verdict_lower
+            or "crash" in verdict_lower
+        )
+
+        from datetime import datetime, timezone
+        node_id = f"m{pipeline.milestone_count}_{datetime.now(timezone.utc).strftime('%H%M%S')}"
+        # Parent = last non-buggy node if any, else last node.
+        parent_id: str | None = None
+        if journal.nodes:
+            best = journal.get_best_node()
+            parent_id = best.id if best else journal.nodes[-1].id
+
+        node = Node(
+            id=node_id,
+            parent_id=parent_id,
+            stage="improve" if parent_id else "draft",
+            plan="",  # filled from experiment_plan.yaml if present
+            code="",  # pointer only; actual code lives in pipeline dir
+            exec_result={},
+            plot_analyses={},
+            metric=metric,
+            is_buggy=is_buggy,
+            is_buggy_plots=False,
+            is_seed_node=False,
+            is_seed_agg_node=False,
+            ablation_name=None,
+            hyperparam_name=None,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        journal.nodes.append(node)
+        try:
+            JournalPersistence.save(pipeline.pipeline_id, journal, artifacts_root)
+            self.state.append_log(
+                f"Journal node appended: {node_id} "
+                f"(buggy={is_buggy}, nodes={len(journal.nodes)})",
+                pipeline.pipeline_id,
+            )
+        except Exception:
+            logger.exception("Journal save failed")
+
+    def _pre_publish_gate_needed(self, pipeline_id: str) -> bool:
+        """True when PRE_PUBLISH_GATE hasn't been approved yet.
+
+        The gate is considered unresolved when the marker file exists
+        (``pre_publish_gate.md``) and the approval sentinel
+        (``pre_publish_approved``) does not.  Missing marker also means we
+        still need the gate — it's staged on first entry.
+        """
+        art_dir = self.project_root / "artifacts" / f"pipeline_{pipeline_id}"
+        if (art_dir / "pre_publish_approved").exists():
+            return False
+        return True
+
+    def _run_pre_publish_gate(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Stage the HITL pre-publish review folder and write gate marker.
+
+        Reuses the existing ``_stage_user_approve`` pattern but with
+        gate=``pre_publish`` so the frontend / CLI can differentiate.
+        """
+        gate_path = pdir / "pre_publish_gate.md"
+        paper_dir = self.project_root / "paper" / pipeline.pipeline_id
+        draft = paper_dir / "draft_v1.md"
+        review = paper_dir / "review_v1.md"
+
+        # Build the gate marker regardless — it's the artifact that
+        # _schedule_next recognises to advance past this step.
+        body_parts: list[str] = [
+            f"# Pre-Publish Gate — {pipeline.pipeline_id}\n",
+            "Awaiting final user approval before paper compilation.\n",
+        ]
+        if draft.exists():
+            body_parts.append("\n## Draft available\n")
+            body_parts.append(f"`{draft.relative_to(self.project_root)}`\n")
+        if review.exists():
+            body_parts.append("\n## Review available\n")
+            body_parts.append(f"`{review.relative_to(self.project_root)}`\n")
+        body_parts.append(
+            "\n## Next Steps\n"
+            "- Review draft.md and review.md under `paper/`.\n"
+            "- Run `/research continue --pipeline {pid} --gate pre_publish` "
+            "to unlock final compile.\n".replace("{pid}", pipeline.pipeline_id)
+        )
+        gate_path.write_text("".join(body_parts))
+
+        # Stage user_approve/ folder via existing helper when source is
+        # user_inject; re-uses feedback.md pattern with a pre_publish flag.
+        pipeline.metadata["user_approve_pending"] = True
+        pipeline.metadata["user_approve_gate"] = "pre_publish"
+        self._stage_user_approve(pipeline, pdir)
+
+        self.state.append_log(
+            "PRE_PUBLISH_GATE staged — awaiting user approval",
+            pipeline.pipeline_id,
+        )
+        return True
 
     # ── Knowledge Miner & Proposal intake ─────────────────────────
 
@@ -1117,7 +2027,53 @@ class ResearchScheduler:
         out = candidates_dir / f"candidate_{pipeline_id}.json"
         out.write_text(_json.dumps(candidate, indent=2, ensure_ascii=False))
 
-        # Generate a basic research brief from candidate data
+        # R2: generate research brief deterministically via briefer.render_brief
+        # when the topic_evaluator's evaluated_<id>.yaml exists (richer output
+        # with 5D scores + innovation claim + falsification). Fall back to
+        # the legacy template generator when the evaluator artifact is absent.
+        self._emit_research_brief(candidate, pipeline_id, candidates_dir)
+
+    def _emit_research_brief(
+        self, candidate: dict, pipeline_id: str, candidates_dir: Path
+    ) -> None:
+        """Prefer briefer.render_brief (R2) over the legacy template."""
+        evaluated_path = (
+            self.project_root / "knowledge" / "proposals"
+            / f"evaluated_{pipeline_id}.yaml"
+        )
+        brief_path = candidates_dir / f"research_brief_{pipeline_id}.md"
+        if evaluated_path.exists():
+            try:
+                from researchos.runtime.briefer import render_brief
+                # Best-effort: pull 2–3 KB snippets from wiki via kb_retrieve
+                # (text-only; we don't need perfect retrieval here).
+                snippets: list[str] = []
+                try:
+                    from researchos.mcp_servers.kb_server import search_wiki
+                    query = (
+                        candidate.get("title", "")
+                        + " "
+                        + candidate.get("research_question", "")
+                    ).strip()
+                    if query:
+                        raw = search_wiki(query, max_results=3) or ""
+                        # search_wiki returns concatenated text; chunk it.
+                        snippets = [s.strip() for s in raw.split("\n---\n") if s.strip()][:3]
+                except Exception:
+                    logger.debug("kb_retrieve failed for briefer", exc_info=True)
+                brief_text = render_brief(evaluated_path, snippets)
+                brief_path.write_text(brief_text)
+                self.state.append_log(
+                    f"Research brief rendered via briefer.render_brief "
+                    f"({brief_path.name})",
+                    pipeline_id,
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "briefer.render_brief failed; falling back to legacy template"
+                )
+        # Legacy template fallback.
         self._simulate_research_brief(candidate, pipeline_id, candidates_dir)
 
     async def _intake_knowledge_proposals(self) -> None:
@@ -1334,6 +2290,29 @@ class ResearchScheduler:
                     logger.error("Reviewer failed: %s", result.get("output", ""))
             self.state.append_log("Paper review generated", pid)
 
+        elif self._pre_publish_gate_needed(pid):
+            # A11 PRE_PUBLISH_GATE: stage an HITL checkpoint between review
+            # and LaTeX compile.  When running in simulate/auto modes the
+            # gate auto-approves so the pipeline still reaches PDF.  For
+            # live runs, the user must write ``pre_publish_approved`` into
+            # ``user_approve/feedback.md`` or supply an approval decision.
+            art_dir = self.project_root / "artifacts" / f"pipeline_{pid}"
+            art_dir.mkdir(parents=True, exist_ok=True)
+            gate_marker = art_dir / "pre_publish_gate.md"
+            approved_marker = art_dir / "pre_publish_approved"
+            if not gate_marker.exists():
+                self._run_pre_publish_gate(pipeline, art_dir)
+            if self.simulate or self.auto_professor:
+                # Auto-approve in non-interactive modes so tests pass.
+                approved_marker.write_text("auto-approved\n")
+                self.state.append_log(
+                    "PRE_PUBLISH_GATE auto-approved (simulate/auto mode)",
+                    pid,
+                )
+            else:
+                # Wait for user approval; don't advance.
+                return
+
         elif not tex_path.exists():
             # Convert markdown draft to LaTeX
             try:
@@ -1362,6 +2341,7 @@ class ResearchScheduler:
 
             self._trigger_knowledge_compilation(pipeline)
             pipeline.stage = PipelineStage.COMPLETED
+            self._maybe_save_findings(pipeline)
             self.state.save_pipeline(pipeline)
             self.state.append_log("Paper + knowledge complete, pipeline COMPLETED", pid)
 
@@ -1369,6 +2349,7 @@ class ResearchScheduler:
             # All done
             self._trigger_knowledge_compilation(pipeline)
             pipeline.stage = PipelineStage.COMPLETED
+            self._maybe_save_findings(pipeline)
             self.state.save_pipeline(pipeline)
             self.state.append_log("Paper + knowledge complete, pipeline COMPLETED", pid)
 

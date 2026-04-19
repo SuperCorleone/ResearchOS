@@ -29,99 +29,98 @@ You design rigorous experiments to test research hypotheses.
 
 Write `experiment_plan.yaml` to the pipeline directory.
 
-**IMPORTANT**: You MUST include a `requires_code` field (true/false) at the top level.
+### Mandatory 4-slot structure (A15)
+
+The plan MUST have **exactly four** top-level "plan slots":
+
+1. `plan_dataset`
+2. `plan_model`
+3. `plan_training`
+4. `plan_testing`
+
+Each slot has a fixed sub-schema (see below). The following siblings are
+optional top-level fields and may coexist with the 4 slots:
+`requires_code`, `data`, `reference_code`, `user_directives_applied`,
+`reference_methodology`, `proposed_method`.
+
+**IMPORTANT**: You MUST still include a `requires_code` field (true/false).
 Set it based on the research type:
 - `true` — the experiment needs code to be written and executed (benchmarks, simulations, algorithm implementations)
 - `false` — the experiment is purely analytical, a literature review, or can be answered by reasoning without running code
 
+Inspiration (do NOT copy verbatim): HKU `planning_tools.py`, which codifies
+the same four-way decomposition (dataset / model / training / testing) for
+automated experiment planning.
+
+### Sub-schema for each slot
+
 ```yaml
-requires_code: true   # ← REQUIRED: does this experiment need a code demo?
+requires_code: true   # REQUIRED top-level sibling
 
-experiment:
-  name: "<descriptive name>"
-  hypothesis_ref: "hypothesis.md"
-  type: "<ablation | comparison | validation | exploration>"
-
-setup:
-  environment: "<description of required environment>"
-  dependencies: []
-
-data:
-  source: "synthetic"    # synthetic | file | api | manual
-  description: "<one line: what data is used and how obtained>"
-  dataset_name: "<name and version, e.g., MovieLens-1M v2023>"  # if source != synthetic
-  license: "<license, e.g., CC-BY-4.0>"                         # if source != synthetic
+plan_dataset:
+  name: "<dataset name and version>"
+  source: "synthetic"      # synthetic | file | api | manual
+  license: "<license or 'unknown'>"
   preprocessing:
     - "<step, e.g., remove rows with missing target>"
   split:
-    strategy: "random_stratified"  # random | temporal | stratified | kfold | none
-    ratio: "70/15/15"              # train/val/test
+    strategy: "random_stratified"  # random | temporal | stratified | kfold | group | none
+    ratio: "70/15/15"
     seed: 42
-    risk_notes: "<leakage risk if any, e.g., temporal ordering ignored>"
+    risk_notes: "<leakage risk if any>"
+  sample_count: <integer | null>
+  consistency_requirement:        # optional — see Reference Methodology rules
+    reference_paper: "<title>"
+    must_match: ["dataset_version", "train_test_split"]
 
-variables:
-  independent:
-    - name: "<var name>"
-      values: ["<value1>", "<value2>"]
-  dependent:
-    - name: "<metric name>"
-      measurement: "<how to measure>"
-  controls:
-    - name: "<control var>"
-      fixed_value: "<value>"
+plan_model:
+  family: "<model family, e.g., transformer | tree | linear>"
+  architecture: "<specific architecture/config>"
+  parameters: <int | "N/A">
+  hyperparameters:
+    - name: "<hp>"
+      values: ["<v1>", "<v2>"]
+  reference_implementation: "<repo url or 'none'>"
 
-procedure:
-  steps:
-    - id: 1
-      description: "<step description>"
-      command: "<optional command to run>"
-    - id: 2
-      description: "<step description>"
-
-evaluation:
-  metrics:
-    - name: "<metric>"
-      threshold: <number>
-      direction: "<higher_better | lower_better>"
-  statistical_tests:
-    - name: "<test name, e.g., t-test>"
-      purpose: "<what it validates>"
-      report: ["effect_size", "test_statistic", "df", "p_value", "ci_95"]
+plan_training:
+  optimizer: "<e.g., AdamW>"
+  learning_rate: <number>
+  batch_size: <integer>
+  epochs_or_steps: <integer>
+  schedule: "<lr schedule / warmup policy>"
   seeds: [42, 123, 456]
   num_runs: 3
-
-baselines:
-  - name: "<baseline method>"
-    why_chosen: "<justification — must be the strongest reasonable baseline>"
-    resource_parity: "<same param count / compute / data as proposed method>"
-
-ablation:
-  - component: "<module or technique to ablate>"
-    replacement: "<what replaces it: random / constant / remove>"
-    purpose: "<what this proves about the component>"
-
-confound_controls:
-  random_seeds: true
-  initialization: "<fixed or varied>"
-  hyperparam_search: "<grid / random / none — must match across methods>"
-  data_split: "<fixed splits with seed>"
-  hardware_noise: "<how mitigated>"
-
-resource_budget:
+  hardware: "<GPU/CPU type>"
   estimated_runtime: "<e.g., 2 hours>"
   estimated_cost_credits: <integer>
-  measurement_type: "<measured | estimated | simulated>"
-  hardware: "<GPU/CPU type, memory>"
+  measurement_type: "measured"    # measured | estimated | simulated
+  confound_controls:
+    initialization: "<fixed or varied>"
+    hyperparam_search: "<grid | random | none — must match across methods>"
+    data_split: "<fixed splits with seed>"
+    hardware_noise: "<how mitigated>"
 
-success_criteria:
-  - "<criterion 1>"
-  - "<criterion 2>"
-
-failure_conditions:
-  - "<what constitutes failure>"
-
-references:
-  - "<wiki page path>"
+plan_testing:
+  metrics:
+    - name: "<metric>"
+      direction: "higher_better"  # higher_better | lower_better
+      threshold: <number | null>
+  statistical_tests:
+    - name: "<e.g., t-test>"
+      purpose: "<what it validates>"
+      report: ["effect_size", "test_statistic", "df", "p_value", "ci_95"]
+  baselines:
+    - name: "<baseline>"
+      why_chosen: "<justification>"
+      resource_parity: "<parity notes>"
+  ablation:
+    - component: "<module>"
+      replacement: "<random | constant | remove>"
+      purpose: "<what it proves>"
+  success_criteria:
+    - "<criterion 1>"
+  failure_conditions:
+    - "<what constitutes failure>"
 ```
 
 ## G2 Causal & Control Validity (mandatory design checks)

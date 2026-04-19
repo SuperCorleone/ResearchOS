@@ -9,6 +9,7 @@ from researchos.schemas.pipeline import (
 from researchos.schemas.decision import DecisionType, ProfessorDecision
 from researchos.schemas.budget import BudgetState
 from researchos.schemas.artifact import ArtifactManifest, ResultsArtifact
+from researchos.schemas.concept import AdvisorVerdict, AtomicConcept
 from researchos.schemas.cost import CostRecord, CostReport
 from researchos.schemas.evaluation import (
     EvaluationScores,
@@ -31,6 +32,8 @@ __all__ = [
     "BudgetState",
     "ArtifactManifest",
     "ResultsArtifact",
+    "AtomicConcept",
+    "AdvisorVerdict",
     "EvaluationScores",
     "FalsificationDesign",
     "GateResult",

@@ -6,6 +6,9 @@
 # If this file is missing or invalid, the scheduler falls back to hardcoded
 # defaults that match the behavior encoded here.
 #
+# The top-level `retry:` block (A14) drives retry_state-machine constants
+# read via `researchos.runtime.recovery.load_retry_config`.
+#
 # HOW TO CUSTOMIZE:
 #   - Add/remove steps in the `steps` section. Each step needs an agent,
 #     output filename, and optionally timeout, retries, and type.
@@ -17,6 +20,19 @@
 #   - The `output` field for the report step supports "{n}" as a placeholder
 #     for the milestone number (e.g., "milestone_{n}.md").
 # ============================================================================
+
+# ---------------------------------------------------------------------------
+# Retry state-machine constants (A14)
+# ---------------------------------------------------------------------------
+# These govern how the scheduler + experiment runner bound retries and
+# timeouts. `load_retry_config` in `researchos.runtime.recovery` falls
+# back to defaults if this block is missing/invalid.
+retry:
+  max_runs: 5              # pipeline-level attempts per milestone
+  max_iters: 4             # per-run retry iterations
+  exp_timeout_seconds: 7200
+  plot_timeout_seconds: 600
+  max_stderr_chars: 1500
 
 # ---------------------------------------------------------------------------
 # Step definitions

@@ -9,15 +9,23 @@ You implement experiment code based on the experiment plan.
 
 ## Input
 
+- `concepts.yaml` from the pipeline directory (**read this FIRST** — it is the
+  authoritative atomic-concept ontology produced by the concept_extractor
+  agent; every `id` in it MUST appear in your CLAIM-TO-CODE mapping, even if
+  you decide to skip the concept)
 - `experiment_plan.yaml` from the pipeline directory
 - `hypothesis.md` for context
 - Knowledge base methods (via `kb_retrieve`)
 
 ## Workflow
 
-1. Read the experiment plan from the pipeline directory
-2. Use `kb_retrieve` to find relevant code patterns and methods
-3. Implement the experiment as a self-contained script
+1. **Read `concepts.yaml` first** if it exists. Load every `AtomicConcept.id`
+   (`C1, C2, ...`) into your working set — this list drives the CLAIM-TO-CODE
+   mapping below. If `concepts.yaml` is absent (e.g., FAST_FAIL stage), fall
+   back to extracting claims from `hypothesis.md` as before.
+2. Read the experiment plan from the pipeline directory.
+3. Use `kb_retrieve` to find relevant code patterns and methods.
+4. Implement the experiment as a self-contained script.
 
 ## Output
 
@@ -33,18 +41,27 @@ The diff should produce a script that:
 ## G3 Implementation Truth (mandatory)
 
 After writing the code, append a **claim-to-code mapping table** as a comment block
-at the end of the main script:
+at the end of the main script. **Every concept id from `concepts.yaml` MUST
+appear as a row.** If you deliberately skip a concept (e.g., glue code, out of
+scope for this experiment), write the row as `C_i: SKIPPED because <reason>`.
+A missing concept id is treated as a BLOCK-severity error by preflight.
 
 ```python
 # === CLAIM-TO-CODE MAPPING ===
-# | Claim (from hypothesis.md)       | File/Function          | Mechanism              |
-# |----------------------------------|------------------------|------------------------|
-# | "adaptive selection"             | adapt_selector()       | softmax over Q-values  |
-# | "multi-agent collaboration"      | run_ensemble()         | majority vote fusion   |
+# | Concept ID | Claim / Concept definition       | File/Function          | Mechanism              |
+# |------------|----------------------------------|------------------------|------------------------|
+# | C1         | "adaptive selection"             | adapt_selector()       | softmax over Q-values  |
+# | C2         | "multi-agent collaboration"      | run_ensemble()         | majority vote fusion   |
+# | C3         | SKIPPED because pure glue code, no claim attached |     |                        |
 # === END MAPPING ===
 ```
 
-This table allows reviewers to verify that every claim has a real implementation.
+Keep the literal `# === CLAIM-TO-CODE MAPPING ===` opening marker and the
+`# === END MAPPING ===` closing marker — preflight parses them.
+
+This table allows reviewers (and the automated preflight check) to verify that
+every atomic concept has either a real implementation or an explicit, reasoned
+skip.
 
 ## G6 Reproducibility (mandatory)
 
@@ -154,7 +171,7 @@ Mark applied directives by noting them in the code comments.
 2. Results must include: metrics dict, config dict, seed, runtime_seconds
 3. Follow the experiment plan's procedure exactly
 4. Write ONLY to the specified pipeline directory
-5. Include claim-to-code mapping table (G3)
+5. Include claim-to-code mapping table (G3) — every `concepts.yaml` id must appear as a row, even if `SKIPPED`
 6. Script must be one-click reproducible (G6)
 7. Data split must happen before preprocessing (G9)
 8. Use fetch_dataset for external data; generate data_manifest.yaml for versioning (G9)

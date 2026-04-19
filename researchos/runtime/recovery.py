@@ -5,6 +5,7 @@ Provides:
 - Rollback to previous checkpoint
 - Failed pipeline recovery
 - Exponential backoff retry logic
+- YAML-driven retry-policy constants (A14)
 """
 
 from __future__ import annotations
@@ -16,11 +17,46 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from researchos.schemas.pipeline import PipelineStage, PipelineState, PipelineStep
 from researchos.runtime.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
+
+
+# ── Retry config defaults (A14) ─────────────────────────────────
+
+RETRY_DEFAULTS: dict[str, Any] = {
+    "max_runs": 5,              # pipeline-level attempts per milestone
+    "max_iters": 4,             # per-run retry iterations
+    "exp_timeout_seconds": 7200,
+    "plot_timeout_seconds": 600,
+    "max_stderr_chars": 1500,
+}
+
+
+def load_retry_config(project_root: Path) -> dict[str, Any]:
+    """Load ``runtime/workflow_config.yaml`` and return the ``retry:`` block.
+
+    Falls back to :data:`RETRY_DEFAULTS` for missing keys. Never raises —
+    on any error the defaults are returned.
+    """
+    cfg_path = project_root / "runtime" / "workflow_config.yaml"
+    merged = dict(RETRY_DEFAULTS)
+    try:
+        if cfg_path.exists():
+            raw = yaml.safe_load(cfg_path.read_text()) or {}
+            retry_block = raw.get("retry") or {}
+            if isinstance(retry_block, dict):
+                for k, v in retry_block.items():
+                    if k in merged and v is not None:
+                        merged[k] = v
+    except Exception:
+        logger.warning("Failed to load retry config from %s; using defaults", cfg_path, exc_info=True)
+    return merged
 
 
 class CheckpointManager:
@@ -86,16 +122,50 @@ class CheckpointManager:
 
 
 class RetryPolicy:
-    """Exponential backoff retry logic."""
+    """Exponential backoff retry logic driven by ``retry:`` YAML config.
+
+    Values are loaded via :func:`load_retry_config` (or passed in). The
+    pipeline-level budget is expressed as ``max_runs`` (attempts per
+    milestone) while the per-run internal iteration budget is
+    ``max_iters``. Timeouts and stderr caps feed the experiment runner.
+
+    Backward-compat: legacy callers that pass ``max_retries`` still work.
+    """
 
     def __init__(
         self,
-        max_retries: int = 3,
+        *,
+        project_root: Path | None = None,
+        config: dict[str, Any] | None = None,
+        # Legacy args (still honoured when explicitly set):
+        max_retries: int | None = None,
         base_delay: float = 5.0,
         max_delay: float = 300.0,
         backoff_factor: float = 2.0,
     ) -> None:
-        self.max_retries = max_retries
+        # Prefer explicit config; else load from project root; else defaults.
+        if config is None:
+            if project_root is not None:
+                config = load_retry_config(project_root)
+            else:
+                config = dict(RETRY_DEFAULTS)
+
+        self.max_runs: int = int(config.get("max_runs", RETRY_DEFAULTS["max_runs"]))
+        self.max_iters: int = int(config.get("max_iters", RETRY_DEFAULTS["max_iters"]))
+        self.exp_timeout_seconds: int = int(
+            config.get("exp_timeout_seconds", RETRY_DEFAULTS["exp_timeout_seconds"])
+        )
+        self.plot_timeout_seconds: int = int(
+            config.get("plot_timeout_seconds", RETRY_DEFAULTS["plot_timeout_seconds"])
+        )
+        self.max_stderr_chars: int = int(
+            config.get("max_stderr_chars", RETRY_DEFAULTS["max_stderr_chars"])
+        )
+
+        # Legacy fields: default to max_iters unless caller overrode.
+        self.max_retries: int = int(
+            max_retries if max_retries is not None else self.max_iters
+        )
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.backoff_factor = backoff_factor

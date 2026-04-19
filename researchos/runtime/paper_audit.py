@@ -13,12 +13,18 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# A19 retry counter: how many self-correction passes the writer/auditor may make
+# on LaTeX or citation issues before blocking.
+num_error_corrections = 5
 
 # Patterns for extracting numbers from markdown
 _NUMBER_RE = re.compile(
@@ -357,6 +363,162 @@ def audit_figures(
     }
 
 
+# ---------------------------------------------------------------------------
+# A6: citation integrity
+# ---------------------------------------------------------------------------
+
+_CITE_RE = re.compile(r"\\cite[a-zA-Z]*\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}")
+_BIB_ENTRY_RE = re.compile(r"@[a-zA-Z]+\s*\{\s*([^,\s]+)\s*,", re.MULTILINE)
+_BIB_TITLE_RE = re.compile(
+    r"title\s*=\s*[\{\"]+\s*([^\}\"]+?)\s*[\}\"]+", re.IGNORECASE
+)
+
+
+def _extract_cite_keys(text: str) -> list[str]:
+    """Return every raw key referenced by a \\cite{...} command (dedup, order-preserving)."""
+    seen: set[str] = set()
+    keys: list[str] = []
+    for match in _CITE_RE.finditer(text):
+        for raw in match.group(1).split(","):
+            key = raw.strip()
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
+def _parse_bib_entries(bib_text: str) -> dict[str, str]:
+    """Return {citekey: title_lower} for every entry in a .bib file."""
+    entries: dict[str, str] = {}
+    # Split on "@" records; be permissive.
+    chunks = re.split(r"\n@", "\n" + bib_text)
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+        # Re-attach leading @ lost by the split.
+        record = "@" + chunk if not chunk.startswith("@") else chunk
+        key_match = _BIB_ENTRY_RE.search(record)
+        if not key_match:
+            continue
+        key = key_match.group(1).strip()
+        title_match = _BIB_TITLE_RE.search(record)
+        title = title_match.group(1).strip().lower() if title_match else ""
+        entries[key] = title
+    return entries
+
+
+def _evidence_title_tokens(evidence_refs: list[str]) -> list[set[str]]:
+    """Build a list of token sets from evidence_refs stems for fuzzy title matching."""
+    token_sets: list[set[str]] = []
+    for ref in evidence_refs or []:
+        stem = Path(str(ref)).stem.lower()
+        tokens = {t for t in re.split(r"[^a-z0-9]+", stem) if len(t) >= 3}
+        if tokens:
+            token_sets.append(tokens)
+    return token_sets
+
+
+def _title_matches_evidence(title: str, token_sets: list[set[str]]) -> bool:
+    """Best-effort: a bib title matches evidence if it shares >=2 tokens with some stem."""
+    if not title or not token_sets:
+        return False
+    title_tokens = {t for t in re.split(r"[^a-z0-9]+", title) if len(t) >= 3}
+    for stem_tokens in token_sets:
+        overlap = title_tokens & stem_tokens
+        if len(overlap) >= 2:
+            return True
+    return False
+
+
+def check_bib_existence(
+    draft_path: Path,
+    bib_path: Path,
+    evidence_refs: list[str],
+) -> dict:
+    """A6: verify every \\cite{key} in draft is defined in references.bib and,
+    best-effort, matches a title from ``evidence_refs``.
+
+    Returns::
+        {
+            "total": N,              # unique cite keys in draft
+            "resolved": M,           # present in bib AND (title match OR no evidence list)
+            "hallucinated": [key..], # keys missing from bib
+            "unevidenced": [key..],  # in bib but no evidence match (softer warning)
+            "passed": bool,
+        }
+    """
+    if not draft_path.exists():
+        return {
+            "total": 0,
+            "resolved": 0,
+            "hallucinated": [],
+            "unevidenced": [],
+            "passed": False,
+            "note": "Draft not found",
+        }
+
+    draft_text = draft_path.read_text(errors="ignore")
+    cite_keys = _extract_cite_keys(draft_text)
+
+    bib_entries: dict[str, str] = {}
+    if bib_path and bib_path.exists():
+        try:
+            bib_entries = _parse_bib_entries(bib_path.read_text(errors="ignore"))
+        except OSError:
+            bib_entries = {}
+
+    token_sets = _evidence_title_tokens(evidence_refs or [])
+
+    hallucinated: list[str] = []
+    unevidenced: list[str] = []
+    resolved = 0
+    for key in cite_keys:
+        if key not in bib_entries:
+            hallucinated.append(key)
+            continue
+        # Bib has the entry. If we have an evidence list, require a title match.
+        if token_sets:
+            if _title_matches_evidence(bib_entries[key], token_sets):
+                resolved += 1
+            else:
+                unevidenced.append(key)
+        else:
+            resolved += 1
+
+    return {
+        "total": len(cite_keys),
+        "resolved": resolved,
+        "hallucinated": hallucinated,
+        "unevidenced": unevidenced,
+        "passed": not hallucinated and resolved == len(cite_keys),
+    }
+
+
+# ---------------------------------------------------------------------------
+# A19: chktex LaTeX lint
+# ---------------------------------------------------------------------------
+
+
+def run_chktex(tex_path: Path) -> str:
+    """Run ``chktex`` on a .tex file; return its stdout. Empty string on failure."""
+    if not tex_path or not Path(tex_path).exists():
+        return ""
+    if shutil.which("chktex") is None:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["chktex", str(tex_path), "-q", "-n2", "-n24", "-n13", "-n1"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        return (proc.stdout or "") + (proc.stderr or "")
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("chktex failed: %s", exc)
+        return ""
+
+
 def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
     """Run full G4+G5+figure audit and return markdown report."""
     paper_dir = project_root / "paper" / pipeline_id
@@ -364,20 +526,43 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
 
     draft_path = paper_dir / "draft_v1.md"
     results_path = pdir / "results.json"
+    bib_path = paper_dir / "references.bib"
+    tex_path = paper_dir / "draft_v1.tex"
 
     g4 = audit_g4_numerical_consistency(draft_path, results_path)
     g5 = audit_g5_statistical_completeness(draft_path)
+
+    # A6: collect evidence_refs from experiment_plan.yaml (best effort).
+    evidence_refs: list[str] = []
+    plan_path = pdir / "experiment_plan.yaml"
+    if plan_path.exists():
+        try:
+            plan = yaml.safe_load(plan_path.read_text()) or {}
+            refs = plan.get("evidence_refs") or plan.get("references") or []
+            if isinstance(refs, list):
+                evidence_refs = [str(r) for r in refs]
+        except Exception:
+            pass
+    # Also include any file stems under knowledge/raw as evidence.
+    raw_dir = project_root / "knowledge" / "raw"
+    if raw_dir.exists():
+        for p in raw_dir.rglob("*"):
+            if p.is_file() and p.suffix.lower() in {".pdf", ".md", ".txt", ".bib"}:
+                evidence_refs.append(p.name)
+
+    bib_check = check_bib_existence(draft_path, bib_path, evidence_refs)
+    chktex_output = run_chktex(tex_path) if tex_path.exists() else ""
 
     # VLM figure audit
     draft_text = draft_path.read_text() if draft_path.exists() else ""
     fig_audit = audit_figures(pipeline_id, project_root, draft_text=draft_text)
 
-    # Overall verdict
-    verdicts = [g4["passed"], g5["passed"], fig_audit["passed"]]
-    pass_count = sum(verdicts)
-    if pass_count == 3:
+    # Overall verdict — now includes citation integrity.
+    verdicts = [g4["passed"], g5["passed"], fig_audit["passed"], bib_check["passed"]]
+    pass_count = sum(1 for v in verdicts if v)
+    if pass_count == len(verdicts):
         overall = "PASS"
-    elif pass_count >= 2:
+    elif pass_count >= len(verdicts) - 1:
         overall = "CONDITIONAL_PASS"
     else:
         overall = "FAIL"
@@ -387,6 +572,7 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
         f"# Automated Paper Audit Report\n",
         f"**Pipeline**: {pipeline_id}\n",
         f"**Overall**: {overall}\n",
+        f"**num_error_corrections (retry budget)**: {num_error_corrections}\n",
         f"\n## G4: Numerical Consistency\n",
         f"**Verdict**: {'PASS' if g4['passed'] else 'FAIL'}\n",
         f"**Numbers found**: {g4['total_numbers']}, "
@@ -443,5 +629,43 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
                 lines.append("\n")
     elif fig_audit.get("note"):
         lines.append(f"\n## Figure Quality Audit (VLM)\n{fig_audit['note']}\n")
+
+    # --- A6: Citation integrity --------------------------------------------
+    lines.extend([
+        "\n## Citation integrity\n",
+        f"**Verdict**: {'PASS' if bib_check['passed'] else 'FAIL'}\n",
+        f"**Total cite keys**: {bib_check['total']}, "
+        f"**Resolved**: {bib_check['resolved']}, "
+        f"**Hallucinated**: {len(bib_check['hallucinated'])}, "
+        f"**Unevidenced**: {len(bib_check.get('unevidenced', []))}\n",
+    ])
+    if bib_check["hallucinated"]:
+        lines.append(
+            "\n**Hallucinated keys (absent from references.bib)**: "
+            + ", ".join(f"`{k}`" for k in bib_check["hallucinated"])
+            + "\n"
+        )
+    if bib_check.get("unevidenced"):
+        lines.append(
+            "\n**Unevidenced keys (in bib but no evidence_refs match)**: "
+            + ", ".join(f"`{k}`" for k in bib_check["unevidenced"])
+            + "\n"
+        )
+    if bib_check.get("note"):
+        lines.append(f"\n_Note_: {bib_check['note']}\n")
+
+    # --- A19: LaTeX lint ---------------------------------------------------
+    lines.append("\n## LaTeX lint\n")
+    if not tex_path.exists():
+        lines.append("_No .tex file found; lint skipped._\n")
+    elif shutil.which("chktex") is None:
+        lines.append("_`chktex` binary not available; lint skipped._\n")
+    elif not chktex_output.strip():
+        lines.append("No chktex warnings reported.\n")
+    else:
+        trimmed = chktex_output.strip()
+        if len(trimmed) > 4000:
+            trimmed = trimmed[:4000] + "\n...[truncated]..."
+        lines.append("```\n" + trimmed + "\n```\n")
 
     return "".join(lines)

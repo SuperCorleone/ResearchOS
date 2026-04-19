@@ -68,6 +68,122 @@ def _check_data_consistency(plan: dict, issues: list[dict]) -> bool:
     return True  # No reference papers, no consistency needed
 
 
+# ── Four-slot plan schema enforcement ──────────────────────────────
+#
+# exp_designer.md requires experiment_plan.yaml to contain four top-level
+# slots: plan_dataset, plan_model, plan_training, plan_testing. Each slot has
+# a known set of required sub-keys described in the README. This rule
+# enforces their presence so preflight can block pipelines with incomplete
+# plans before any code is written.
+
+_FOUR_SLOT_SCHEMA: dict[str, list[str]] = {
+    "plan_dataset": [
+        "dataset_description",
+        "dataset_location",
+        "task_definition",
+        "read_data_step",
+        "data_preprocessing_step",
+        "data_dataloader_step",
+    ],
+    "plan_model": [
+        "model_input",
+        "model_output",
+        "key_components",
+    ],
+    "plan_training": [
+        "training_pipeline",
+        "loss_function",
+        "optimizer",
+        "training_configurations",
+        "monitor_and_logging",
+    ],
+    "plan_testing": [
+        "test_metric",
+        "test_data",
+        "test_code",
+    ],
+}
+
+
+def check_four_slot_plan(plan: dict) -> list[dict]:
+    """Validate the 4-slot experiment plan schema.
+
+    Returns a list of issue dicts with keys ``severity``, ``check``, ``detail``.
+
+    - Missing top-level slot → ERROR (mandatory per exp_designer.md).
+    - Missing sub-key within a present slot → WARN.
+    - For ``plan_model.key_components`` the value must be a non-empty list;
+      otherwise a WARN is emitted.
+    """
+    issues: list[dict] = []
+    if not isinstance(plan, dict):
+        # A malformed plan (None, list, etc.) means all slots are missing.
+        for slot in _FOUR_SLOT_SCHEMA:
+            issues.append({
+                "severity": "ERROR",
+                "check": f"four_slot_plan_{slot}",
+                "detail": f"experiment plan is not a mapping — '{slot}' is missing",
+            })
+        return issues
+
+    # Back-compat: only enforce the 4-slot schema when the plan looks like
+    # a 4-slot plan.  A plan is considered 4-slot format when AT LEAST ONE
+    # of the four slots is present, OR when an explicit marker
+    # (``schema_version: "four_slot"``) is set.  Legacy plans with none of
+    # these markers skip the check silently (A15 is opt-in via exp_designer
+    # prompt producing the new format).
+    has_any_slot = any(s in plan for s in _FOUR_SLOT_SCHEMA)
+    is_declared = plan.get("schema_version") == "four_slot"
+    if not (has_any_slot or is_declared):
+        return issues
+
+    for slot, sub_keys in _FOUR_SLOT_SCHEMA.items():
+        slot_val = plan.get(slot)
+        if slot_val is None:
+            issues.append({
+                "severity": "ERROR",
+                "check": f"four_slot_plan_{slot}",
+                "detail": (
+                    f"Required slot '{slot}' is missing from experiment_plan.yaml "
+                    f"(4-slot schema enforced by exp_designer.md)."
+                ),
+            })
+            continue
+
+        if not isinstance(slot_val, dict):
+            issues.append({
+                "severity": "WARN",
+                "check": f"four_slot_plan_{slot}",
+                "detail": (
+                    f"Slot '{slot}' is present but is not a mapping "
+                    f"(got {type(slot_val).__name__}); sub-keys cannot be validated."
+                ),
+            })
+            continue
+
+        for sub in sub_keys:
+            if sub not in slot_val or slot_val.get(sub) in (None, "", [], {}):
+                issues.append({
+                    "severity": "WARN",
+                    "check": f"four_slot_plan_{slot}",
+                    "detail": f"Slot '{slot}' is missing required sub-key '{sub}'.",
+                })
+                continue
+            # key_components must be a list per schema
+            if slot == "plan_model" and sub == "key_components":
+                if not isinstance(slot_val.get(sub), list):
+                    issues.append({
+                        "severity": "WARN",
+                        "check": f"four_slot_plan_{slot}",
+                        "detail": (
+                            "Slot 'plan_model.key_components' must be a list "
+                            f"(got {type(slot_val.get(sub)).__name__})."
+                        ),
+                    })
+
+    return issues
+
+
 def _check_baseline_faithfulness(plan: dict, issues: list[dict]) -> bool:
     """Check that baseline methodology matches reference paper when specified."""
     ref_methodology = plan.get("reference_methodology", {})
@@ -256,6 +372,14 @@ def validate_design(pipeline_dir: Path) -> dict:
     checks["data_consistency"] = _check_data_consistency(plan, issues)
 
     checks["baseline_faithfulness"] = _check_baseline_faithfulness(plan, issues)
+
+    # 10b. Four-slot plan schema (plan_dataset / plan_model / plan_training / plan_testing)
+    four_slot_issues = check_four_slot_plan(plan)
+    issues.extend(four_slot_issues)
+    # Record a single composite check result: False if any ERROR was emitted.
+    checks["four_slot_plan"] = not any(
+        i["severity"] == "ERROR" for i in four_slot_issues
+    )
 
     # 11. Metrics defined
     metrics = plan.get("evaluation", {}).get("metrics", [])

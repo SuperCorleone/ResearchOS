@@ -366,7 +366,13 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
 
 def cmd_fix(args: argparse.Namespace) -> None:
-    """Auto-fix pipeline based on professor review report, then resume."""
+    """Auto-fix pipeline based on professor review report, then resume.
+
+    R1: Optionally accepts ``--user-feedback <path>``. When set, the
+    feedback markdown is loaded and prepended to the fixer prompt as an
+    authoritative "USER FEEDBACK" section. This unifies ``fix`` and
+    ``continue``; both paths work.
+    """
     pipeline_id = args.pipeline
 
     # Verify pipeline exists and is BLOCKED
@@ -379,38 +385,101 @@ def cmd_fix(args: argparse.Namespace) -> None:
         print(f"  ERROR: Pipeline is '{pipeline.stage.value}', not BLOCKED. Fix only works on paused pipelines.")
         return
 
+    # R1: Load optional user feedback file.
+    user_feedback_path = getattr(args, "user_feedback", None)
+    user_feedback_clean = ""
+    if user_feedback_path:
+        fb_path = Path(user_feedback_path)
+        if not fb_path.is_absolute():
+            fb_path = PROJECT_ROOT / fb_path
+        if not fb_path.exists():
+            print(f"  ERROR: --user-feedback path not found: {fb_path}")
+            return
+        body = fb_path.read_text()
+        if _feedback_is_untouched(body):
+            print(f"  ERROR: {fb_path} still holds the placeholder template.")
+            print(f"         Edit it with your directives before invoking fix.")
+            return
+        feedback_lines = [
+            ln for ln in body.splitlines()
+            if not (ln.strip().startswith("<!--") and ln.strip().endswith("-->"))
+        ]
+        user_feedback_clean = "\n".join(feedback_lines).strip()
+        print(f"  Loaded user feedback: {fb_path} ({len(user_feedback_clean)} chars)")
+
     # Find professor review report
     review_path = PROJECT_ROOT / "decisions" / f"review_{pipeline_id}_recommendation.md"
-    if not review_path.exists():
+    if not review_path.exists() and not user_feedback_clean:
         print(f"  ERROR: No review report found at {review_path}")
+        print(f"         (pass --user-feedback <path> to drive fix from user directives alone)")
         return
 
-    review_content = review_path.read_text()
-    print(f"  Found review report: {review_path.name} ({len(review_content)} chars)")
+    if review_path.exists():
+        review_content = review_path.read_text()
+        print(f"  Found review report: {review_path.name} ({len(review_content)} chars)")
 
     # List pipeline artifacts
     pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
     artifacts = [f.name for f in pdir.iterdir() if f.is_file()] if pdir.exists() else []
 
-    # Build fixer prompt
-    prompt = (
-        f"You are the Fixer agent for pipeline: {pipeline_id}\n\n"
+    # Build fixer prompt. If user feedback supplied, prepend it as
+    # authoritative (mirrors cmd_continue behaviour).
+    header_lines = [f"You are the Fixer agent for pipeline: {pipeline_id}\n"]
+    header_lines.append(
         f"## Pipeline Info\n"
         f"- Title: {pipeline.title}\n"
-        f"- Research Question: {pipeline.research_question}\n\n"
-        f"## Professor Review Report\n"
-        f"Read the full report using file_read:\n"
-        f"  path: decisions/review_{pipeline_id}_recommendation.md\n\n"
-        f"## Available Artifacts (use file_read with relative names)\n"
-        + "\n".join(f"- {a}" for a in artifacts) + "\n\n"
-        f"## Instructions\n"
-        f"1. Read the professor's review report to extract ALL required corrections\n"
-        f"2. Read the current experiment code\n"
-        f"3. Fix all issues identified in the report\n"
-        f"4. Re-run the corrected experiment using execute_python\n"
-        f"5. Write updated results.json with the new results\n"
-        f"6. Write correction_report.md documenting all changes\n"
+        f"- Research Question: {pipeline.research_question}\n"
     )
+    if user_feedback_clean:
+        header_lines.append(
+            "## USER FEEDBACK (authoritative)\n"
+            "The user wrote these directives. They take absolute priority "
+            "over the Professor review. Implement what the user asks, "
+            "even when it contradicts the Professor.\n\n"
+            f"```markdown\n{user_feedback_clean}\n```\n"
+        )
+        # Persist directive record so downstream cycles respect it too.
+        directives_path = pdir / "user_directives.yaml"
+        existing: list = []
+        if directives_path.exists():
+            existing = yaml.safe_load(directives_path.read_text()) or []
+            if not isinstance(existing, list):
+                existing = [existing]
+        existing.append({
+            "directive": user_feedback_clean,
+            "source": "fix_user_feedback",
+            "priority": "override",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "applied": False,
+        })
+        directives_path.write_text(
+            yaml.dump(existing, default_flow_style=False, allow_unicode=True)
+        )
+
+    if review_path.exists():
+        header_lines.append(
+            f"## Professor Review Report\n"
+            f"Read the full report using file_read:\n"
+            f"  path: decisions/review_{pipeline_id}_recommendation.md\n"
+        )
+
+    header_lines.append(
+        "## Available Artifacts (use file_read with relative names)\n"
+        + "\n".join(f"- {a}" for a in artifacts) + "\n"
+    )
+    header_lines.append(
+        "## Instructions\n"
+        "1. If USER FEEDBACK is present above, enumerate every directive "
+        "and treat it as authoritative. Otherwise, extract required "
+        "corrections from the Professor review.\n"
+        "2. Read the current experiment code\n"
+        "3. Fix all identified issues\n"
+        "4. Re-run the corrected experiment using execute_python\n"
+        "5. Write updated results.json with the new results\n"
+        "6. Write correction_report.md documenting: each directive/issue "
+        "verbatim, what changed, before/after numbers, anything unsatisfied.\n"
+    )
+    prompt = "\n".join(header_lines)
 
     print(f"  Dispatching fixer agent...")
 
@@ -454,6 +523,200 @@ def cmd_fix(args: argparse.Namespace) -> None:
             print(f"\n  Fixes applied. Review correction_report.md, then approve manually.")
     else:
         print(f"  ERROR: Fixer failed: {result.get('output', '')[:300]}")
+
+
+# ── continue (inject-mode user_approve unblock) ────────────────
+
+
+_FEEDBACK_TEMPLATE_MARKERS = (
+    "<!-- user_approve/feedback.md — edit this file",
+    "## What to change\n\n- \n\n## What to keep",
+)
+
+
+def _feedback_is_untouched(body: str) -> bool:
+    """Return True when feedback.md still looks like the scaffold template."""
+    stripped = body.strip()
+    if not stripped:
+        return True
+    has_marker = any(m in body for m in _FEEDBACK_TEMPLATE_MARKERS)
+    non_comment_lines = [
+        ln.strip() for ln in body.splitlines()
+        if ln.strip() and not ln.strip().startswith("<!--")
+        and not ln.strip().startswith("#")
+        and ln.strip() != "-"
+    ]
+    return has_marker and not non_comment_lines
+
+
+def cmd_continue(args: argparse.Namespace) -> None:
+    """Resume an inject-mode pipeline blocked on user_approve/feedback.md.
+
+    Reads feedback.md, appends it as a high-priority user directive, dispatches
+    the fixer agent with both the Professor suggestion and the user feedback,
+    then writes an ``approve`` decision so the pipeline advances to MAIN.
+
+    NOTE (R1): ``continue`` is now equivalent to
+    ``fix --user-feedback <pipeline>/user_approve/feedback.md``; both
+    paths work. This entry point is preserved for back-compat and for the
+    inject-mode auto-approve flow (which ``fix`` does not perform).
+    """
+    print(
+        "  [hint] `continue` is now equivalent to "
+        "`fix --user-feedback <pipeline>/user_approve/feedback.md`; "
+        "both paths work."
+    )
+    pipeline_id = args.pipeline
+    sm = StateManager(PROJECT_ROOT)
+    pipeline = sm.load_pipeline(pipeline_id)
+    if pipeline is None:
+        print(f"  ERROR: Pipeline '{pipeline_id}' not found.")
+        return
+
+    pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
+    ua_dir = pdir / "user_approve"
+    feedback_path = ua_dir / "feedback.md"
+    if not ua_dir.exists() or not feedback_path.exists():
+        print(f"  ERROR: No user_approve folder at {ua_dir}.")
+        print(f"         continue only applies to inject-mode pipelines "
+              f"blocked after FAST_FAIL.")
+        return
+
+    if not pipeline.metadata.get("user_approve_pending"):
+        print(f"  WARNING: user_approve_pending flag is not set on pipeline "
+              f"'{pipeline_id}'. Proceeding anyway.")
+
+    body = feedback_path.read_text()
+    if _feedback_is_untouched(body):
+        print(f"  ERROR: {feedback_path} still has the placeholder template.")
+        print(f"         Please edit it with your modification opinions first.")
+        return
+
+    # Strip HTML comments before forwarding
+    feedback_clean_lines = [
+        ln for ln in body.splitlines()
+        if not (ln.strip().startswith("<!--") and ln.strip().endswith("-->"))
+    ]
+    feedback_clean = "\n".join(feedback_clean_lines).strip()
+
+    # Persist feedback as a user directive so downstream exp_designer / coder
+    # cycles (post-fix) also respect it.
+    directives_path = pdir / "user_directives.yaml"
+    existing = []
+    if directives_path.exists():
+        existing = yaml.safe_load(directives_path.read_text()) or []
+        if not isinstance(existing, list):
+            existing = [existing]
+    existing.append({
+        "directive": feedback_clean,
+        "source": "user_approve_feedback",
+        "priority": "override",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "applied": False,
+    })
+    directives_path.write_text(
+        yaml.dump(existing, default_flow_style=False, allow_unicode=True)
+    )
+
+    # Build fixer prompt. User feedback is marked authoritative; professor
+    # suggestion is advisory only.
+    prof_suggestion = ""
+    prof_path = ua_dir / "professor_suggestion.md"
+    if prof_path.exists():
+        prof_suggestion = prof_path.read_text()[:4000]
+
+    fast_fail_snippet = ""
+    ff_path = ua_dir / "fast_fail_report.md"
+    if ff_path.exists():
+        fast_fail_snippet = ff_path.read_text()[:4000]
+
+    artifacts = sorted(
+        f.name for f in pdir.iterdir()
+        if f.is_file() and f.name != "state.json"
+    )
+
+    papers_dir = ua_dir / "papers"
+    paper_refs = "\n".join(
+        f"- user_approve/papers/{p.name}"
+        for p in papers_dir.glob("*") if p.is_file()
+    ) if papers_dir.exists() else ""
+
+    prompt = (
+        f"You are the Fixer agent for pipeline: {pipeline_id}\n\n"
+        f"## Pipeline Info\n"
+        f"- Title: {pipeline.title}\n"
+        f"- Research Question: {pipeline.research_question}\n\n"
+        f"## AUTHORITATIVE: User Feedback (follow exactly)\n"
+        f"The user reviewed the FAST_FAIL results and wrote these directives. "
+        f"They take absolute priority over the Professor's suggestion. "
+        f"Implement what the user asks, even when it contradicts the "
+        f"Professor.\n\n"
+        f"```markdown\n{feedback_clean}\n```\n\n"
+        f"## Advisory: Professor Suggestion\n"
+        f"```markdown\n{prof_suggestion or '(none)'}\n```\n\n"
+        f"## Context: FAST_FAIL Report excerpt\n"
+        f"```markdown\n{fast_fail_snippet or '(none)'}\n```\n\n"
+        f"## Available Pipeline Artifacts (use file_read with relative names)\n"
+        + "\n".join(f"- {a}" for a in artifacts) + "\n\n"
+        f"## Reference Papers\n"
+        + (paper_refs or "(none staged)") + "\n\n"
+        f"## Instructions\n"
+        f"1. Read the USER FEEDBACK section above carefully. Enumerate every "
+        f"   directive the user wrote.\n"
+        f"2. For each directive, locate the relevant pipeline artifact "
+        f"   (experiment_plan.yaml, code, results.json, analysis_report.md) "
+        f"   and plan the concrete edit.\n"
+        f"3. Apply the fixes via file_write.\n"
+        f"4. Re-run the corrected experiment via execute_python. Do NOT "
+        f"   fabricate results.\n"
+        f"5. Write updated results.json.\n"
+        f"6. Write correction_report.md with: the user directive verbatim, "
+        f"   what changed, before/after numbers, and any directive you could "
+        f"   not satisfy (with reason).\n"
+    )
+
+    print(f"  Pipeline {pipeline_id}: dispatching fixer with user feedback "
+          f"({len(feedback_clean)} chars)…")
+
+    from researchos.runtime.dispatcher import Dispatcher
+    dispatcher = Dispatcher(PROJECT_ROOT, backend="auto")
+    result = asyncio.run(
+        dispatcher.dispatch_via_executor("fixer", prompt, pipeline_id)
+    )
+
+    if not result.get("success"):
+        print(f"  ERROR: Fixer failed: {result.get('output', '')[:400]}")
+        print(f"         User directives saved; rerun continue after "
+              f"inspecting correction_report.md.")
+        return
+
+    print(f"  Fixer completed. Artifacts: {result.get('artifacts_written', [])}")
+    correction = pdir / "correction_report.md"
+    if correction.exists():
+        head = "\n".join(correction.read_text().splitlines()[:20])
+        print(f"\n  correction_report.md (first 20 lines):\n{head}\n")
+
+    # Clear blocking metadata, write approve decision — scheduler moves the
+    # pipeline into MAIN on the next tick.
+    pipeline.metadata["user_approve_pending"] = False
+    pipeline.metadata["user_approve_completed_at"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
+    sm.save_pipeline(pipeline)
+
+    ts = datetime.now(timezone.utc)
+    decision = {
+        "pipeline_id": pipeline_id,
+        "decision": "approve",
+        "comment": "User feedback applied via /research continue; "
+                   "fixer corrections complete.",
+        "created_at": ts.isoformat(),
+    }
+    fname = f"approval_{pipeline_id}_{ts.strftime('%Y%m%d%H%M%S')}.yaml"
+    (DECISIONS_DIR / fname).write_text(
+        yaml.dump(decision, default_flow_style=False)
+    )
+    print(f"\n  Pipeline '{pipeline_id}' approved → MAIN on next scheduler tick.")
 
 
 # ── inject ─────────────────────────────────────────────────────
@@ -1104,6 +1367,15 @@ def main() -> None:
     p_fix = subparsers.add_parser("fix", help="Auto-fix pipeline based on professor review report")
     p_fix.add_argument("--pipeline", required=True, help="Pipeline ID to fix")
     p_fix.add_argument("--no-resume", action="store_true", help="Don't auto-approve after fix")
+    p_fix.add_argument(
+        "--user-feedback", metavar="PATH",
+        help=(
+            "Path to a feedback markdown (e.g. "
+            "artifacts/pipeline_<id>/user_approve/feedback.md). When set, "
+            "the feedback is prepended to the fixer prompt as authoritative "
+            "— unifies fix with continue."
+        ),
+    )
 
     # inject
     p_inject = subparsers.add_parser("inject", help="Inject papers (+ optional proposal) into the system")
@@ -1133,6 +1405,13 @@ def main() -> None:
     p_review.add_argument("--approve", action="store_true", help="Approve → enter MAIN stage")
     p_review.add_argument("--tweak", metavar="DIRECTIVE", help="Tweak → re-run DESIGN with directive")
     p_review.add_argument("--kill", nargs="?", const=True, help="Kill pipeline (optional reason)")
+
+    # continue (inject-mode user_approve)
+    p_continue = subparsers.add_parser(
+        "continue",
+        help="Resume inject-mode pipeline after editing user_approve/feedback.md",
+    )
+    p_continue.add_argument("--pipeline", required=True, help="Pipeline ID")
 
     # query
     p_query = subparsers.add_parser("query", help="Ask a question about a pipeline")
@@ -1205,6 +1484,7 @@ def main() -> None:
         "trial": cmd_trial,
         "candidates": cmd_candidates,
         "review": cmd_review,
+        "continue": cmd_continue,
         "query": cmd_query,
         "tweak": cmd_tweak,
         "explore": cmd_explore,

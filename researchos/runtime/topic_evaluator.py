@@ -430,6 +430,128 @@ def _parse_llm_analysis(raw_output: str) -> dict:
     return {}
 
 
+# ── 5-axis quick gate (A8, DeepScientist-style pre-filter) ──────
+
+
+_FIVE_AXIS_KEYS = (
+    "novelty",
+    "falsifiability",
+    "feasibility",
+    "evidence_quality",
+    "constraint_fit",
+)
+
+
+def _five_axis_prompt(candidate: dict) -> str:
+    title = candidate.get("title", "")
+    question = candidate.get("research_question", "")
+    hypothesis = candidate.get("hypothesis", "")
+    motivation = candidate.get("motivation", "")
+    constraints = candidate.get("constraints", "")
+    return (
+        "You are a fast research-proposal triage reviewer using the "
+        "DeepScientist 5-axis rubric. Score each axis as 0, 1, or 2 "
+        "(0=fails, 1=weak, 2=strong). Axes:\n"
+        "- novelty: different from known work\n"
+        "- falsifiability: a concrete failure condition exists\n"
+        "- feasibility: can be executed with available resources\n"
+        "- evidence_quality: supported by evidence / prior signal\n"
+        "- constraint_fit: fits stated constraints (budget, stage)\n\n"
+        f"## Proposal\nTitle: {title}\nQuestion: {question}\n"
+        f"Hypothesis: {hypothesis}\nMotivation: {motivation}\n"
+        f"Constraints: {constraints}\n\n"
+        "Output ONLY a compact JSON object like:\n"
+        "{\"novelty\":2,\"falsifiability\":2,\"feasibility\":1,"
+        "\"evidence_quality\":1,\"constraint_fit\":2}\n"
+    )
+
+
+def _parse_five_axis_scores(raw: str) -> dict[str, int] | None:
+    """Extract {axis:int} from LLM text output."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*?\}", text)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group())
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    out: dict[str, int] = {}
+    for k in _FIVE_AXIS_KEYS:
+        try:
+            v = int(data.get(k, 0))
+        except (TypeError, ValueError):
+            v = 0
+        out[k] = max(0, min(2, v))
+    return out
+
+
+def five_axis_quick_gate(
+    candidate: dict, dispatcher: Any | None = None
+) -> tuple[int, str]:
+    """DeepScientist-style 5-axis quick triage gate.
+
+    Returns ``(total_score_out_of_10, verdict)`` where verdict is one of
+    ``{"reject", "review", "pass"}``.
+
+    Threshold: strictly less than 7/10 → ``"reject"`` (do NOT promote).
+    Scores in ``[7, 8]`` → ``"review"``. Scores ``>= 9`` → ``"pass"``.
+
+    When ``dispatcher`` is provided, the rubric is scored via LLM. Otherwise
+    a deterministic placeholder returns ``(5, "review")`` so callers can run
+    in test/offline mode without an LLM.
+
+    Source: DeepScientist OSS selection-gate.md.
+    """
+    if dispatcher is None:
+        return 5, "review"
+
+    import asyncio
+
+    async def _run() -> dict[str, int] | None:
+        try:
+            result = await dispatcher.dispatch_via_executor(
+                "professor", _five_axis_prompt(candidate), "_system_quick_gate"
+            )
+            if result.get("success"):
+                return _parse_five_axis_scores(result.get("output", ""))
+        except Exception:
+            logger.exception("5-axis quick gate LLM dispatch failed")
+        return None
+
+    try:
+        scores = asyncio.run(_run())
+    except RuntimeError:
+        # Already inside an event loop – fall back to deterministic mode
+        logger.debug(
+            "five_axis_quick_gate called inside running event loop; "
+            "returning placeholder."
+        )
+        return 5, "review"
+
+    if not scores:
+        return 5, "review"
+    total = sum(scores.values())
+    if total < 7:
+        verdict = "reject"
+    elif total >= 9:
+        verdict = "pass"
+    else:
+        verdict = "review"
+    return total, verdict
+
+
 # ── Step 7: Gating rules ────────────────────────────────────────
 
 
@@ -521,6 +643,43 @@ class TopicEvaluator:
         proposal_id = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:30]
 
         logger.info("Evaluating proposal: %s", title)
+
+        # Early 5-axis quick gate (pre-filter; A8)
+        quick_total, quick_verdict = five_axis_quick_gate(
+            proposal_data, dispatcher=self.dispatcher
+        )
+        logger.info(
+            "5-axis quick gate: total=%d/10 verdict=%s", quick_total, quick_verdict
+        )
+        if quick_verdict == "reject":
+            evaluation = TopicEvaluation(
+                proposal_id=proposal_id,
+                title=title,
+                research_question=question,
+                direction=direction,
+                kb_duplicates=[],
+                kb_related=[],
+                similar_papers=[],
+                retrieval_cache_key="",
+                repeat_degree=RepeatDegree.LOW,
+                scores=EvaluationScores(
+                    significance=0, novelty=0, differentiation=0,
+                    feasibility=0, falsifiability=0,
+                ),
+                innovation=InnovationStatement(),
+                falsification=FalsificationDesign(),
+                gate_result=GateResult.REJECT,
+                gate_reasons=[
+                    f"5-axis quick gate total={quick_total}/10 < 7 "
+                    "(reject short-circuit)"
+                ],
+                evaluated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._write_evaluation(evaluation)
+            logger.info(
+                "Quick-gate reject: %s (total=%d)", title, quick_total
+            )
+            return evaluation
 
         # Step 1: Local KB search
         kb_duplicates, kb_related = step1_kb_search(

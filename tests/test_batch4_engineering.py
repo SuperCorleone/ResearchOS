@@ -248,6 +248,191 @@ async def test_parallel_pipelines() -> None:
         _clean_pipeline(pid)
 
 
+def _full_four_slot_plan() -> dict:
+    """Build a plan dict that satisfies every required slot + sub-key."""
+    return {
+        "plan_dataset": {
+            "dataset_description": "toy regression set",
+            "dataset_location": "/data/raw/toy",
+            "task_definition": "regression",
+            "read_data_step": "pandas.read_csv",
+            "data_preprocessing_step": "standardize",
+            "data_dataloader_step": "torch DataLoader batch=32",
+        },
+        "plan_model": {
+            "model_input": "x: float[N,d]",
+            "model_output": "y: float[N]",
+            "key_components": ["linear", "relu"],
+        },
+        "plan_training": {
+            "training_pipeline": "epoch loop",
+            "loss_function": "MSE",
+            "optimizer": "Adam(lr=1e-3)",
+            "training_configurations": "batch=32 epochs=10",
+            "monitor_and_logging": "stdout every epoch",
+        },
+        "plan_testing": {
+            "test_metric": "MAE",
+            "test_data": "held-out split",
+            "test_code": "scripts/eval.py",
+        },
+    }
+
+
+def test_four_slot_plan_full_pass() -> None:
+    print("\n--- Test: Four-slot plan (full) ---")
+    from researchos.runtime.design_checks import check_four_slot_plan
+
+    plan = _full_four_slot_plan()
+    iss = check_four_slot_plan(plan)
+    errs = [i for i in iss if i["severity"] == "ERROR"]
+    warns = [i for i in iss if i["severity"] == "WARN"]
+    check(errs == [], f"No ERRORs on full plan (got {errs})")
+    check(warns == [], f"No WARNs on full plan (got {warns})")
+    assert not errs and not warns, f"expected clean issues, got {iss}"
+
+
+def test_four_slot_plan_missing_slot_blocks() -> None:
+    print("\n--- Test: Four-slot plan (missing slot -> BLOCK) ---")
+    from researchos.runtime.design_checks import check_four_slot_plan
+    from researchos.runtime.preflight import run_preflight
+
+    # Rule-level: missing slot → ERROR
+    plan = _full_four_slot_plan()
+    del plan["plan_training"]
+    iss = check_four_slot_plan(plan)
+    errs = [i for i in iss if i["severity"] == "ERROR"]
+    check(
+        any(i["check"] == "four_slot_plan_plan_training" for i in errs),
+        "Missing plan_training produces ERROR",
+    )
+    assert any(i["check"] == "four_slot_plan_plan_training" for i in errs)
+
+    # Preflight-level: missing slot → BLOCK verdict
+    pid = "four_slot_block_test"
+    pdir = PROJECT_ROOT / "artifacts" / f"pipeline_{pid}"
+    try:
+        if pdir.exists():
+            shutil.rmtree(pdir)
+        pdir.mkdir(parents=True, exist_ok=True)
+        import yaml as _yaml
+        (pdir / "experiment_plan.yaml").write_text(_yaml.safe_dump(plan))
+        # Provide minimal code so we don't hit the "no code" early return path.
+        (pdir / "run_experiment.py").write_text(
+            "import argparse\n"
+            "def main(seed=0):\n    return 0\n"
+            "if __name__ == '__main__':\n    main()\n"
+        )
+        report = run_preflight(pdir, PROJECT_ROOT)
+        check(report["verdict"] == "BLOCK", f"Preflight verdict=BLOCK (got {report['verdict']})")
+        check(
+            any(
+                i["severity"] == "ERROR" and i["check"] == "four_slot_plan_plan_training"
+                for i in report["issues"]
+            ),
+            "Preflight issues include ERROR for missing plan_training",
+        )
+        assert report["verdict"] == "BLOCK"
+        assert any(
+            i["severity"] == "ERROR" and i["check"] == "four_slot_plan_plan_training"
+            for i in report["issues"]
+        )
+    finally:
+        if pdir.exists():
+            shutil.rmtree(pdir)
+
+
+def test_four_slot_plan_missing_subkey_warns() -> None:
+    print("\n--- Test: Four-slot plan (missing sub-key -> WARN) ---")
+    from researchos.runtime.design_checks import check_four_slot_plan
+
+    plan = _full_four_slot_plan()
+    del plan["plan_testing"]["test_metric"]
+    iss = check_four_slot_plan(plan)
+    errs = [i for i in iss if i["severity"] == "ERROR"]
+    warns = [
+        i for i in iss
+        if i["severity"] == "WARN"
+        and i["check"] == "four_slot_plan_plan_testing"
+        and "test_metric" in i["detail"]
+    ]
+    check(errs == [], f"No ERRORs when only sub-key missing (got {errs})")
+    check(len(warns) == 1, f"Exactly one WARN for missing test_metric (got {warns})")
+    assert errs == []
+    assert len(warns) == 1
+
+
+def test_branch_runner_seed_and_winner() -> None:
+    """BranchRunner seeds K drafts and picks the best via metric filter."""
+    print("\n--- Test: BranchRunner seed + winner selection ---")
+    from researchos.runtime.branch_manager import BranchRunner
+    from researchos.schemas.pipeline import PipelineStep
+
+    pid = "branch_runner_seed_winner"
+    pdir = PROJECT_ROOT / "artifacts" / f"pipeline_{pid}"
+    try:
+        if pdir.exists():
+            shutil.rmtree(pdir)
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / "hypothesis.md").write_text("# test hypothesis\n")
+
+        runner = BranchRunner(
+            pipeline_id=pid,
+            artifacts_root=PROJECT_ROOT / "artifacts",
+            num_branches=3,
+        )
+        nodes = runner.seed("test hypothesis")
+        check(len(nodes) == 3, f"Seeded 3 drafts (got {len(nodes)})")
+        assert len(nodes) == 3
+
+        # Per-branch hypothesis.md + branch_<n>/ dirs
+        for i in range(3):
+            bdir = runner.branch_dir(i)
+            check(bdir.is_dir(), f"branch_{i}/ dir exists")
+            check((bdir / "hypothesis.md").exists(), f"branch_{i}/hypothesis.md copied")
+
+        # Advance each branch to CRITIC and write fake results.json metrics.
+        fake_scores = {0: 0.72, 1: 0.91, 2: 0.65}
+        for bid, score in fake_scores.items():
+            for step in (
+                PipelineStep.DESIGN,
+                PipelineStep.CODE,
+                PipelineStep.RUN,
+                PipelineStep.CRITIC,
+            ):
+                runner.advance(bid, step)
+            (runner.branch_dir(bid) / "results.json").write_text(
+                json.dumps({"metrics": {"accuracy": score}})
+            )
+
+        check(
+            runner.all_reached(PipelineStep.CRITIC),
+            "All 3 branches reached CRITIC",
+        )
+        assert runner.all_reached(PipelineStep.CRITIC)
+
+        winner = runner.select_winner()
+        check(winner is not None, "select_winner returned a node")
+        assert winner is not None
+        check(
+            winner.iter_index == 1,
+            f"Winner is branch 1 (highest accuracy=0.91), got {winner.iter_index}",
+        )
+        assert winner.iter_index == 1
+
+        archived = runner.archive(winner.iter_index)
+        check(archived is not None, "archive() promoted winner")
+        assert archived is not None
+        # Selection sentinel written to pipeline dir
+        check(
+            (pdir / "branch_selection.json").exists(),
+            "branch_selection.json written",
+        )
+    finally:
+        if pdir.exists():
+            shutil.rmtree(pdir)
+
+
 def main() -> None:
     global passed, failed
 
@@ -259,6 +444,10 @@ def main() -> None:
     test_budget()
     test_retry_policy()
     test_checkpoint_and_recovery()
+    test_four_slot_plan_full_pass()
+    test_four_slot_plan_missing_slot_blocks()
+    test_four_slot_plan_missing_subkey_warns()
+    test_branch_runner_seed_and_winner()
     asyncio.run(test_parallel_pipelines())
 
     print("\n" + "=" * 60)

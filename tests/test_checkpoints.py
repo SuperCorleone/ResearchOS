@@ -40,11 +40,15 @@ class TestStepRouting:
     def test_main_design_goes_to_review(self):
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        # In MAIN, DESIGN is dynamically resolved
-        # DESIGN_REVIEW → CODE is in the mapping
+        # In MAIN, DESIGN is dynamically resolved.
+        # Wave 2: DESIGN_REVIEW → CONCEPT_EXTRACT → CODE
         key = (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW)
         assert key in _NEXT_STEP
-        assert _NEXT_STEP[key] == PipelineStep.CODE
+        assert _NEXT_STEP[key] == PipelineStep.CONCEPT_EXTRACT
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT)]
+            == PipelineStep.CODE
+        )
 
     def test_main_code_goes_to_preflight(self):
         from researchos.runtime.scheduler import _NEXT_STEP

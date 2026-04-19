@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,11 @@ import yaml
 
 from researchos.schemas.pipeline import PipelineState, PipelineStep
 from researchos.runtime.workflow_loader import WorkflowConfig
+from researchos.runtime.llm_client import (
+    RETRY_EXCEPTIONS,
+    extract_json_between_markers,
+    strip_reasoning,
+)
 from researchos.utils.paths import ARTIFACTS_DIR, DECISIONS_DIR
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,42 @@ def _find_oh_binary() -> str:
         if path:
             return path
     return "python -m openharness"
+
+
+async def _retry_llm_async(
+    coro_fn: Any,
+    *args: Any,
+    _max_tries: int = 5,
+    _base_delay: float = 1.0,
+    _max_delay: float = 60.0,
+    **kwargs: Any,
+) -> Any:
+    """Async mirror of :func:`researchos.runtime.llm_client.retry_llm`.
+
+    ``retry_llm`` is synchronous (it calls ``time.sleep``), so using it
+    around an ``await`` target would block the event loop. This helper
+    preserves the same retry policy (``RETRY_EXCEPTIONS``, exponential
+    backoff with jitter, 5 tries) but uses ``asyncio.sleep`` between
+    attempts. Non-retriable exceptions propagate immediately; the final
+    exception is re-raised after retries are exhausted.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(_max_tries):
+        try:
+            return await coro_fn(*args, **kwargs)
+        except RETRY_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt == _max_tries - 1:
+                break
+            delay = min(_max_delay, _base_delay * (2 ** attempt))
+            delay += random.uniform(0, delay * 0.1)
+            logger.warning(
+                "LLM call failed (%s); retrying in %.1fs (attempt %d/%d)",
+                type(exc).__name__, delay, attempt + 1, _max_tries,
+            )
+            await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 class Dispatcher:
@@ -112,7 +154,13 @@ class Dispatcher:
     async def dispatch_via_executor(
         self, agent_name: str, prompt: str, pipeline_id: str
     ) -> dict[str, Any]:
-        """Run an agent via AgentExecutor (Anthropic SDK)."""
+        """Run an agent via AgentExecutor (Anthropic SDK).
+
+        Output is normalised via :func:`strip_reasoning` to drop any
+        ``<think>...</think>`` preamble, and a best-effort JSON extraction
+        is attached as ``result["parsed_json"]`` when the output contains
+        a fenced or bare JSON object.
+        """
         executor = self._get_executor()
         # Internal system calls (e.g. _system_evaluator, _system_miner) use
         # scratch/ instead of artifacts/ to avoid creating spurious pipeline dirs
@@ -121,7 +169,35 @@ class Dispatcher:
         else:
             pdir = self.project_root / "artifacts" / f"pipeline_{pipeline_id}"
         pdir.mkdir(parents=True, exist_ok=True)
-        return await executor.execute(agent_name, prompt, pipeline_id, pdir)
+        # Wrap the LLM-backed executor call with exponential-backoff retry so
+        # transient RateLimitError / APITimeoutError / network errors don't
+        # poison the pipeline. Exhausted retries re-raise the last exception.
+        result = await _retry_llm_async(
+            executor.execute, agent_name, prompt, pipeline_id, pdir
+        )
+
+        # Best-effort post-processing: don't break existing callers
+        try:
+            output = result.get("output", "") if isinstance(result, dict) else ""
+            if isinstance(output, str) and output:
+                cleaned = strip_reasoning(output)
+                if cleaned != output:
+                    result["output"] = cleaned
+                parsed = extract_json_between_markers(cleaned)
+                if parsed is not None:
+                    result["parsed_json"] = parsed
+        except Exception:
+            logger.debug("post-processing of executor output failed", exc_info=True)
+        return result
+
+    @staticmethod
+    def parse_json_output(text: str) -> dict | None:
+        """Convenience helper: extract a JSON object from raw LLM text.
+
+        Delegates to :func:`extract_json_between_markers` after stripping
+        any ``<think>`` reasoning block.
+        """
+        return extract_json_between_markers(strip_reasoning(text or ""))
 
     async def dispatch_step(
         self, pipeline: PipelineState, step: PipelineStep

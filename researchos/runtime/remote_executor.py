@@ -1,20 +1,25 @@
 """Execution backends for running experiment code.
 
-Provides local (subprocess), Docker, and SSH backends behind a common
-interface so that ``agent_executor`` can delegate code execution without
-caring where or how the code actually runs.
+Provides local (subprocess), Docker, SSH, and sandbox backends behind a
+common interface so that ``agent_executor`` can delegate code execution
+without caring where or how the code actually runs.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import selectors
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -342,8 +347,332 @@ class SSHBackend(ExecutionBackend):
 
 
 # ---------------------------------------------------------------------------
+# Bash Exec Sandbox (A2 L1)
+# ---------------------------------------------------------------------------
+
+
+def _default_allowed_roots(project_root: Path | None = None) -> list[Path]:
+    """Return default allowed cwd roots for the sandbox.
+
+    Defaults are project_root/artifacts, project_root/data, project_root/scratch.
+    When ``project_root`` is None, uses the current working directory.
+    """
+    base = Path(project_root) if project_root is not None else Path.cwd()
+    return [base / "artifacts", base / "data", base / "scratch"]
+
+
+def _cwd_within_allowed(cwd: Path, allowed_roots: list[Path]) -> bool:
+    """Return True if *cwd* is contained in any of *allowed_roots*."""
+    try:
+        cwd_resolved = cwd.resolve()
+    except Exception:
+        return False
+    for root in allowed_roots:
+        try:
+            root_resolved = root.resolve()
+        except Exception:
+            continue
+        try:
+            cwd_resolved.relative_to(root_resolved)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+class BashExecSandbox:
+    """Sandboxed bash executor with watchdog + allowed-roots enforcement.
+
+    Inspired by DeepScientist OSS ``src/deepscientist/bash_exec/runtime.py``.
+
+    Parameters
+    ----------
+    project_root:
+        Project root used to compute default allowed roots.
+    allowed_roots:
+        Optional explicit list of roots within which ``cwd`` must live.
+        Defaults to ``artifacts``, ``data``, ``scratch`` under project_root.
+    log_path:
+        Path to append JSONL execution records to. Defaults to
+        ``{project_root}/runtime/bash_exec.log``.
+    """
+
+    def __init__(
+        self,
+        project_root: Path | None = None,
+        allowed_roots: list[Path] | None = None,
+        log_path: Path | None = None,
+    ) -> None:
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.allowed_roots = (
+            [Path(p) for p in allowed_roots]
+            if allowed_roots is not None
+            else _default_allowed_roots(self.project_root)
+        )
+        self.log_path = (
+            Path(log_path)
+            if log_path is not None
+            else self.project_root / "runtime" / "bash_exec.log"
+        )
+
+    # -- JSONL log -----------------------------------------------------------
+
+    def _log(self, entry: dict) -> None:
+        try:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception as exc:
+            logger.warning("Failed to write bash_exec log: %s", exc)
+
+    # -- Core run ------------------------------------------------------------
+
+    def run(
+        self,
+        cmd: str,
+        cwd: Path,
+        timeout: int = 1800,
+        cuda_device: str | None = None,
+    ) -> dict:
+        """Execute *cmd* in *cwd* under watchdog + cwd sandboxing.
+
+        Returns a dict with ``returncode``, ``stdout``, ``stderr``,
+        ``timed_out``, ``duration_s``, and ``cwd``.
+        """
+        cwd = Path(cwd)
+        started_at = datetime.now(timezone.utc).isoformat()
+        start = time.time()
+
+        if not _cwd_within_allowed(cwd, self.allowed_roots):
+            result = {
+                "returncode": None,
+                "stdout": "",
+                "stderr": (
+                    f"ERROR: cwd {cwd} is not within allowed_roots "
+                    f"{[str(p) for p in self.allowed_roots]}"
+                ),
+                "timed_out": False,
+                "duration_s": 0.0,
+                "cwd": str(cwd),
+            }
+            self._log({
+                "ts": started_at,
+                "cmd": cmd,
+                "cwd": str(cwd),
+                "timeout": timeout,
+                "cuda_device": cuda_device,
+                "rejected": True,
+                "reason": "cwd_not_allowed",
+            })
+            return result
+
+        cwd.mkdir(parents=True, exist_ok=True)
+
+        env = {**os.environ}
+        if cuda_device is not None:
+            env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
+
+        use_pty = os.name == "posix"
+        stdout_buf: list[str] = []
+        stderr_buf: list[str] = []
+        timed_out = False
+        returncode: int | None = None
+
+        try:
+            if use_pty:
+                # PTY path: merges stdout+stderr; use a single master fd
+                import pty
+
+                try:
+                    master_fd, slave_fd = pty.openpty()
+                except OSError as exc:
+                    # PTY devices exhausted (common in CI/sandbox) — fall
+                    # back to the pipe path below.
+                    logger.debug("PTY unavailable (%s); using pipe fallback", exc)
+                    use_pty = False
+                    master_fd = slave_fd = -1
+            if use_pty:
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        shell=True,
+                        cwd=str(cwd),
+                        env=env,
+                        stdin=slave_fd,
+                        stdout=slave_fd,
+                        stderr=slave_fd,
+                        close_fds=True,
+                    )
+                    os.close(slave_fd)
+
+                    def _watchdog() -> None:
+                        nonlocal timed_out
+                        try:
+                            proc.wait(timeout=timeout)
+                        except subprocess.TimeoutExpired:
+                            timed_out = True
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+
+                    watchdog = threading.Thread(target=_watchdog, daemon=True)
+                    watchdog.start()
+
+                    sel = selectors.DefaultSelector()
+                    sel.register(master_fd, selectors.EVENT_READ)
+                    while True:
+                        if proc.poll() is not None and not _fd_readable(
+                            sel, timeout=0.05
+                        ):
+                            break
+                        events = sel.select(timeout=0.1)
+                        if not events:
+                            continue
+                        try:
+                            chunk = os.read(master_fd, 4096)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        stdout_buf.append(chunk.decode(errors="replace"))
+
+                    watchdog.join(timeout=5)
+                    returncode = proc.returncode
+                finally:
+                    try:
+                        os.close(master_fd)
+                    except OSError:
+                        pass
+            else:
+                # Pipe fallback (non-POSIX, or POSIX with no PTY available)
+                try:
+                    completed = subprocess.run(
+                        cmd,
+                        shell=True,
+                        cwd=str(cwd),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+                    stdout_buf.append(completed.stdout or "")
+                    stderr_buf.append(completed.stderr or "")
+                    returncode = completed.returncode
+                except subprocess.TimeoutExpired as exc:
+                    timed_out = True
+                    stdout_buf.append(exc.stdout or "" if exc.stdout else "")
+                    stderr_buf.append(exc.stderr or "" if exc.stderr else "")
+        except Exception as exc:
+            stderr_buf.append(f"ERROR: {exc}")
+
+        duration = time.time() - start
+        result = {
+            "returncode": returncode,
+            "stdout": "".join(stdout_buf),
+            "stderr": "".join(stderr_buf),
+            "timed_out": timed_out,
+            "duration_s": round(duration, 3),
+            "cwd": str(cwd),
+        }
+
+        self._log({
+            "ts": started_at,
+            "cmd": cmd,
+            "cwd": str(cwd),
+            "timeout": timeout,
+            "cuda_device": cuda_device,
+            "returncode": returncode,
+            "timed_out": timed_out,
+            "duration_s": result["duration_s"],
+            "stdout_len": len(result["stdout"]),
+            "stderr_len": len(result["stderr"]),
+        })
+        return result
+
+
+def _fd_readable(sel: "selectors.DefaultSelector", timeout: float) -> bool:
+    """Tiny helper: True if any registered fd has data to read in *timeout* s."""
+    events = sel.select(timeout=timeout)
+    return bool(events)
+
+
+class SandboxBackend(ExecutionBackend):
+    """ExecutionBackend adapter that writes *code* then runs it via BashExecSandbox."""
+
+    def __init__(
+        self,
+        project_root: Path | None = None,
+        allowed_roots: list[Path] | None = None,
+        python_bin: str | None = None,
+    ) -> None:
+        self.sandbox = BashExecSandbox(
+            project_root=project_root, allowed_roots=allowed_roots
+        )
+        self.python_bin = python_bin or sys.executable
+
+    def execute(
+        self,
+        code: str,
+        timeout: int,
+        working_dir: Path,
+        data_dir: Path | None = None,
+    ) -> str:
+        working_dir.mkdir(parents=True, exist_ok=True)
+        script_path = working_dir / "ros_sandbox_script.py"
+        script_path.write_text(code, encoding="utf-8")
+        try:
+            cuda_device = os.environ.get("CUDA_VISIBLE_DEVICES")
+            result = self.sandbox.run(
+                cmd=f"{shlex.quote(self.python_bin)} {shlex.quote(str(script_path))}",
+                cwd=working_dir,
+                timeout=timeout,
+                cuda_device=cuda_device,
+            )
+            if result.get("timed_out"):
+                return f"ERROR: Script timed out after {timeout} seconds."
+            return _format_output(
+                result.get("stdout", ""),
+                result.get("stderr", ""),
+                result.get("returncode"),
+            )
+        finally:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
+
+def execute_backend(backend_name: str, /, **kwargs):
+    """Dispatch a single execution against a backend by name.
+
+    Currently supports ``"sandbox"``, which runs ``BashExecSandbox.run`` with
+    ``cmd``, ``cwd``, ``timeout``, ``cuda_device`` kwargs. Other backend names
+    raise NotImplementedError (existing local/docker/ssh go via :func:`create_backend`).
+    """
+    name = (backend_name or "").lower()
+    if name == "sandbox":
+        project_root = kwargs.pop("project_root", None)
+        allowed_roots = kwargs.pop("allowed_roots", None)
+        sandbox = BashExecSandbox(
+            project_root=project_root, allowed_roots=allowed_roots
+        )
+        cmd = kwargs.pop("cmd")
+        cwd = kwargs.pop("cwd")
+        timeout = kwargs.pop("timeout", 1800)
+        cuda_device = kwargs.pop("cuda_device", None)
+        return sandbox.run(
+            cmd=cmd, cwd=cwd, timeout=timeout, cuda_device=cuda_device
+        )
+    raise NotImplementedError(
+        f"execute_backend does not support backend_name={backend_name!r}; "
+        "use create_backend() for local/docker/ssh."
+    )
 
 
 def create_backend(config: dict) -> ExecutionBackend:
@@ -353,9 +682,10 @@ def create_backend(config: dict) -> ExecutionBackend:
 
         {
             "execution": {
-                "backend": "local" | "docker" | "ssh",
+                "backend": "local" | "docker" | "ssh" | "sandbox",
                 "docker": {"image": "...", "gpu": false, "memory_limit": "8g"},
-                "ssh": {"host": "...", "user": "...", "key_path": "...", "remote_dir": "..."}
+                "ssh": {"host": "...", "user": "...", "key_path": "...", "remote_dir": "..."},
+                "sandbox": {"project_root": "...", "allowed_roots": ["..."]}
             }
         }
 
@@ -367,6 +697,14 @@ def create_backend(config: dict) -> ExecutionBackend:
 
     if backend_name == "local":
         return LocalBackend()
+
+    if backend_name == "sandbox":
+        sb_cfg = exec_cfg.get("sandbox", {})
+        return SandboxBackend(
+            project_root=sb_cfg.get("project_root"),
+            allowed_roots=sb_cfg.get("allowed_roots"),
+            python_bin=sb_cfg.get("python_bin"),
+        )
 
     if backend_name == "docker":
         docker_cfg = exec_cfg.get("docker", {})

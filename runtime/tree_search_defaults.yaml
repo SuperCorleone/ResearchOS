@@ -1,0 +1,27 @@
+# ----------------------------------------------------------------------------
+# Tree-search defaults for ResearchOS MAIN stage (Wave 2, A3 + A18).
+#
+# Mirrors the BFTS primitives from Sakana's AI-Scientist-v2 (journal.py +
+# bfts_config.yaml).  The scheduler / branch_manager reads these values at
+# startup; if this file is missing, hardcoded defaults in branch_manager.py
+# are used instead.
+#
+# Stage-local policies (stage1..stage4) map to the five Node.stage values:
+#   stage1 -> draft (initial implementation)
+#   stage2 -> debug (fix is_buggy nodes)
+#   stage3 -> improve (iterate on best good_node)
+#   stage4 -> hyperparam / ablation (sweep-style exploration)
+# ----------------------------------------------------------------------------
+num_workers: 4
+num_drafts: 3
+debug_prob: 0.5
+max_debug_depth: 3
+multi_seed_eval:
+  num_seeds: 3
+exec:
+  timeout: 3600
+stages:
+  stage1_max_iters: 20
+  stage2_max_iters: 12
+  stage3_max_iters: 12
+  stage4_max_iters: 18
