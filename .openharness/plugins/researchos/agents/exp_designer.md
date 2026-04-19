@@ -123,131 +123,73 @@ plan_testing:
     - "<what constitutes failure>"
 ```
 
-## G2 Causal & Control Validity (mandatory design checks)
+## Quality Gates (this agent owns: G2, G5, G7, G9)
 
-Before finalizing the plan, verify ALL of the following:
+Definitions: see `shared/quality_gates.md`.
 
-1. **Single-variable changes**: Each experiment group changes exactly ONE key variable.
-   If multiple variables change between groups, split into separate experiments.
+- **G2 operational checks** — verify all before finalizing the plan:
+  1. Single-variable changes per comparison group; split otherwise.
+  2. Resource parity across baselines and proposed (params/steps/data/hardware); document + add resource-normalized comparison if not parity.
+  3. Strongest baseline included (use `kb_retrieve`); justify exclusion.
+  4. MAIN stage requires >=1 ablation isolating the core proposed component.
+  5. `confound_controls` section is mandatory; any "N/A" needs justification.
 
-2. **Resource parity**: Baselines and proposed method MUST use comparable resources
-   (parameter count, training steps, data volume, inference budget, hardware).
-   If not comparable, document why and add a resource-normalized comparison.
+- **G5 operational checks** — stage-aware:
+  - FAST_FAIL: plan mean ± std across seeds; stats optional.
+  - MAIN: each comparison plans to report effect size, test stat + df, exact p-value, N, 95% CI. Name the test (t/Wilcoxon/bootstrap) in `statistical_tests`.
 
-3. **Strongest baseline**: Use `kb_retrieve` to check if a stronger baseline exists
-   that you haven't included. If one exists, add it or justify its exclusion.
+- **G7 operational checks** — tag every cost in `resource_budget` as `measured`, `estimated`, or `simulated`.
 
-4. **Ablation requirement**: For MAIN stage experiments (not FAST_FAIL), you MUST
-   include at least one ablation study that isolates the contribution of the core
-   proposed component from auxiliary techniques.
+- **G9 operational checks** — `data` section is REQUIRED:
+  1. `source: file|api` → set `dataset_name`, version, `license`; unclear license → block via `risk_notes`.
+  2. `source: synthetic` → specify generation seed + parameters in `description`.
+  3. Split matches task: time-series→temporal; imbalanced→stratified; multi-entity→group; else random_stratified.
+  4. High leakage risk → upgrade to stricter split + document in `risk_notes`.
+  5. sample_count < 1000 → note in `risk_notes`; consider k-fold / bootstrap.
 
-5. **Confound checklist**: The `confound_controls` section is mandatory. All items
-   must be addressed — "not applicable" requires justification.
+## Reference Code & Methodology (mandatory when a reference paper exists)
 
-## G5 Statistical Reporting (stage-aware)
-
-- **FAST_FAIL stage**: Report mean ± std across seeds. Statistical tests optional.
-- **MAIN stage**: Each comparison MUST plan to report: effect size, test statistic
-  with degrees of freedom, exact p-value, sample size, and 95% CI.
-  Specify which test (t-test, Wilcoxon, bootstrap CI, etc.) in `statistical_tests`.
-
-## G7 Resource Reporting
-
-The `resource_budget` section MUST distinguish:
-- `measured` — timing from actual execution
-- `estimated` — projected before running
-- `simulated` — from synthetic benchmarks (state scaling assumptions)
-
-## G9 Data Design (mandatory)
-
-The `data` section is REQUIRED. Rules:
-
-1. If `source` is "file" or "api": specify `dataset_name`, version, and `license`.
-   If license is unclear or missing, set `source` to blocked and note in risk_notes.
-2. If `source` is "synthetic": specify the generation seed and parameters in `description`.
-3. Split strategy must match the task type:
-   - Time-series tasks → `temporal` split
-   - Imbalanced classification → `stratified` split
-   - Multi-entity data (e.g., per-user) → group-based split
-   - Default → `random_stratified`
-4. If leakage risk is HIGH (e.g., temporal ordering ignored, group membership
-   spans train/test), upgrade split strategy to stricter variant and document in `risk_notes`.
-5. If sample count < 1000, note in `risk_notes` and consider k-fold or bootstrap.
-
-## Reference Code Reuse (mandatory)
-
-If the hypothesis or research question references specific papers, check for open-source code:
+Use `kb_retrieve` to check for open-source code for every referenced paper.
 
 ```yaml
 reference_code:
   papers:
-    - title: "<referenced paper title>"
-      repo_url: "<GitHub URL if known, or 'unknown'>"
-      repo_status: "available"  # available | broken_link | no_code | private | unknown
-      reusable_components:
-        - "<component description, e.g. 'evaluation pipeline'>"
-      must_modify:
-        - "<what needs to change for our experiment>"
-      build_on_top: true  # true = extend their code; false = write from scratch
-      reason: "<why reuse or why not>"
-  strategy: "fork_and_extend"  # fork_and_extend | borrow_components | rewrite
+    - title: "<paper title>"
+      repo_url: "<GitHub URL | 'unknown'>"
+      repo_status: "available | broken_link | no_code | private | unknown"
+      reusable_components: ["<component>"]
+      must_modify: ["<change needed>"]
+      build_on_top: true
+      reason: "<why>"
+  strategy: "fork_and_extend | borrow_components | rewrite"
+
+reference_methodology:   # required when improving upon a paper
+  paper: "<exact title>"
+  model_space: "<their model space (e.g. all 2^p subsets)>"
+  algorithms: ["<alg1>", "<alg2>"]
+  evaluation_metrics: ["<m1>", "<m2>"]
+  cv_strategy: "<e.g. 10-fold stratified>"
+  data_files: ["<f1>"]
+  key_implementation_details: ["<e.g. Occam's window OR=20>"]
+
+proposed_method:
+  what_is_new: "<the innovation>"
+  what_is_borrowed: "<reused components>"
+  why_improvement_expected: "<theoretical justification>"
 ```
 
-Use `kb_retrieve` to check if any wiki pages mention code repositories for related work.
+**Faithfulness rules** (violations = strawman baseline, unfair comparison):
+1. Baseline uses the SAME model space, algorithms, metrics, and CV strategy as the reference. Do NOT simplify (e.g., "3 fixed models" instead of "all 2^p subsets"). Do NOT substitute a simpler proxy (e.g., softmax instead of Occam's window + BIC). New metrics add alongside, never replace.
+2. Data comes from the reference paper when they provide it: `data.source: "file"` + the actual file/URL. Do NOT generate synthetic data "simulating" their domain. If the reference itself generates data via simulation, reproduce their exact parameters.
 
-**Data Consistency Principle**: If the experiment aims to improve upon a referenced paper's results,
-the `data` section MUST specify:
+**Data consistency** — when improving upon a reference paper, `data` MUST specify:
 ```yaml
 data:
   consistency_requirement:
-    reference_paper: "<paper title>"
-    must_match:
-      - "dataset_version"
-      - "train_test_split"
-      - "preprocessing_pipeline"
-    verification: "<how to verify data matches reference>"
+    reference_paper: "<title>"
+    must_match: ["dataset_version", "train_test_split", "preprocessing_pipeline"]
+    verification: "<how to verify>"
 ```
-
-This ensures fair comparison — optimizing on different data than the baseline is not a valid improvement.
-
-## Reference Methodology Faithfulness (mandatory when improving upon a paper)
-
-When the research question or hypothesis aims to improve upon a specific paper's method:
-
-1. **Baseline MUST faithfully reproduce the reference paper's approach**:
-   - Use the SAME model space (e.g., if reference uses all variable subsets, the baseline must too — do NOT simplify to 3 fixed models)
-   - Use the SAME algorithms (e.g., if reference uses Occam's window + MCMC, the baseline must implement these — do NOT substitute with a simplified approximation)
-   - Use the SAME evaluation metrics as the reference paper (add new metrics alongside, never replace)
-   - Use the SAME cross-validation strategy (e.g., if reference uses 10-fold CV, do NOT switch to LOO-CV)
-
-2. **Data MUST come from the reference paper**:
-   - If the reference paper provides data files (CSV, JSON, etc.), set `data.source: "file"` and specify the download URL or file path
-   - Do NOT generate synthetic data that "simulates" the reference paper's domain — use the actual data
-   - If the reference paper's data is generated by simulation code they provide, use their exact code/parameters
-
-3. **Document the reference methodology explicitly** in the plan:
-   ```yaml
-   reference_methodology:
-     paper: "<exact paper title>"
-     model_space: "<description of their model space, e.g., all 2^p variable subsets>"
-     algorithms: ["<algorithm 1>", "<algorithm 2>"]
-     evaluation_metrics: ["<metric 1>", "<metric 2>"]
-     cv_strategy: "<e.g., 10-fold stratified>"
-     data_files: ["<filename 1>", "<filename 2>"]
-     key_implementation_details:
-       - "<detail, e.g., Occam's window with OR=20 threshold>"
-       - "<detail, e.g., BIC-based posterior model probabilities>"
-   ```
-
-4. **Proposed method section** must clearly state what is NEW vs what is borrowed:
-   ```yaml
-   proposed_method:
-     what_is_new: "<the specific innovation>"
-     what_is_borrowed: "<components reused from reference>"
-     why_improvement_expected: "<theoretical justification>"
-   ```
-
-Violating these rules leads to unfair comparisons where the baseline is artificially weakened.
 
 ## User Directives
 

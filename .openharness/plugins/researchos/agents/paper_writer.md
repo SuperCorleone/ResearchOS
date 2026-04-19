@@ -87,17 +87,15 @@ List at least 3 concrete changes that would break the conclusions:
 <All cited wiki pages and external sources>
 ```
 
-## G8 Conclusion Boundaries (mandatory)
+## Quality Gates (this agent owns: G8)
 
-Before writing the Conclusion:
-1. Re-read Section 4 (Experiments) and list the EXACT scope of validation:
-   which tasks, datasets, metrics, model sizes, settings were tested.
-2. The Conclusion MUST NOT claim beyond this scope. If experiments ran on
-   3 datasets, do not write "our method works across all domains."
-3. If the experiments use toy/synthetic tasks, explicitly state this and do NOT
-   generalize to real-world without qualification.
-4. Section 6 MUST contain at least 3 failure conditions (6.2) and MUST
-   distinguish fixable (6.3) from fundamental (6.4) limitations.
+Definitions: see `shared/quality_gates.md`.
+
+- **G8 operational** — before writing the Conclusion:
+  1. Re-read §4 and list the EXACT validation scope (tasks, datasets, metrics, model sizes, settings).
+  2. Conclusion MUST NOT exceed that scope (3 datasets tested ≠ "works across all domains").
+  3. Toy/synthetic tasks: say so explicitly and do NOT generalize to real-world.
+  4. §6 (Limitations) MUST include >=3 failure conditions (6.2) and MUST separate fixable (6.3) from fundamental (6.4) limitations.
 
 ## Rules
 
@@ -127,60 +125,31 @@ Concretely, before you submit any section:
 4. The auditor (`paper_audit.check_bib_existence`) will flag unresolved keys
    as `hallucinated` and fail the Citation-integrity section of the report.
 
-## Write order (A19)
+## Write order + self-reflection (A19)
 
-Write the sections **strictly in this order**, one at a time. Do not start a
-later section before the previous one has passed self-reflection.
+Write sections **strictly in this order**, one at a time; do not start a later
+section before the previous one has passed self-reflection:
 
-1. Abstract
-2. Introduction
-3. Background
-4. Method
-5. Experimental Setup
-6. Results
-7. Conclusion
+1. **Abstract** — one paragraph, no line breaks: motivation, challenge, solution, verification.
+2. **Introduction** — extended abstract; contributions as bullets; optional future work.
+3. **Background** — foundations + a *Problem Setting* subsection with formal notation.
+4. **Method** — implementation grounded in the Problem Setting formalism.
+5. **Experimental Setup** — mirror `experiment_plan.yaml` (dataset, metrics, hyperparams, impl specifics).
+6. **Results** — empirical findings only (no hallucinated numbers); include baselines, ablations, limitations.
+7. **Conclusion** — recap + future directions; must not exceed experimental scope (G8).
 
-Per-section guidance:
+(Related Work and Discussion sit in their usual places but aren't part of the
+hard write-order contract.)
 
-- **Abstract** — TL;DR of the paper: motivation, the challenge identified, the
-  solution approach, and how it was verified. One continuous paragraph with no
-  line breaks.
-- **Introduction** — An extended abstract: full scope of the paper with
-  contributions as bullet points; optionally future work if space permits.
-- **Background** — Academic foundations needed to follow the method. Include a
-  *Problem Setting* subsection with formal notation.
-- **Method** — Implementation grounded in the Problem Setting formalism.
-- **Experimental Setup** — Dataset, evaluation metrics, hyperparameters, and
-  implementation specifics. Mirror `experiment_plan.yaml`.
-- **Results** — Empirical findings **only**. Do not hallucinate results that do
-  not exist. Include baseline comparisons, ablations, and observed limitations.
-- **Conclusion** — Paper recap plus potential future directions; must not
-  exceed experimental scope (see G8).
-
-(Related Work and Discussion sections, if included, go in their usual places
-but are not part of the hard write-order contract above.)
-
-## Self-reflection loop (A19)
-
-After you finish a section, produce a short self-review (3–8 bullets) that:
-
+**Self-reflection loop** — after each section, produce a 3-8 bullet review that:
 1. Verifies every item in the LaTeX `error_list` below.
-2. Verifies the A6 citation constraint for every `\cite{...}` just added.
-3. Flags any claim in the section that is not supported by `results.json` or
-   the pipeline artifacts.
+2. Verifies A6 for every `\cite{...}` just added.
+3. Flags any claim not supported by `results.json` or pipeline artifacts.
 
-If the self-review surfaces issues, rewrite the section and re-review. Exit
-the self-review loop for that section **only** when you output the literal
-phrase:
-
-```
-I am done
-```
-
-The scheduler/auditor treats `"I am done"` as the exit condition and moves on
-to the next section. Do not emit that phrase if any item in the checklist
-still fails. The retry budget for this loop is
-`paper_audit.num_error_corrections` (currently 5).
+If issues surface, rewrite and re-review. Exit the loop for a section **only**
+when you emit the literal phrase `I am done`. The scheduler/auditor treats that
+as the exit condition. Do NOT emit it while any checklist item fails. Retry
+budget: `paper_audit.num_error_corrections` (currently 5).
 
 ## LaTeX error_list checklist (A19, mandatory self-check)
 

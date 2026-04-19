@@ -49,17 +49,22 @@ logger = logging.getLogger(__name__)
 # The scheduler now uses WorkflowConfig internally.
 #
 # Wave 2 edits (A3, A7, A11, A13, A17, A18):
-#   - MAIN: DESIGN_REVIEW -> CONCEPT_EXTRACT -> CODE (replaces direct CODE)
+#   - MAIN: DESIGN_REVIEW -> CODE_RECON -> CONCEPT_EXTRACT -> CODE
 #   - MAIN: RUN -> RESULTS_REVERIFY -> CRITIC (replaces direct CRITIC)
 #   - PROPOSAL approval may go through BASELINE_CONFIRM
 #   - PAPER stage terminates in a PRE_PUBLISH_GATE HITL checkpoint
 #
-# FAST_FAIL keeps its lean path (no CONCEPT_EXTRACT, no RESULTS_REVERIFY,
-# no DESIGN_REVIEW, no CODE_PREFLIGHT, no INTERROGATION).
+# FAST_FAIL keeps its lean path (no CODE_RECON, no CONCEPT_EXTRACT, no
+# RESULTS_REVERIFY, no DESIGN_REVIEW, no CODE_PREFLIGHT, no INTERROGATION).
+#
+# A20 — CODE_RECON: shallow clones the reference codebases hinted at by
+# the paper wiki pages or by experiment_plan.yaml::reference_codebases
+# and writes a static-scan report consumed by concept_extractor + preflight.
 _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {
     (PipelineStage.MAIN, None): PipelineStep.HYPOTHESIS,
     (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
-    (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW): PipelineStep.CONCEPT_EXTRACT,
+    (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW): PipelineStep.CODE_RECON,
+    (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.CONCEPT_EXTRACT,
     (PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT): PipelineStep.CODE,
     (PipelineStage.MAIN, PipelineStep.CODE): PipelineStep.CODE_PREFLIGHT,
     (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT): PipelineStep.RUN,
@@ -80,6 +85,7 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.HYPOTHESIS: "hypothesis.md",
     PipelineStep.DESIGN: "experiment_plan.yaml",
     PipelineStep.DESIGN_REVIEW: "design_review.md",
+    PipelineStep.CODE_RECON: "code_recon.yaml",
     PipelineStep.CONCEPT_EXTRACT: "concepts.yaml",
     PipelineStep.CODE: "code_patch.diff",
     PipelineStep.CODE_PREFLIGHT: "preflight_report.json",
@@ -102,6 +108,12 @@ try:  # Stream D (A1) — results reverification
 except ImportError:  # pragma: no cover — optional Wave 2 dep
     _reverify_results = None  # type: ignore[assignment]
     logger.warning("reverify module not available; RESULTS_REVERIFY will be a no-op")
+
+try:  # A20 — code-reference reconnaissance
+    from researchos.runtime.code_recon import run_code_recon as _run_code_recon_fn  # noqa: F401
+except ImportError:  # pragma: no cover
+    _run_code_recon_fn = None  # type: ignore[assignment]
+    logger.info("code_recon module not available; CODE_RECON will SKIP")
 
 try:  # Stream F (A17) — baseline metric contract registry
     from researchos.runtime import baseline_registry as _baseline_registry  # noqa: F401
@@ -226,8 +238,9 @@ class ResearchScheduler:
         main_stage = PipelineStage.MAIN.value
         fast_fail_stage = PipelineStage.FAST_FAIL.value
         edges_main = {
-            # DESIGN_REVIEW -> CONCEPT_EXTRACT -> CODE
-            (main_stage, PipelineStep.DESIGN_REVIEW.value): PipelineStep.CONCEPT_EXTRACT.value,
+            # DESIGN_REVIEW -> CODE_RECON -> CONCEPT_EXTRACT -> CODE (A20)
+            (main_stage, PipelineStep.DESIGN_REVIEW.value): PipelineStep.CODE_RECON.value,
+            (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
             (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
             # RUN -> RESULTS_REVERIFY -> CRITIC
             (main_stage, PipelineStep.RUN.value): PipelineStep.RESULTS_REVERIFY.value,
@@ -670,7 +683,22 @@ class ResearchScheduler:
     async def _generate_pre_main_review(
         self, pipeline: PipelineState, pdir: Path
     ) -> None:
-        """Generate pre_main_review.md summarising FAST_FAIL results."""
+        """Generate pre_main_review.md summarising FAST_FAIL results.
+
+        Hybrid (post-β rollback): the scientific-judgement content
+        (evidence gaps, GO/TWEAK/KILL, scientific quality) is produced by
+        the ``pre_main_reviewer`` LLM agent — Gate-1 science authority.
+        The existing ``_stage_user_approve`` caller (inject-mode only,
+        see :meth:`_schedule_next` FAST_FAIL branch) handles the
+        ``user_approve/`` filesystem layout.
+
+        A pure-Python scaffolder ``stage_user_approve_scaffold`` is
+        exported from :mod:`researchos.runtime.hitl_synthesizers` for
+        debugging / CLI use. The WAITING_APPROVAL per-step no-op and
+        milestone / pre-publish template synthesizers remain in place
+        and together still block the ~107K-token pipeline_manager
+        fallback.
+        """
         if self.simulate:
             self._simulate_pre_main_review(pipeline, pdir)
             return
@@ -1381,6 +1409,10 @@ class ResearchScheduler:
             self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         )
 
+        # CODE_RECON — A20 pure-Python shallow clone + static scan.
+        if step == PipelineStep.CODE_RECON:
+            return self._run_code_recon(pipeline, pdir)
+
         # CONCEPT_EXTRACT — Stream C agent, but custom prompt so we keep
         # control over artifact placement.
         if step == PipelineStep.CONCEPT_EXTRACT:
@@ -1398,7 +1430,56 @@ class ResearchScheduler:
         if step == PipelineStep.PRE_PUBLISH_GATE:
             return self._run_pre_publish_gate(pipeline, pdir)
 
+        # WAITING_APPROVAL — no-op dispatch. The scheduler's WAITING_APPROVAL
+        # handler (see :meth:`_schedule_next`) synthesizes the HITL gate
+        # documents (pre_main_review.md / milestone_N staging /
+        # pre_publish_gate.md) on the NEXT tick via pure-Python helpers.
+        # Without this short-circuit the step falls through to the generic
+        # LLM dispatcher and burns ~107K tokens/run on the `pipeline_manager`
+        # fallback agent.
+        if step == PipelineStep.WAITING_APPROVAL:
+            self.state.append_log(
+                "WAITING_APPROVAL step — pure-Python no-op "
+                "(HITL gate synthesis deferred to next tick)",
+                pipeline.pipeline_id,
+            )
+            return True
+
         return None
+
+    def _run_code_recon(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """A20 — shallow-clone reference codebases and write code_recon.yaml.
+
+        Pure Python, no LLM. Never raises: on any error we still produce
+        a report so the pipeline can advance. The concept_extractor step
+        reads this file to ground its reference_codebases locators.
+        """
+        report_path = pdir / "code_recon.yaml"
+        if self.simulate or _run_code_recon_fn is None:
+            pdir.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                "# code_recon simulate/stub — module unavailable or simulate mode\n"
+                f"pipeline_id: {pipeline.pipeline_id}\n"
+                "repos: []\n"
+            )
+            return True
+        try:
+            _run_code_recon_fn(pdir, self.project_root)
+        except Exception:
+            logger.exception(
+                "code_recon failed for pipeline %s; writing stub report",
+                pipeline.pipeline_id,
+            )
+            pdir.mkdir(parents=True, exist_ok=True)
+            if not report_path.exists():
+                report_path.write_text(
+                    "# code_recon errored; pipeline advances without reference repos\n"
+                    f"pipeline_id: {pipeline.pipeline_id}\n"
+                    "repos: []\n"
+                )
+        return True
 
     async def _run_concept_extract(
         self, pipeline: PipelineState, pdir: Path
@@ -1846,33 +1927,18 @@ class ResearchScheduler:
     ) -> bool:
         """Stage the HITL pre-publish review folder and write gate marker.
 
-        Reuses the existing ``_stage_user_approve`` pattern but with
-        gate=``pre_publish`` so the frontend / CLI can differentiate.
+        Delegates the gate-marker synthesis to
+        :func:`researchos.runtime.hitl_synthesizers.synthesize_pre_publish_gate`
+        (pure Python, no LLM) and then re-uses ``_stage_user_approve`` for
+        the inject-mode user_approve/ packaging.
         """
-        gate_path = pdir / "pre_publish_gate.md"
-        paper_dir = self.project_root / "paper" / pipeline.pipeline_id
-        draft = paper_dir / "draft_v1.md"
-        review = paper_dir / "review_v1.md"
+        from researchos.runtime.hitl_synthesizers import synthesize_pre_publish_gate
 
-        # Build the gate marker regardless — it's the artifact that
-        # _schedule_next recognises to advance past this step.
-        body_parts: list[str] = [
-            f"# Pre-Publish Gate — {pipeline.pipeline_id}\n",
-            "Awaiting final user approval before paper compilation.\n",
-        ]
-        if draft.exists():
-            body_parts.append("\n## Draft available\n")
-            body_parts.append(f"`{draft.relative_to(self.project_root)}`\n")
-        if review.exists():
-            body_parts.append("\n## Review available\n")
-            body_parts.append(f"`{review.relative_to(self.project_root)}`\n")
-        body_parts.append(
-            "\n## Next Steps\n"
-            "- Review draft.md and review.md under `paper/`.\n"
-            "- Run `/research continue --pipeline {pid} --gate pre_publish` "
-            "to unlock final compile.\n".replace("{pid}", pipeline.pipeline_id)
+        synthesize_pre_publish_gate(
+            pdir,
+            pipeline_id=pipeline.pipeline_id,
+            project_root=self.project_root,
         )
-        gate_path.write_text("".join(body_parts))
 
         # Stage user_approve/ folder via existing helper when source is
         # user_inject; re-uses feedback.md pattern with a pre_publish flag.

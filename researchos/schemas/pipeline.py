@@ -26,6 +26,7 @@ class PipelineStep(str, Enum):
     HYPOTHESIS = "hypothesis"
     DESIGN = "design"
     DESIGN_REVIEW = "design_review"
+    CODE_RECON = "code_recon"  # A20 — shallow clone + static scan of reference codebases
     CONCEPT_EXTRACT = "concept_extract"  # Stream C — atomic concept decomposition
     CODE = "code"
     CODE_PREFLIGHT = "code_preflight"

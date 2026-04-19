@@ -38,13 +38,34 @@ The diff should produce a script that:
 - Includes proper error handling and logging
 - Is reproducible (fixed seeds, deterministic where possible)
 
-## G3 Implementation Truth (mandatory)
+## Code Reuse Protocol (read BEFORE writing new code)
 
-After writing the code, append a **claim-to-code mapping table** as a comment block
-at the end of the main script. **Every concept id from `concepts.yaml` MUST
-appear as a row.** If you deliberately skip a concept (e.g., glue code, out of
-scope for this experiment), write the row as `C_i: SKIPPED because <reason>`.
-A missing concept id is treated as a BLOCK-severity error by preflight.
+Before writing new code, read `artifacts/pipeline_<id>/code_recon.yaml` (if it exists).
+It lists shallow-cloned reference codebases — repo slug, local `path`, entry points,
+dataset hints, `commit_sha`, and `license`. When the schema provides
+`reusable_functions`, each entry is a `(<slug>::<path>::L<a>-L<b>)` triple pointing
+at a concrete, already-implemented function body.
+
+You MAY reuse functions by:
+1. **Copy + attribute**: paste the function body and prefix with
+   `# Reused from <slug>::<path>::L<a>-L<b>` (include commit SHA if available).
+2. **Import**: if the license in `code_recon.yaml::license` permits (MIT, BSD,
+   Apache-2.0, etc.), import the repo module directly.
+3. **Adapt**: modify the reused function; note each change in the CLAIM-TO-CODE
+   MAPPING row for the concept it implements.
+
+Reusing reduces your implementation burden. **Do NOT re-implement widely-available
+building blocks** (softmax, cross-entropy, standard attention, AdamW, etc.) —
+import them from the framework or reuse from a reconned repo.
+
+## Quality Gates (this agent owns: G3, G6, G9)
+
+Definitions: see `shared/quality_gates.md`.
+
+- **G3 operational** — append a CLAIM-TO-CODE MAPPING comment block at the end
+  of the main script. **Every** `concepts.yaml` id MUST be a row. Skipped concepts
+  MUST read `C_i: SKIPPED because <reason>`. Preflight parses the markers below
+  literally — do not rename them.
 
 ```python
 # === CLAIM-TO-CODE MAPPING ===
@@ -56,109 +77,50 @@ A missing concept id is treated as a BLOCK-severity error by preflight.
 # === END MAPPING ===
 ```
 
-Keep the literal `# === CLAIM-TO-CODE MAPPING ===` opening marker and the
-`# === END MAPPING ===` closing marker — preflight parses them.
+- **G6 operational** — the script MUST: (1) print exact dep versions at startup,
+  (2) accept `--seed` and seed all RNGs (random, numpy, torch, ...), (3) emit
+  results as JSON on the **last** stdout line, (4) run via
+  `pip install -r requirements.txt && python run_experiment.py`, (5) expose a
+  single entry point across stages. Ship `requirements.txt` if external deps exist.
 
-This table allows reviewers (and the automated preflight check) to verify that
-every atomic concept has either a real implementation or an explicit, reasoned
-skip.
+- **G9 operational** — read `data.source` from `experiment_plan.yaml` FIRST.
+  - `file|api` → load from `/data/raw/<pipeline_id>/` (fetched by runner). **No** sklearn/torchvision substitutes, **no** synthetic replacement. Print a clear error if the data is missing — let the runner handle download.
+  - `synthetic` → generate in-code with `data.split.seed`. This is the ONLY case where built-in or in-memory generation is acceptable.
+  - Split before any feature engineering or normalization. Never compute global stats (mean/std) pre-split.
+  - If cleaning is needed, write a separate `clean_data.py` reading `/data/raw/<pipeline_id>/` → writing `/data/processed/<pipeline_id>/`, logging rows removed + transforms.
+  - Print provenance to stdout (source, rows, split sizes).
+  - Include in results JSON `config`: `data_source`, `data_split_seed`, `data_rows`, `data_hash` (from `data_manifest.yaml::directory_hash` if present).
+  - After runs, generate `data_manifest.yaml`:
+    ```python
+    from researchos.utils.data_manifest import generate_manifest, write_manifest
+    write_manifest(
+        generate_manifest("data/raw/<pipeline_id>", pipeline_id="<id>"),
+        "artifacts/pipeline_<id>/data_manifest.yaml",
+    )
+    ```
 
-## G6 Reproducibility (mandatory)
+## Reference Paper Baseline Faithfulness (when reference_methodology / reference_code exists)
 
-The script MUST:
-1. Print exact dependency versions at startup (e.g., `torch.__version__`)
-2. Accept `--seed` argument and set ALL random sources (random, numpy, torch, etc.)
-3. Output results as JSON to stdout on the last line (for automated capture)
-4. Be runnable from a clean environment with `pip install -r requirements.txt && python run_experiment.py`
-5. If the experiment has multiple stages, provide a single entry point that runs all stages
+1. Baseline must match the reference paper's actual methodology. Use the SAME model space, algorithms, and CV strategy (e.g., enumerate all 2^p subsets — do NOT substitute 3 fixed models; implement Occam's window + BIC — do NOT approximate with softmax; use 10-fold CV if the reference does — do NOT silently switch to LOO). Baseline numbers should be in the ballpark of the reference paper's reported numbers.
+2. Never over-simplify the baseline to make the proposed method look better — simplified baselines are strawmen.
+3. Avoid "diverse" model lists that are trivially equivalent (e.g., linear + logistic + Poisson regression all for binary classification).
+4. Use the reference paper's data: if `data.source: file` and `consistency_requirement` exists, load their actual data. Do NOT call `np.random.randn()`, `make_classification()`, `make_regression()`, etc., and do NOT define `generate_data()` / `simulate_data()`. The only acceptable generation is re-running the reference's own simulation code with their parameters.
 
-Write a `requirements.txt` alongside the code if external packages are needed.
+### Reuse markers for reference code
 
-## G9 Data Integrity (mandatory)
+When `experiment_plan.yaml` has a `reference_code` section, honor its `strategy`:
 
-**CRITICAL: Match the data source in experiment_plan.yaml exactly.**
-
-Read `data.source` from `experiment_plan.yaml` FIRST:
-
-- If `data.source` is `"file"` or `"api"`:
-  - The code MUST load data from `/data/raw/<pipeline_id>/` (downloaded by experiment_runner via `fetch_dataset`)
-  - Do NOT substitute with sklearn.datasets, torchvision.datasets, or any built-in loader
-  - Do NOT generate synthetic data as a replacement
-  - The code should: `pd.read_csv("data/raw/<pipeline_id>/filename.csv")` or equivalent
-  - If the data file doesn't exist yet, the code should print an error — the runner handles download
-
-- If `data.source` is `"synthetic"`:
-  - Generate data in-code using the seed from `data.split.seed`
-  - This is the ONLY case where built-in datasets or in-memory generation is acceptable
-
-Additional rules:
-1. Split data into train/val/test BEFORE any feature engineering or normalization
-2. Never compute global statistics (mean, std) before splitting
-3. If cleaning is needed, write a separate `clean_data.py` script that:
-   - Reads from `/data/raw/<pipeline_id>/`
-   - Writes cleaned output to `/data/processed/<pipeline_id>/`
-   - Logs: rows removed, transformations applied, before/after stats
-4. Print data provenance to stdout: source, row count, split sizes
-5. Include in the results JSON `config` dict:
-   - `data_source`: string describing what data was used
-   - `data_split_seed`: int (the seed used for splitting)
-   - `data_rows`: int (total rows if applicable)
-   - `data_hash`: string (from data_manifest.yaml `directory_hash` if available)
-6. After experiments complete, generate `data_manifest.yaml` by running:
-   ```python
-   from researchos.utils.data_manifest import generate_manifest, write_manifest
-   manifest = generate_manifest("data/raw/<pipeline_id>", pipeline_id="<id>")
-   write_manifest(manifest, "artifacts/pipeline_<id>/data_manifest.yaml")
-   ```
-
-## Reference Paper Baseline Faithfulness (mandatory)
-
-When `experiment_plan.yaml` contains `reference_methodology` or `reference_code`:
-
-1. **Baseline implementation MUST match the reference paper's actual methodology**:
-   - If reference uses "all 2^p variable subsets", the code must enumerate all subsets — do NOT substitute with 3 fixed models
-   - If reference uses "Occam's window + BIC", implement that — do NOT approximate with simple softmax
-   - If reference uses "10-fold CV", use 10-fold — do NOT switch to LOO-CV without justification
-   - The baseline should produce results COMPARABLE to those reported in the reference paper
-
-2. **Do NOT over-simplify the baseline** to make the proposed method look better:
-   - A simplified baseline is a strawman — it invalidates the comparison
-   - If the reference method is complex, implement it faithfully or reuse their code (see Reference Code Reuse below)
-
-3. **Avoid redundant or near-identical models as "diversity"**:
-   - Do NOT use linear regression + logistic regression + Poisson regression as "three different models" for binary classification — they are essentially the same
-   - Model diversity should reflect genuinely different assumptions or approaches
-
-4. **Use reference paper's data, not synthetic substitutes**:
-   - If `data.source` is "file" and `data.consistency_requirement` exists, the code MUST load the reference paper's actual data
-   - Do NOT call `np.random.randn()`, `make_classification()`, `make_regression()`, or any data generation function
-   - Do NOT write a `generate_data()` or `simulate_data()` function
-   - The ONLY acceptable data generation is when the reference paper itself generates data via specific simulation code — in that case, reproduce their exact parameters
-
-## Reference Code Reuse
-
-If `experiment_plan.yaml` contains a `reference_code` section:
-
-1. **strategy: fork_and_extend** — Base your code on the reference implementation.
-   Clearly mark which parts are original vs. borrowed with comments:
+- `fork_and_extend` → base code on the reference; delimit with:
    ```python
    # --- FROM: <paper title>, <repo URL> ---
-   # (original code, lightly adapted)
-   def original_eval_pipeline(...):
-       ...
+   def original_eval_pipeline(...): ...
    # --- END FROM ---
-
    # --- OUR CONTRIBUTION ---
-   def our_proposed_method(...):
-       ...
+   def our_proposed_method(...): ...
    # --- END OUR CONTRIBUTION ---
    ```
-
-2. **strategy: borrow_components** — Copy specific utilities (eval, data loading)
-   but implement the core method from scratch.
-
-3. **strategy: rewrite** — Write everything from scratch, but use the reference
-   as a specification (match their interface, metrics, data format).
+- `borrow_components` → copy utilities (eval, data loaders); write core method from scratch.
+- `rewrite` → write from scratch but match the reference's interface, metrics, and data format as a spec.
 
 ## User Directives
 

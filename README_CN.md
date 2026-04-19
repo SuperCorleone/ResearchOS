@@ -8,6 +8,7 @@
 
 **堵幻觉红线**（Wave 1）
 - **A12 原子概念 ↔ 代码双向映射**（吸收 HKU AI-Researcher）— 新增 `concept_extractor` agent，MAIN 阶段 DESIGN_REVIEW 之后、CODE 之前强制产出 `concepts.yaml`，Coder 必须按 `concept.id` 逐项实现或显式 SKIPPED，`preflight.py` 逐项校验缺项直接 BLOCK
+- **A20 参考代码库静态侦察**（原创，补 HKU code analyst 缺口）— 新增 `code_recon` 步，MAIN 阶段 DESIGN_REVIEW 之后、CONCEPT_EXTRACT 之前：`knowledge_compiler` 从 PDF 抽 github/gitlab/bitbucket/huggingface URL 写入 wiki frontmatter `code_refs`；`code_recon.py` 按 URL 做 `git clone --depth=1`（500MB 上限、自动剪枝 `.pth/.bin/.tar.gz` 等权重/压缩文件）；产出 `code_recon.yaml`（commit_sha / entry_points / dataset_hints / license）。`concept_extractor` 必须把 `reference_codebases` 写成 `<slug>::<path>::L<a>-L<b>` 三元组，`preflight.py` 用文件存在性+行数验真，假三元组直接 BLOCK。纯 Python 零 LLM，FAST_FAIL 跳过。
 - **A16 Advisor 每概念裁决** — Critic 额外产出 `advisor_verdict.yaml`，给每个原子概念 pass/fail + 建议
 - **A1 独立 CLI 重执行验证**（吸收 DeepScientist，原创实现）— RUN 后新增 RESULTS_REVERIFY 步，在 scratch 目录用独立子进程固定 seed 重跑，比对 metrics（>10% 漂移 BLOCK）
 - **A6 引用约束到 evidence_refs**（吸收 CycleResearcher + AI Scientist v1）— paper_writer 只能引用 `knowledge/raw/` 或 `evidence_refs` 里的论文，paper_auditor 做 bib 存在性扫描
@@ -239,9 +240,10 @@ PROPOSAL ──批准──→ FAST_FAIL(step=BASELINE_CONFIRM) ──→ FAST_F
                            /research fix --user-feedback 或 review --approve/tweak/kill
                                       ↓
 MAIN ──→ hypothesis → design → design_review
-     ──→ CONCEPT_EXTRACT（concepts.yaml）
+     ──→ CODE_RECON（code_recon.yaml；shallow clone + 静态扫）
+     ──→ CONCEPT_EXTRACT（concepts.yaml；reference_codebases 写为三元组）
      ──→ code（按 concept.id 逐项实现）
-     ──→ code_preflight（每 concept 存在性 BLOCK）
+     ──→ code_preflight（每 concept 存在性 BLOCK + 三元组行号验真 BLOCK）
      ──→ run
      ──→ RESULTS_REVERIFY（独立子进程固定 seed 重跑；>10% 漂移 BLOCK）
      ──→ critic（含 advisor_verdict.yaml）
@@ -675,6 +677,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | A17 | Baseline metric contract | DeepScientist OSS | `baseline_registry.py` + `BASELINE_CONFIRM` |
 | A18 | Flat Node + Journal 两级选择 | AI Scientist v2 | 合并入 A3 |
 | A19 | LaTeX 写作硬化 | AI Scientist v1 | `paper_writer.md` + `paper_audit.py` |
+| A20 | 参考代码库静态侦察（URL 抽取 + shallow clone + 三元组验真） | 原创（补 HKU code analyst 缺口） | `knowledge_compiler.extract_code_refs` + `code_recon.py` + `CODE_RECON` step + `preflight._check_reference_codebases` |
 | R1 | `fix` / `continue` 统一 | — | `scripts/run_research.py` |
 | R2 | Briefer Python 化 | — | `briefer.py` 取代 `research_briefer` agent |
 | R3 | Reviewer 不重算 G4 | — | `reviewer_simulator.md` |

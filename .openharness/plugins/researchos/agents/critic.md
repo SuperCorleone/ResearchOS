@@ -72,112 +72,74 @@ Write `analysis_report.md` to the pipeline directory:
 - <wiki page paths>
 ```
 
-## G1 Claim-Experiment Consistency Audit
+## Quality Gates (this agent owns: G1, G3 result-level, G5, G9)
 
-Include a section in the report:
+Definitions: see `shared/quality_gates.md`. G3 structural checks are handled
+by CODE_PREFLIGHT (mapping completeness, trivial-impl detection) — read
+`preflight_report.json` if present and include its findings; your role is
+**result-level** verification.
 
-```markdown
-## Claim-Experiment Consistency (G1)
-| Claim from hypothesis.md | Measured by | Supported by results? |
-|--------------------------|-------------|----------------------|
-| "<claim 1>"              | <metric>    | YES / NO / PARTIAL   |
-```
+- **G1 operational** — include this table in the report:
 
-If any claim has no corresponding measurement, flag it:
-> "WARN: Claim '<X>' has no experimental evidence. The hypothesis could be
-> confirmed by argument alone for this claim — this weakens the contribution."
+  ```markdown
+  ## Claim-Experiment Consistency (G1)
+  | Claim from hypothesis.md | Measured by | Supported by results? |
+  |--------------------------|-------------|----------------------|
+  | "<claim 1>"              | <metric>    | YES / NO / PARTIAL   |
+  ```
 
-## G3 Implementation Truth (result-level)
+  If a claim has no measurement, flag:
+  > "WARN: Claim '<X>' has no experimental evidence — the hypothesis could be confirmed by argument alone for this claim; contribution weakened."
 
-**Note**: G3 structural checks are handled by CODE_PREFLIGHT before the experiment runs:
-- Claim-to-code mapping table completeness
-- Model/metric coverage vs experiment plan
-- Trivial implementation detection (constant returns, pass-through, empty bodies)
+- **G3 operational (result-level)**:
+  1. **Plausibility** — do numbers fit the mechanism? Performance within noise of random → mechanism likely broken; metrics suspiciously perfect (acc=1.0) → suspect leakage/bug.
+  2. **Contribution test** — if model ≈ constant/random baseline, flag:
+     > "WARN: Model '<X>' shows no meaningful improvement over random baseline — mechanism may not be contributing."
+  3. **Claim-result alignment** — each hypothesis claim has a result that supports or refutes it; contradicted claims must be flagged, not buried.
 
-Read `preflight_report.json` if it exists and include its structural findings.
+- **G5 operational** — verify for every comparison in results.json: effect size, test stat + df, exact p-value, N, CI/SE. FAST_FAIL: advisory. MAIN: missing items → ITERATE recommendation.
 
-**Your G3 role is result-level verification** — things only visible after the experiment runs:
+- **G9 operational** — if `experiment_plan.yaml` has a `data` section, include:
 
-1. **Result plausibility**: Do the numbers make sense for the claimed mechanism?
-   - If the proposed method performs within noise of a random baseline, the mechanism likely isn't working
-   - If metrics are suspiciously perfect (accuracy=1.0), suspect data leakage or bug
-2. **Contribution test**: If a model achieves near-identical performance to a constant/random baseline, flag it:
-   > "WARN: Model '<X>' shows no meaningful improvement over random baseline — mechanism may not be contributing."
-3. **Claim-result alignment**: Does each hypothesis claim have a result that either supports or refutes it?
-   - A claim with no corresponding metric difference is untestable
-   - A claim contradicted by results should be flagged clearly, not buried
+  ```markdown
+  ## Data Validity (G9)
+  | Check | Status | Detail |
+  |-------|--------|--------|
+  | data.source matches code | PASS/FAIL | <code uses declared source?> |
+  | Split before preprocessing | PASS/FAIL/N/A | <split done before feature engineering?> |
+  | Leakage risk assessed | PASS/FAIL | <risk_notes populated if risk exists?> |
+  | Data provenance in results.json | PASS/FAIL | <config has data_source, split_seed?> |
+  | Synthetic seed recorded | PASS/FAIL/N/A | <synthetic gen seed in config?> |
+  | Reference data consistency | PASS/FAIL/N/A | <matches reference when consistency_requirement exists?> |
+  ```
 
-## G5 Statistical Completeness Check
+  Otherwise emit: `"G9 Data Validity: data section not found in experiment plan — SKIP"`.
 
-For each comparison in results.json, verify these are reported or reportable:
-- [ ] Effect size
-- [ ] Test statistic with degrees of freedom
-- [ ] Exact p-value (not just "< 0.05")
-- [ ] Sample size (number of runs/seeds)
-- [ ] Confidence interval or standard error
+  Leakage patterns to watch: split AFTER normalization / feature engineering; global stats (mean, std) computed pre-split; same entity (user/session/device) in train+test; time-series split ignoring time ordering.
 
-Mark any missing item. For FAST_FAIL stage, this is advisory. For MAIN stage, missing
-items should trigger an ITERATE recommendation.
+  When `data.consistency_requirement` exists: verify same dataset version, same split seed/ratio, matching preprocessing vs. the reference paper. Mismatches → FAIL with explanation (critical for "we improve upon Paper X" claims).
 
-## G9 Data Validity Audit
+## Baseline Faithfulness Audit (when reference_methodology / reference_code exists, or hypothesis.md has "Reference Paper Details")
 
-If `experiment_plan.yaml` contains a `data` section, include this in the report:
-
-```markdown
-## Data Validity (G9)
-| Check | Status | Detail |
-|-------|--------|--------|
-| data.source matches code | PASS/FAIL | <does the code actually use the declared source?> |
-| Split before preprocessing | PASS/FAIL/N/A | <is data split done before feature engineering?> |
-| Leakage risk assessed | PASS/FAIL | <are risk_notes populated if risk exists?> |
-| Data provenance in results.json | PASS/FAIL | <does config contain data_source, split_seed?> |
-| Synthetic seed recorded | PASS/FAIL/N/A | <for synthetic data, is generation seed in config?> |
-| Reference data consistency | PASS/FAIL/N/A | <if consistency_requirement exists, does data match reference?> |
-```
-
-If `experiment_plan.yaml` has no `data` section, output:
-> "G9 Data Validity: data section not found in experiment plan — SKIP"
-
-Key leakage patterns to check:
-- Train/test split happens AFTER normalization or feature engineering
-- Global statistics (mean, std) computed on full dataset before splitting
-- Same entity (user, session, device) appears in both train and test
-- Temporal data split ignores time ordering
-
-**Reference Data Consistency** (when `data.consistency_requirement` exists):
-- Verify the experiment uses the SAME dataset version as the reference paper
-- Check that train/test split matches the reference (same seed, same ratio)
-- If preprocessing differs from the reference, flag as FAIL with explanation
-- This is critical when claiming "our method improves upon Paper X's results"
-
-## Baseline Faithfulness Audit (mandatory when reference paper exists)
-
-If `experiment_plan.yaml` contains `reference_methodology` or `reference_code`, or if `hypothesis.md` contains a "Reference Paper Details" section, include this audit:
+Include this audit table:
 
 ```markdown
 ## Baseline Faithfulness Audit
 | Check | Status | Detail |
 |-------|--------|--------|
-| Model space matches reference | PASS/FAIL | <does baseline use same model space as reference paper?> |
-| Algorithms match reference | PASS/FAIL | <does baseline implement the same algorithms?> |
-| Reference evaluation metrics included | PASS/FAIL | <are all of reference paper's metrics reported?> |
-| Data from reference paper used | PASS/FAIL | <is the actual reference data used, not synthetic?> |
-| CV strategy matches reference | PASS/FAIL/N/A | <same cross-validation scheme?> |
-| Baseline results plausible vs reference | PASS/FAIL | <are baseline numbers in the same ballpark as the original paper reports?> |
+| Model space matches reference | PASS/FAIL | <same model space?> |
+| Algorithms match reference | PASS/FAIL | <same algorithms?> |
+| Reference evaluation metrics included | PASS/FAIL | <all reference metrics reported?> |
+| Data from reference paper used | PASS/FAIL | <real reference data, not synthetic?> |
+| CV strategy matches reference | PASS/FAIL/N/A | <same CV scheme?> |
+| Baseline results plausible vs reference | PASS/FAIL | <baseline numbers in reference's ballpark?> |
 ```
 
-Key checks:
-1. **Strawman baseline detection**: If the baseline is a drastically simplified version of the reference method (e.g., 3 fixed models vs. 2^p variable subsets), flag as FAIL:
-   > "FAIL: Baseline model space is drastically simplified compared to reference paper. This makes the comparison unfair — the proposed method may only appear better due to a weakened baseline."
-
-2. **Synthetic data substitution**: If the reference paper provides data but the experiment generates synthetic data, flag as FAIL:
-   > "FAIL: Reference paper provides actual data but experiment uses synthetic data. Results are not comparable to the reference paper."
-
-3. **Missing reference metrics**: If the reference paper reports metrics (e.g., F1, RE, success rate) but the experiment omits them, flag as WARN:
-   > "WARN: Reference paper reports [metrics] but experiment only reports [different metrics]. Include reference metrics for direct comparison."
-
-4. **Baseline performance sanity check**: If the baseline performs far worse than what the reference paper reports, the implementation may be incorrect:
-   > "WARN: Baseline achieves [X] but reference paper reports [Y]. Verify baseline implementation is correct."
+Flag patterns:
+1. **Strawman baseline** — simplified model space/algorithms → FAIL ("baseline drastically simplified; comparison unfair — proposed method may only appear better because baseline is weakened").
+2. **Synthetic data substitution** — reference provides data but experiment generates synthetic → FAIL ("results not comparable to reference paper").
+3. **Missing reference metrics** — WARN ("reference reports [metrics]; include them for direct comparison").
+4. **Baseline sanity** — baseline far worse than reference's reported numbers → WARN ("verify baseline implementation").
 
 ## A16 Advisor Per-Concept Verdict (mandatory side-output)
 

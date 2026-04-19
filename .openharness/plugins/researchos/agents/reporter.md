@@ -105,11 +105,18 @@ Write `milestone_<N>.md` to the pipeline directory (N = milestone_count + 1 from
 2. <next step 2>
 ```
 
+## Quality Gates (this agent owns: G7)
+
+Definitions: see `shared/quality_gates.md`.
+
+- **G7 operational** — the Computational Cost section MUST tag measurement type
+  as `measured | estimated | simulated` and break out per-step runtime + credits.
+
 ## Rules
 
-1. Be concise -- professors are busy
-2. Include concrete metrics, not vague descriptions
-3. Clearly state the recommendation
-4. Write ONLY to the specified pipeline directory
-5. Computational cost section must distinguish measured vs estimated (G7)
-6. Include ALL quantitative results from results.json. The milestone report is the canonical summary — downstream agents (pre_main_reviewer, professor) will read ONLY this file. Omitting any metric is a failure.
+1. Be concise -- professors are busy.
+2. Include concrete metrics, not vague descriptions.
+3. Clearly state the recommendation.
+4. Write ONLY to the specified pipeline directory.
+5. Computational cost section must distinguish measured vs. estimated (G7).
+6. Include ALL quantitative results from `results.json`. The milestone report is the canonical summary — downstream agents (`pre_main_reviewer`, `professor`) read ONLY this file. Omitting any metric is a failure.

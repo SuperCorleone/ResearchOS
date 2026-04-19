@@ -106,6 +106,15 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     trivial = _detect_trivial_implementations(code_text, issues)
     g3["trivial_functions"] = trivial
 
+    # 10. A20 — reference-codebase locator verification.
+    # For each concept's ``reference_codebases`` entry of the form
+    # ``<slug>::<path>::L<a>-L<b>``, verify the file exists in the cloned
+    # repo and the line range lies within the file. A bad triple BLOCKs
+    # the pipeline; URL-only entries are tolerated (WARN if we have a
+    # matching clone and the concept is nontrivial).
+    code_ref_result = _check_reference_codebases(pipeline_dir, project_root, issues)
+    checks["reference_codebases_grounded"] = code_ref_result.get("verdict", "PASS") != "BLOCK"
+
     # Determine verdict
     errors = [i for i in issues if i["severity"] == "ERROR"]
     warns = [i for i in issues if i["severity"] == "WARN"]
@@ -122,6 +131,7 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
         "checks": checks,
         "issues": issues,
         "g3_implementation_coverage": g3,
+        "reference_codebases": code_ref_result,
     }
 
 
@@ -835,3 +845,170 @@ def _collect_returns(body: list[ast.stmt]) -> list[ast.Return]:
         if isinstance(node, ast.Return):
             returns.append(node)
     return returns
+
+
+# ── A20 reference-codebase locator check ────────────────────────────
+
+# Matches "<slug>::<path>::L<start>-L<end>" locators emitted by
+# concept_extractor when code_recon.yaml reports a cloned repo.
+_CODE_REF_TRIPLE_RE = re.compile(
+    r"^(?P<slug>[A-Za-z0-9_.\-]+)::(?P<path>[^:]+)::L(?P<start>\d+)-L(?P<end>\d+)$"
+)
+
+
+def _load_code_recon_index(pipeline_dir: Path, project_root: Path) -> dict[str, Path]:
+    """Return ``slug -> repo_path`` for repos in code_recon.yaml with status ok/cached."""
+    recon_path = pipeline_dir / "code_recon.yaml"
+    if not recon_path.exists():
+        return {}
+    try:
+        recon = yaml.safe_load(recon_path.read_text()) or {}
+    except Exception:
+        return {}
+    index: dict[str, Path] = {}
+    for repo in recon.get("repos", []) or []:
+        if not isinstance(repo, dict):
+            continue
+        if repo.get("status") not in ("ok", "cached"):
+            continue
+        slug = str(repo.get("slug") or "")
+        path_str = str(repo.get("path") or "")
+        if not slug or not path_str:
+            continue
+        # path is repo-root relative to project_root (see code_recon.run_code_recon).
+        repo_path = project_root / path_str
+        if repo_path.exists():
+            index[slug] = repo_path
+    return index
+
+
+def _verify_triple(
+    slug: str,
+    rel_path: str,
+    line_start: int,
+    line_end: int,
+    repo_root: Path,
+) -> tuple[bool, str]:
+    """Return ``(ok, detail)`` for a single grounded locator triple."""
+    if line_start < 1 or line_end < line_start:
+        return False, f"invalid line range L{line_start}-L{line_end}"
+    # Resolve + containment check: prevent .. / absolute escapes.
+    try:
+        target = (repo_root / rel_path).resolve()
+        repo_root_resolved = repo_root.resolve()
+    except OSError as exc:
+        return False, f"resolve failed: {exc}"
+    try:
+        target.relative_to(repo_root_resolved)
+    except ValueError:
+        return False, f"path escapes repo root: {rel_path}"
+    if not target.exists() or not target.is_file():
+        return False, f"file not found in repo '{slug}': {rel_path}"
+    try:
+        total_lines = sum(1 for _ in target.open("r", errors="replace"))
+    except OSError as exc:
+        return False, f"read failed: {exc}"
+    if line_end > total_lines:
+        return False, (
+            f"line range L{line_start}-L{line_end} exceeds file length {total_lines}"
+        )
+    return True, ""
+
+
+def _check_reference_codebases(
+    pipeline_dir: Path, project_root: Path, issues: list[dict]
+) -> dict:
+    """A20 — verify grounded ``reference_codebases`` locators against cloned repos.
+
+    Every entry of the form ``<slug>::<path>::L<a>-L<b>`` must point at a
+    file that exists in the corresponding clone, with a line range that
+    fits inside the file. Mismatches add ``ERROR`` issues so the verdict
+    escalates to BLOCK. Plain URLs or free-text entries are reported in
+    ``per_concept`` but do not block (the concept_extractor is allowed
+    to fall back to URL-only when no clone matched).
+    """
+    result: dict = {
+        "verdict": "PASS",
+        "repos_indexed": 0,
+        "per_concept": {},
+        "triples_total": 0,
+        "triples_verified": 0,
+    }
+    concepts_path = pipeline_dir / "concepts.yaml"
+    if not concepts_path.exists():
+        # Nothing to check — e.g. FAST_FAIL stage, or no concept_extractor yet.
+        return result
+    try:
+        concepts = yaml.safe_load(concepts_path.read_text()) or []
+    except Exception:
+        return result
+    # concepts.yaml may be either a bare list or {"concepts": [...]} — handle both.
+    if isinstance(concepts, dict):
+        concepts = concepts.get("concepts", []) or []
+    if not isinstance(concepts, list) or not concepts:
+        return result
+
+    repo_index = _load_code_recon_index(pipeline_dir, project_root)
+    result["repos_indexed"] = len(repo_index)
+
+    had_error = False
+    for concept in concepts:
+        if not isinstance(concept, dict):
+            continue
+        cid = str(concept.get("id") or "")
+        entries = concept.get("reference_codebases", []) or []
+        if not isinstance(entries, list):
+            continue
+        per: list[dict] = []
+        for entry in entries:
+            if not isinstance(entry, str) or not entry.strip():
+                continue
+            m = _CODE_REF_TRIPLE_RE.match(entry.strip())
+            if not m:
+                per.append({"entry": entry, "kind": "url_or_text", "ok": True})
+                continue
+            result["triples_total"] += 1
+            slug = m.group("slug")
+            rel_path = m.group("path")
+            start = int(m.group("start"))
+            end = int(m.group("end"))
+            repo_root = repo_index.get(slug)
+            if repo_root is None:
+                had_error = True
+                per.append({
+                    "entry": entry, "kind": "triple", "ok": False,
+                    "error": f"slug '{slug}' not present in code_recon.yaml",
+                })
+                issues.append({
+                    "severity": "ERROR",
+                    "check": "reference_codebases",
+                    "detail": (
+                        f"A20: concept {cid or '?'} cites repo '{slug}' but "
+                        f"code_recon.yaml has no ok/cached entry for it"
+                    ),
+                })
+                continue
+            ok, detail = _verify_triple(slug, rel_path, start, end, repo_root)
+            if ok:
+                result["triples_verified"] += 1
+                per.append({"entry": entry, "kind": "triple", "ok": True})
+            else:
+                had_error = True
+                per.append({
+                    "entry": entry, "kind": "triple", "ok": False,
+                    "error": detail,
+                })
+                issues.append({
+                    "severity": "ERROR",
+                    "check": "reference_codebases",
+                    "detail": (
+                        f"A20: concept {cid or '?'} reference_codebases entry "
+                        f"'{entry}' failed verification ({detail})"
+                    ),
+                })
+        if per:
+            result["per_concept"][cid or f"<anon-{id(concept)}>"] = per
+
+    if had_error:
+        result["verdict"] = "BLOCK"
+    return result

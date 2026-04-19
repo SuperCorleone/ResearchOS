@@ -31,8 +31,44 @@ from researchos.utils.paths import ARTIFACTS_DIR, DECISIONS_DIR
 
 logger = logging.getLogger(__name__)
 
-# Agent definition files corresponding to each step
-STEP_AGENT: dict[PipelineStep, str] = {
+# Artifacts whose content must never be truncated in prompts (load-bearing
+# signals the downstream agent relies on verbatim).
+CRITICAL_ARTIFACTS: set[str] = {
+    "results.json",
+    "advisor_verdict.yaml",
+    "advisor_verdict.json",
+    "metric_contract.json",
+    "reverify_report.json",
+    "audit_report.md",
+    "preflight_report.json",
+    "concepts.yaml",
+}
+
+
+def _maybe_compress_artifact(content: str, artifact_name: str, step: str) -> str:
+    """Size+importance heuristic: keep short/critical artifacts verbatim, head+tail
+    truncate large non-critical artifacts to save prompt tokens."""
+    if not isinstance(content, str):
+        return content
+    if len(content) < 8000:
+        return content
+    # Check full name or basename against critical whitelist
+    base = artifact_name.rsplit("/", 1)[-1] if artifact_name else ""
+    if artifact_name in CRITICAL_ARTIFACTS or base in CRITICAL_ARTIFACTS:
+        return content
+    head = content[:3000]
+    tail = content[-2000:]
+    dropped = len(content) - len(head) - len(tail)
+    return f"{head}\n\n...[truncated {dropped} chars]...\n\n{tail}"
+
+
+# Agent definition files corresponding to each step.
+# Steps whose value is ``None`` are handled by pure-Python hooks in the
+# scheduler's ``_maybe_dispatch_specialised_step`` and MUST never reach the
+# generic LLM dispatch path — listing them here as sentinels guards against
+# accidental regressions that would otherwise fall through to the
+# ``pipeline_manager`` fallback agent (~35K tokens/call).
+STEP_AGENT: dict[PipelineStep, str | None] = {
     PipelineStep.HYPOTHESIS: "hypothesis_gen",
     PipelineStep.DESIGN: "exp_designer",
     PipelineStep.DESIGN_REVIEW: "design_reviewer",
@@ -42,6 +78,14 @@ STEP_AGENT: dict[PipelineStep, str] = {
     PipelineStep.CRITIC: "critic",
     PipelineStep.INTERROGATION: "interrogator",
     PipelineStep.REPORT: "reporter",
+    # Pure-Python / HITL gates — handled in scheduler, never dispatched.
+    PipelineStep.WAITING_APPROVAL: None,
+    PipelineStep.PRE_PUBLISH_GATE: None,
+    PipelineStep.BASELINE_CONFIRM: None,
+    PipelineStep.RESULTS_REVERIFY: None,
+    PipelineStep.CODE_RECON: None,
+    PipelineStep.CONCEPT_EXTRACT: "concept_extractor",
+    PipelineStep.BRANCH_SELECT: "branch_selector",
 }
 
 # Expected output artifact for each step
@@ -126,6 +170,75 @@ class Dispatcher:
         self._running: dict[str, asyncio.subprocess.Process] = {}
         self._executor: Any = None  # lazy AgentExecutor
         self.workflow = WorkflowConfig.load(project_root)
+        # Pre-load agent definitions once to avoid re-reading from disk on
+        # every dispatch; miss path still falls back to live disk read below.
+        self._agent_def_cache: dict[str, str] = {}
+        self._preload_agent_definitions()
+        # Pipeline-scoped KB query cache: (pipeline_id, normalized_query) -> result.
+        self._kb_cache: dict[tuple[str, str], str] = {}
+
+    def _preload_agent_definitions(self) -> None:
+        """Scan the plugin agents dir at startup so per-step prompts don't hit disk."""
+        agents_dir = (
+            self.project_root
+            / ".openharness"
+            / "plugins"
+            / "researchos"
+            / "agents"
+        )
+        if not agents_dir.exists():
+            return
+        for md_path in agents_dir.glob("*.md"):
+            try:
+                self._agent_def_cache[md_path.stem] = md_path.read_text()
+            except Exception:
+                # Leave this entry uncached; _get_agent_definition will retry.
+                logger.debug("Failed to preload agent definition %s", md_path, exc_info=True)
+
+    def _get_agent_definition(self, agent_name: str) -> str:
+        """Return cached agent definition text; fall back to disk read + cache on miss."""
+        cached = self._agent_def_cache.get(agent_name)
+        if cached is not None:
+            return cached
+        md_path = (
+            self.project_root
+            / ".openharness"
+            / "plugins"
+            / "researchos"
+            / "agents"
+            / f"{agent_name}.md"
+        )
+        if md_path.exists():
+            try:
+                text = md_path.read_text()
+                self._agent_def_cache[agent_name] = text
+                return text
+            except Exception:
+                logger.debug("Failed to read agent definition %s", md_path, exc_info=True)
+        return ""
+
+    @staticmethod
+    def _normalize_kb_query(query: str) -> str:
+        """Normalize KB query for cache key: lowercase, strip, collapse whitespace."""
+        return " ".join((query or "").lower().split())
+
+    def kb_retrieve_cached(
+        self,
+        pipeline_id: str,
+        query: str,
+        retrieve_fn: Any,
+    ) -> str:
+        """Pipeline-scoped KB query cache wrapper; avoids redundant duplicate queries.
+
+        ``retrieve_fn`` is invoked as ``retrieve_fn(query)`` only on cache miss.
+        """
+        key = (pipeline_id, self._normalize_kb_query(query))
+        if key in self._kb_cache:
+            return self._kb_cache[key]
+        result = retrieve_fn(query)
+        if isinstance(result, str):
+            self._kb_cache[key] = result
+        return result
 
     def _resolve_backend(self) -> str:
         """Determine which backend to use for live execution."""
@@ -151,6 +264,18 @@ class Dispatcher:
             self._executor = AgentExecutor(self.project_root)
         return self._executor
 
+    def _resolve_agent_model(self, agent_name: str, default_model: str | None) -> str | None:
+        """Look up a per-agent model override; return default on miss or import error."""
+        try:
+            from researchos.runtime.llm_client import get_model_for_agent  # type: ignore
+            step_model = get_model_for_agent(agent_name)
+            return step_model or default_model
+        except ImportError:
+            return default_model
+        except Exception:
+            logger.debug("get_model_for_agent failed for %s", agent_name, exc_info=True)
+            return default_model
+
     async def dispatch_via_executor(
         self, agent_name: str, prompt: str, pipeline_id: str
     ) -> dict[str, Any]:
@@ -162,6 +287,17 @@ class Dispatcher:
         a fenced or bare JSON object.
         """
         executor = self._get_executor()
+        # Per-agent model selection hook: temporarily override executor.model
+        # if a model mapping is registered for this agent.
+        default_model = getattr(executor, "model", None)
+        step_model = self._resolve_agent_model(agent_name, default_model)
+        model_overridden = False
+        if step_model and step_model != default_model:
+            try:
+                executor.model = step_model
+                model_overridden = True
+            except Exception:
+                logger.debug("Could not set executor.model; using default", exc_info=True)
         # Internal system calls (e.g. _system_evaluator, _system_miner) use
         # scratch/ instead of artifacts/ to avoid creating spurious pipeline dirs
         if pipeline_id.startswith("_system_"):
@@ -172,9 +308,18 @@ class Dispatcher:
         # Wrap the LLM-backed executor call with exponential-backoff retry so
         # transient RateLimitError / APITimeoutError / network errors don't
         # poison the pipeline. Exhausted retries re-raise the last exception.
-        result = await _retry_llm_async(
-            executor.execute, agent_name, prompt, pipeline_id, pdir
-        )
+        try:
+            result = await _retry_llm_async(
+                executor.execute, agent_name, prompt, pipeline_id, pdir
+            )
+        finally:
+            # Always restore the default model so subsequent calls aren't
+            # affected by this per-agent override.
+            if model_overridden:
+                try:
+                    executor.model = default_model
+                except Exception:
+                    logger.debug("Could not restore executor.model", exc_info=True)
 
         # Best-effort post-processing: don't break existing callers
         try:
@@ -212,7 +357,21 @@ class Dispatcher:
             return self._run_code_preflight(pipeline)
 
         prompt = self._build_step_prompt(pipeline, step)
-        agent_name = self.workflow.get_step_agent(step.value) or STEP_AGENT.get(step, "pipeline_manager")
+        agent_name = (
+            self.workflow.get_step_agent(step.value)
+            or STEP_AGENT.get(step)
+            or "pipeline_manager"
+        )
+        if agent_name == "pipeline_manager":
+            # Any step reaching this branch escaped the scheduler's
+            # specialised dispatch and the workflow YAML. Before spending
+            # ~35K tokens on the generic fallback, log loudly so the cause
+            # is obvious in cost_report.json.
+            logger.warning(
+                "Step %s dispatched via pipeline_manager fallback — check "
+                "workflow_config.yaml and scheduler._maybe_dispatch_specialised_step",
+                step.value,
+            )
         logger.info(
             "Dispatching step=%s for pipeline=%s", step.value, pipeline.pipeline_id
         )
@@ -534,23 +693,20 @@ class Dispatcher:
     def _build_step_prompt(self, pipeline: PipelineState, step: PipelineStep) -> str:
         pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         state_path = pdir / "state.json"
-        agent_name = self.workflow.get_step_agent(step.value) or STEP_AGENT.get(step, "pipeline_manager")
-
-        # Load agent definition if available
-        agent_def_path = (
-            self.project_root
-            / ".openharness"
-            / "plugins"
-            / "researchos"
-            / "agents"
-            / f"{agent_name}.md"
+        agent_name = (
+            self.workflow.get_step_agent(step.value)
+            or STEP_AGENT.get(step)
+            or "pipeline_manager"
         )
+
+        # Load agent definition from pre-built cache (falls back to disk on miss).
+        agent_def_text = self._get_agent_definition(agent_name)
         agent_instructions = ""
-        if agent_def_path.exists():
+        if agent_def_text:
             agent_instructions = (
                 f"\n## Agent Protocol\n"
                 f"Follow the instructions in the {agent_name} agent definition:\n\n"
-                f"{agent_def_path.read_text()}\n"
+                f"{agent_def_text}\n"
             )
 
         # Get the expected output filename for this step
@@ -558,34 +714,49 @@ class Dispatcher:
         if step == PipelineStep.REPORT:
             expected_output = f"milestone_{pipeline.milestone_count + 1}.md"
 
-        # Build structural design check for DESIGN_REVIEW step
+        # Build structural design check for DESIGN_REVIEW step.
+        # Lazy injection: if everything passes, collapse the full table into a
+        # single-line sentinel; on failure, only surface the failed checks.
         design_check_notice = ""
         if step == PipelineStep.DESIGN_REVIEW:
             from researchos.runtime.design_checks import validate_design
             design_report = validate_design(pdir)
-            check_lines = []
-            for name, passed in design_report["checks"].items():
-                status = "PASS" if passed else "FAIL"
-                check_lines.append(f"| {name} | {status} |")
-            issues_text = "\n".join(
-                f"- [{i['severity']}] {i['check']}: {i['detail']}"
-                for i in design_report["issues"]
-            )
-            design_check_notice = (
-                f"\n## Automated Structural Checks (pre-computed)\n"
-                f"| Check | Status |\n|-------|--------|\n"
-                + "\n".join(check_lines)
-                + f"\n\nPass: {design_report['pass_count']}, "
-                f"Fail: {design_report['fail_count']}\n"
-            )
-            if issues_text:
-                design_check_notice += f"\n### Issues Found\n{issues_text}\n"
-            design_check_notice += (
-                "\nIncorporate these structural findings into your review. "
-                "Focus your analysis on scientific validity, baseline adequacy, "
-                "and success criteria realism — the structural checks above "
-                "already cover completeness.\n"
-            )
+            checks = design_report["checks"]
+            fail_count = design_report["fail_count"]
+            if fail_count == 0:
+                design_check_notice = (
+                    "\n## Automated Structural Checks (pre-computed)\n"
+                    "[ALL_STRUCTURAL_CHECKS_PASS — structural detail list omitted]\n"
+                    "\nFocus your analysis on scientific validity, baseline adequacy, "
+                    "and success criteria realism — the structural checks above "
+                    "already cover completeness.\n"
+                )
+            else:
+                failed_lines = [
+                    f"| {name} | FAIL |"
+                    for name, passed in checks.items()
+                    if not passed
+                ]
+                issues_text = "\n".join(
+                    f"- [{i['severity']}] {i['check']}: {i['detail']}"
+                    for i in design_report["issues"]
+                )
+                design_check_notice = (
+                    f"\n## Automated Structural Checks (pre-computed)\n"
+                    f"Only FAILed checks listed below ({fail_count} fail, "
+                    f"{design_report['pass_count']} pass — PASS items omitted).\n"
+                    f"| Check | Status |\n|-------|--------|\n"
+                    + "\n".join(failed_lines)
+                    + "\n"
+                )
+                if issues_text:
+                    design_check_notice += f"\n### Issues Found\n{issues_text}\n"
+                design_check_notice += (
+                    "\nAddress the failed structural checks in your review. "
+                    "Focus your analysis on scientific validity, baseline adequacy, "
+                    "and success criteria realism — passing structural checks "
+                    "already cover completeness.\n"
+                )
 
         # Build data compliance notice for RUN step
         data_notice = ""
@@ -693,6 +864,15 @@ class Dispatcher:
         else:
             filtered = pipeline.artifacts
 
+        # Apply size+importance compression heuristic to any artifact whose
+        # value is a large non-critical string (filenames stay untouched).
+        filtered = {
+            k: _maybe_compress_artifact(v, k if not isinstance(v, str) else v, step.value)
+            if isinstance(v, str)
+            else v
+            for k, v in filtered.items()
+        }
+
         return f"""You are executing an atomic research step as the **{agent_name}** agent.
 
 ## Task
@@ -724,19 +904,12 @@ Use the filename as-is (relative path). Do NOT use absolute paths.
         files_list = "\n".join(f"- {f}" for f in context_files)
         decisions_dir = self.project_root / "decisions"
 
-        # Load professor agent definition
-        prof_def_path = (
-            self.project_root
-            / ".openharness"
-            / "plugins"
-            / "researchos"
-            / "agents"
-            / "professor.md"
-        )
+        # Load professor agent definition from the startup cache (with disk fallback).
+        prof_def_text = self._get_agent_definition("professor")
         prof_instructions = ""
-        if prof_def_path.exists():
+        if prof_def_text:
             prof_instructions = (
-                f"\n## Agent Protocol\n{prof_def_path.read_text()}\n"
+                f"\n## Agent Protocol\n{prof_def_text}\n"
             )
 
         return f"""You are the Professor agent making a research decision.

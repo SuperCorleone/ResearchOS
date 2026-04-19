@@ -41,10 +41,14 @@ class TestStepRouting:
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
         # In MAIN, DESIGN is dynamically resolved.
-        # Wave 2: DESIGN_REVIEW → CONCEPT_EXTRACT → CODE
+        # Wave 2 + A20: DESIGN_REVIEW → CODE_RECON → CONCEPT_EXTRACT → CODE
         key = (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW)
         assert key in _NEXT_STEP
-        assert _NEXT_STEP[key] == PipelineStep.CONCEPT_EXTRACT
+        assert _NEXT_STEP[key] == PipelineStep.CODE_RECON
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CODE_RECON)]
+            == PipelineStep.CONCEPT_EXTRACT
+        )
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT)]
             == PipelineStep.CODE

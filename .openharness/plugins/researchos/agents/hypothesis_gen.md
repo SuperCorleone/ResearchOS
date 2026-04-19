@@ -63,22 +63,14 @@ Write `hypothesis.md` to the pipeline directory:
 - **What Must Stay Same**: <data, baseline implementation, evaluation metrics that must match for fair comparison>
 ```
 
-## G1 Claim-Experiment Consistency (mandatory self-check)
+## Quality Gates (this agent owns: G1)
 
-Before finalizing, verify:
+Definitions: see `shared/quality_gates.md`.
 
-1. **Keyword operationalization**: Every key term in the hypothesis MUST have a measurable definition.
-   - "collaboration" → multiple entities share state or fuse results (specify how)
-   - "adaptive" → feedback-driven update mechanism (specify the loop)
-   - "optimization" → explicit objective, constraints, and comparison baseline
-   - If a term cannot be operationalized, rewrite the hypothesis to remove it.
-
-2. **Experiment necessity test**: Could the hypothesis be confirmed or denied by argument alone,
-   without running any experiment? If yes, the hypothesis is too vague — it must require
-   empirical evidence that cannot be obtained by reasoning alone.
-
-3. **Measurement mapping**: Each testable prediction must name the exact metric and threshold.
-   Do NOT write vague predictions like "performance improves" — write "accuracy > 85% on dataset X".
+- **G1 operational checks** (must all pass before writing `hypothesis.md`):
+  1. Every key term is operationalized. Examples: "collaboration" → which entities share what state; "adaptive" → which feedback loop; "optimization" → objective + constraints + baseline. Rewrite to remove any term you cannot operationalize.
+  2. The hypothesis requires empirical evidence — it cannot be confirmed/denied by argument alone.
+  3. Every testable prediction names an exact metric + threshold (not "performance improves").
 
 ## Reference Paper Analysis (mandatory when evidence_refs exist)
 

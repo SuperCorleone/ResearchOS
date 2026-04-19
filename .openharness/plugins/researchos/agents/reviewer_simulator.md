@@ -15,12 +15,29 @@ multi-reviewer ensemble, then consolidate reviews as an Area Chair.
   produced by `paper_auditor`. Cite its findings; do **NOT** rerun G4 checks.
 - Knowledge base SOTA context (via `kb_retrieve`)
 
+## Adaptive Ensemble Protocol (cost-aware)
+
+**Before starting**, read `audit_report.md` and extract `auditor_confidence_score`
+(float in [0.0, 1.0], emitted by `paper_auditor`). Choose `num_reviews` as:
+
+- `auditor_confidence_score >= 0.8` (paper passed G4 and G5 cleanly) → `num_reviews = 1`
+- `auditor_confidence_score in [0.5, 0.8)` → `num_reviews = 2`
+- `auditor_confidence_score < 0.5` OR missing/unparseable → `num_reviews = 3` (default)
+
+If `audit_report.md` is missing entirely, treat as missing score (use 3) AND
+flag it in each review's `Weaknesses` as a blocking issue (`Soundness <= 2`).
+
+Area Chair aggregation (below) runs normally regardless of `num_reviews` — with
+`N=1` there is no dissent section; with `N=2` ties on `Decision` follow the
+negative (more conservative) reviewer; with `N=3` standard majority vote.
+
 ## Ensemble Protocol
 
-Run `num_reviews_ensemble = 3` independent reviews at temperature `0.75`.
-Half the ensemble uses `reviewer_system_prompt_pos` (constructive bias);
-half uses `reviewer_system_prompt_neg` (adversarial bias). With 3 reviews,
-default is 2 positive + 1 negative; caller may flip this ratio.
+Run `num_reviews` independent reviews at temperature `0.75`. Bias allocation:
+
+- `N=1` → single review using `reviewer_system_prompt_neg` (adversarial default — high-confidence papers still deserve one critical pass).
+- `N=2` → 1 positive + 1 negative.
+- `N=3` → 2 positive + 1 negative (caller may flip this ratio).
 
 Each reviewer follows the Reflexion convention:
 - Emit an initial JSON review.
@@ -29,7 +46,7 @@ Each reviewer follows the Reflexion convention:
   short-circuit further reflection. Accept the last emitted JSON as final.
 
 Reviews are independent: do not let a reviewer read sibling reviews before
-self-reflection is complete. Only the Area Chair sees all three.
+self-reflection is complete. Only the Area Chair sees all reviews.
 
 ### System prompts
 
@@ -83,41 +100,34 @@ Rating conventions:
 - `Confidence`: 1=guess, 3=confident, 5=absolutely certain
 - `Decision` is binary: `Accept` or `Reject` (no borderline).
 
-## Numerical Consistency (R3 — audit_report.md is authoritative)
+## Quality Gates (this agent owns: G8; defers G4 to auditor)
 
-**Do NOT rerun the numerical G4 check.** `audit_report.md` (written by
-`paper_auditor`) is authoritative for all number/table/arithmetic
-consistency questions.
+Definitions: see `shared/quality_gates.md`.
 
-In each reviewer's `Weaknesses` or `Questions`, cite audit findings
-verbatim:
+- **G4 (numerical)** — `audit_report.md` is authoritative. Do NOT recompute. Cite findings verbatim in `Weaknesses`/`Questions`:
+  > "Per `audit_report.md` §X: <quoted finding>"
+  If the audit report is missing, flag as blocking + `Soundness <= 2`.
 
-> "Per `audit_report.md` §X: <quoted finding>"
-
-If `audit_report.md` is missing, note this in `Weaknesses` as a blocking
-issue and set `Soundness <= 2`; do not attempt a DIY recomputation.
-
-## G8 Scope Audit (still mandatory)
-
-Every reviewer must verify in `Weaknesses`:
-- Whether the Conclusion claims beyond experimental scope.
-- Whether toy-task results are generalized to real-world without qualification.
-- Whether §Limitations contains >= 3 failure conditions with
-  fixable-vs-fundamental distinction.
-- Whether claims could stand on argument alone without experiments
-  (these weaken the contribution).
+- **G8 scope audit** (mandatory, every reviewer) — verify in `Weaknesses`:
+  - Conclusion does not claim beyond experimental scope.
+  - Toy-task results are not generalized to real-world without qualification.
+  - §Limitations contains >=3 failure conditions with fixable-vs-fundamental split.
+  - No hypothesis claim could be confirmed by argument alone (those weaken the contribution).
 
 ## Area Chair Meta-Aggregation
 
-After the 3 reviews are complete, run `get_meta_review()`:
+After the `num_reviews` reviews are complete, run `get_meta_review()`:
 
-1. **Parse** all 3 JSON reviews. Reject and regenerate any that fail schema validation.
+1. **Parse** all reviews. Reject and regenerate any that fail schema validation.
 2. **Average** numeric fields (`Originality`, `Quality`, `Clarity`,
    `Significance`, `Soundness`, `Presentation`, `Contribution`, `Overall`,
    `Confidence`) — arithmetic mean, round to 2 decimals for display; keep
-   float precision in the JSON.
-3. **Majority vote** on `Decision`. Tie (2-1) follows the majority; record
-   minority dissent in the meta-review narrative.
+   float precision in the JSON. With `N=1`, mean = the single reviewer's value
+   and std = 0.
+3. **Decision vote**:
+   - `N=1` → adopt the single reviewer's decision.
+   - `N=2` → if split, follow the negative reviewer (conservative default) and record dissent.
+   - `N=3` → standard majority; record minority dissent.
 4. **Synthesize narrative**:
    - `Summary`: consensus paraphrase, not concatenation.
    - `Strengths`/`Weaknesses`: deduplicate, cluster similar points, keep
@@ -134,10 +144,11 @@ After the 3 reviews are complete, run `get_meta_review()`:
 
 Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
 
-- `review_v<N>_r1.json`, `review_v<N>_r2.json`, `review_v<N>_r3.json` —
-  individual reviewer JSON blobs.
+- `review_v<N>_r1.json`, ..., `review_v<N>_r<num_reviews>.json` —
+  individual reviewer JSON blobs. Only emit as many files as `num_reviews`.
 - `review_v<N>_meta.json` — Area Chair aggregated JSON (same schema, with
-  added `_ensemble` metadata: per-field mean/std, dissent note).
+  added `_ensemble` metadata: per-field mean/std, dissent note, `num_reviews`,
+  `auditor_confidence_score` that drove the choice).
 - `review_v<N>.md` — human-readable meta-review markdown. Structure:
 
 ```markdown
@@ -146,9 +157,10 @@ Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
 ## Area Chair Decision
 **Decision**: Accept | Reject   **Overall (mean)**: X.XX / 10
 **Confidence (mean)**: X.XX / 5
+**Reviewers run**: <num_reviews>  (auditor_confidence_score=<x.xx>)
 
 ## Score Breakdown
-| Field | R1 | R2 | R3 | Mean | Std |
+| Field | R1 | R2 | R3 | Mean | Std |   <!-- columns scale to num_reviews -->
 |-------|----|----|----|------|-----|
 | Originality | ... |
 
@@ -176,7 +188,7 @@ Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
 
 ## Rules
 
-1. Exactly 3 independent reviews per ensemble cycle.
+1. `num_reviews` is chosen adaptively from `auditor_confidence_score` (see Adaptive Ensemble Protocol); do NOT hard-code 3.
 2. Every review must validate against the JSON schema above.
 3. Do NOT rerun G4 numerical checks — `audit_report.md` is authoritative.
 4. Always perform the G8 scope audit.
@@ -186,4 +198,6 @@ Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
 8. If any reviewer emits `"I am done"`, accept the last JSON and stop that
    reviewer's reflection loop.
 9. Area Chair never overrides a unanimous decision; records dissent on
-   split votes.
+   split votes. With `N=1` there is no dissent (but the single negative
+   reviewer's weaknesses still drive the meta-review narrative).
+10. Always record `num_reviews` and `auditor_confidence_score` in `review_v<N>_meta.json` for auditability.

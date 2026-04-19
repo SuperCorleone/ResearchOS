@@ -55,41 +55,22 @@ Write `results.json` to the pipeline directory. It MUST follow this exact schema
 5. If the script prints JSON on the last line of stdout, parse it as the result
 6. Capture stderr for debugging but do not treat warnings as failures
 
-## G9 Data Provenance (mandatory)
+## Quality Gates (this agent owns: G9 provenance + source compliance)
 
-Include the following in the `config` dict of results.json:
-- `data_source`: string (e.g., "synthetic", "MovieLens-1M", "generated in-memory")
-- `data_rows`: int (total data points used, if applicable)
-- `split_seed`: int (the seed used for train/test splitting)
-- `data_hash`: string (from `data_manifest.yaml` directory_hash, if the file exists)
+Definitions: see `shared/quality_gates.md`.
 
-Read the `data` section from `experiment_plan.yaml` to determine these values.
-If the experiment script prints data provenance to stdout, capture it in config.
+- **G9 operational** — before running, read `data.source` in `experiment_plan.yaml`:
+  - `file|api` → call `fetch_dataset` FIRST to download to `/data/raw/<pipeline_id>/`. Never fall back to sklearn/torchvision built-ins. If `fetch_dataset` fails, record the error in `notes` — do NOT substitute a built-in dataset.
+  - `synthetic` → generate in-code with `data.split.seed`; set `data_hash = "synthetic_seed_{seed}"` in config.
 
-If `data_manifest.yaml` exists in the pipeline directory, read the `directory_hash`
-field and include it as `data_hash` in config for full reproducibility tracking.
+- **Provenance in `results.json.config`** (mandatory):
+  - `data_source` — string (e.g., "synthetic", "MovieLens-1M").
+  - `data_rows` — int (total rows, if applicable).
+  - `split_seed` — int (seed used for train/test split).
+  - `data_hash` — read `directory_hash` from `data_manifest.yaml` if present; otherwise `synthetic_seed_{seed}`.
 
-If the experiment requires external data and `data/raw/<pipeline_id>/` does not exist,
-use `fetch_dataset` to download the data before running the experiment.
-
-## G9 Data Source Compliance (mandatory)
-
-Before running the experiment, read `experiment_plan.yaml` and check `data.source`:
-
-- If `data.source` is `"file"` or `"api"`:
-  1. You MUST call `fetch_dataset` to download the data BEFORE running the experiment
-  2. Do NOT use sklearn.datasets, torchvision.datasets, or any built-in loaders as a substitute
-  3. The experiment plan specifies the URL — use it
-  4. If `fetch_dataset` fails (network error), report the error in `notes` — do NOT fall back to built-in datasets
-  5. After download, read `data_manifest.yaml` from the pipeline directory and include `directory_hash` as `data_hash` in results config
-
-- If `data.source` is `"synthetic"`:
-  1. Generate data in-code with the seed from `data.split.seed`
-  2. Set `data_hash` to `"synthetic_seed_{seed}"` in results config
-
-This rule exists because the G9 critic audit checks whether code uses the same data source
-as the plan. Using a different source (e.g., sklearn loader when plan says UCI download)
-will be flagged as a FAIL and the pipeline may be rejected.
+If the script prints provenance to stdout, capture it. The `data.source` in
+code MUST match the plan — the critic's G9 audit will FAIL otherwise.
 
 ## Rules
 

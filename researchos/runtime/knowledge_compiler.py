@@ -190,6 +190,44 @@ def _extract_pdf_text(pdf_path: Path, max_pages: int = 20) -> str:
     return "\n\n".join(pages)
 
 
+# A20: code-reference URL extraction from paper text.
+_CODE_HOST_RE = re.compile(
+    r"https?://(?:www\.)?"
+    r"(?:github\.com|gitlab\.com|bitbucket\.org|huggingface\.co|codeberg\.org)"
+    r"/[A-Za-z0-9][\w.\-]*/[A-Za-z0-9][\w.\-]+"
+    r"(?:/tree/[\w.\-/]+)?",
+    re.IGNORECASE,
+)
+
+
+def extract_code_refs(text: str) -> list[str]:
+    """Return a deduplicated list of code-host URLs found in *text*.
+
+    Supports GitHub, GitLab, Bitbucket, HuggingFace Hub, and Codeberg. Strips
+    trailing punctuation and parentheses that often appear around URLs in
+    PDF-extracted text. Paths are truncated at the second path segment so we
+    always return the repo root (callers can pin a commit later).
+    """
+    if not text:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in _CODE_HOST_RE.finditer(text):
+        raw = match.group(0)
+        # Strip trailing punctuation that PDF extraction often glues on.
+        while raw and raw[-1] in ".,);]}>":
+            raw = raw[:-1]
+        # Truncate to owner/repo (drop /tree/..., /blob/..., etc.) so dedup works.
+        parts = raw.split("/")
+        if len(parts) >= 5:
+            raw = "/".join(parts[:5])
+        if raw in seen:
+            continue
+        seen.add(raw)
+        urls.append(raw)
+    return urls
+
+
 def _slugify(text: str) -> str:
     """Convert text to a safe filename slug."""
     slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
@@ -225,12 +263,14 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
     if dest.exists():
         return None
 
+    code_refs = extract_code_refs(text)
     content = _make_wiki_page(
         title=stem,
         tags=["raw-import", suffix.lstrip(".")],
         source=str(raw_file.relative_to(root)) if raw_file.is_relative_to(root) else str(raw_file),
         created=ts,
         body=text,
+        code_refs=code_refs,
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
@@ -256,13 +296,22 @@ def compile_all_raw(project_root: Path | None = None) -> list[Path]:
 
 
 def _make_wiki_page(
-    title: str, tags: list[str], source: str, created: str, body: str
+    title: str,
+    tags: list[str],
+    source: str,
+    created: str,
+    body: str,
+    code_refs: list[str] | None = None,
 ) -> str:
-    """Format a wiki page with YAML frontmatter."""
-    frontmatter = yaml.dump(
-        {"title": title, "tags": tags, "source": source, "created": created},
-        default_flow_style=False,
-    ).strip()
+    """Format a wiki page with YAML frontmatter.
+
+    When ``code_refs`` is non-empty, a ``code_refs:`` list is added to the
+    frontmatter. These URLs are consumed by the CODE_RECON step (A20).
+    """
+    meta: dict = {"title": title, "tags": tags, "source": source, "created": created}
+    if code_refs:
+        meta["code_refs"] = list(code_refs)
+    frontmatter = yaml.dump(meta, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n\n# {title}\n\n{body}\n"
 
 

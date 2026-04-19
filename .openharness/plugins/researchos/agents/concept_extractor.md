@@ -22,6 +22,16 @@ survey → paper analyst → code analyst → back-to-survey loop.
 - `evidence_refs.json` or similar paper list (if present)
 - Wiki snippets via `kb_retrieve`
 - Optional `reference_code` and `reference_methodology` sections in the plan
+- **`code_recon.yaml`** from the pipeline directory (A20). When present,
+  this file lists the shallow-cloned reference codebases with their
+  relative paths on disk, entry points, dataset hints, and HEAD commit
+  SHAs. Use it to ground `reference_codebases` locators in real code.
+  Schema note (doc-only): an optional `reusable_functions` field per repo
+  MAY appear as a list of `<slug>::<path>::L<a>-L<b>` triples identifying
+  already-implemented reusable functions; when present, the coder agent's
+  Code Reuse Protocol (see `coder.md`) uses it to avoid re-implementing
+  building blocks. This is a documentation-level addition; the Python
+  schema is consumed opportunistically — unknown fields are silently ignored.
 
 ## System Prompt (mandatory phrasing)
 
@@ -71,7 +81,36 @@ For each atomic concept:
    this concept and record it as `<file>::<func>` in `code_implementation`.
 2. Otherwise, describe the minimal code contract needed (e.g., `softmax(q) over
    action set`), still in `code_implementation`.
-3. Record the upstream repo URL (if any) in `reference_codebases`.
+3. If `code_recon.yaml` is present and contains a repo whose `status` is `ok`
+   or `cached`, open the repo under the reported `path` and locate the
+   function or code block that implements this concept. Record the locator
+   in `reference_codebases` as a **grounded triple**:
+
+       "<slug>::<relative/path/to/file.py>::L<start>-L<end>"
+
+   where `<slug>` matches `code_recon.yaml::repos[].slug`, the path is
+   relative to the cloned repo root, and the line range is inclusive and
+   corresponds to lines that actually exist in the file. `preflight.py`
+   verifies every triple by line-slicing the file — fabricated locators
+   will BLOCK the pipeline.
+4. If `code_recon.yaml` lists no repos (empty `repos: []`) or no match can
+   be made, fall back to the upstream repo URL (if any) as a plain string.
+   Preflight tolerates URL-only entries but logs a WARN.
+
+**Priority — reusable_functions candidates (Task N)**: when producing the
+`reference_codebases` triples, **prefer entries that point to concrete,
+already-implemented functions** (ready to copy/import) over pseudocode or
+high-level module references. The coder agent reads these triples to reuse
+implementations instead of re-writing them. Good candidates:
+
+- Complete function bodies with clear interfaces (e.g., `train_step`, `evaluate`, `build_loader`).
+- Self-contained utilities (metric computation, data loaders, loss functions).
+- Functions with permissive licenses (see `code_recon.yaml::repos[].license`).
+
+Skip entries that are: empty stubs, one-line wrappers, or blocks behind heavy
+unstated dependencies. When emitting a triple, optionally annotate it in
+`reference_codebases` as `"<triple>   # reusable: <function_name>"` so the
+coder's Code Reuse Protocol can match fast.
 
 ### Phase 4 — Transfer back to survey
 
@@ -92,7 +131,8 @@ conforming to `researchos.schemas.concept.AtomicConcept`:
   reference_papers:
     - "Sutton & Barto 2018, Ch.2"
   reference_codebases:
-    - "https://github.com/example/rl-baselines"
+    # Preferred: grounded triple verified by preflight.
+    - "example__rl_baselines::src/policy/softmax.py::L42-L71"
 - id: C2
   definition: "Majority-vote fusion over ensemble members."
   math_formula: "\\hat{y} = \\mathrm{mode}(\\{y^{(k)}\\}_{k=1}^K)"

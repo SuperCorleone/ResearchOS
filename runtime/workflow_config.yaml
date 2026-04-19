@@ -22,6 +22,53 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
+# Model tier configuration (D' — model tiering for token cost optimization)
+# ---------------------------------------------------------------------------
+# `model_tiers` maps tier labels (T1/T2/T3) to concrete model ids.
+# Each value supports `${VAR:-default}` env-var substitution handled by
+# `llm_client.get_model_for_agent`.
+#
+#   T1 — strongest reasoning (defaults to gpt-5.4)
+#   T2 — mid-range structured generation (defaults to gpt-4o)
+#   T3 — economy tier for low-reasoning steps (defaults to gpt-o4-mini)
+#
+# `agent_model_tiers` assigns each agent role to a tier. Agents that are
+# not listed (including `pipeline_manager`, which is deliberately deferred
+# pending investigation under task C) fall back to the environment variable
+# `RESEARCHOS_MODEL` inside `llm_client.get_model_for_agent`, preserving
+# full backward compatibility with deployments that do not define tiers.
+model_tiers:
+  T1: "${RESEARCHOS_MODEL_T1:-gpt-5.4}"
+  T2: "${RESEARCHOS_MODEL_T2:-gpt-4o}"
+  T3: "${RESEARCHOS_MODEL_T3:-gpt-o4-mini}"
+
+agent_model_tiers:
+  # T1 — 9 high-reasoning agents
+  professor: T1
+  knowledge_miner: T1
+  hypothesis_gen: T1
+  exp_designer: T1
+  coder: T1
+  critic: T1
+  interrogator: T1
+  paper_writer: T1
+  reviewer_simulator: T1
+
+  # T2 — 8 structured-generation agents (F': reporter downgraded to T2)
+  design_reviewer: T2
+  concept_extractor: T2
+  reporter: T2
+  pre_main_reviewer: T2
+  paper_auditor: T2
+  fixer: T2
+  vlm_reviewer: T2
+  branch_selector: T2
+
+  # T3 — 2 low-reasoning agents (pipeline_manager intentionally omitted)
+  experiment_runner: T3
+  lit_scout: T3
+
+# ---------------------------------------------------------------------------
 # Retry state-machine constants (A14)
 # ---------------------------------------------------------------------------
 # These govern how the scheduler + experiment runner bound retries and
@@ -65,6 +112,15 @@ steps:
     timeout: 300
     retries: 3
     type: llm
+
+  code_recon:
+    # A20 — shallow-clone reference codebases + static scan.
+    # Pure Python; no LLM. Runs only in MAIN, between DESIGN_REVIEW and CONCEPT_EXTRACT.
+    agent: code_recon
+    output: code_recon.yaml
+    timeout: 240
+    retries: 1
+    type: python
 
   code:
     agent: coder
@@ -136,6 +192,7 @@ stages:
       - hypothesis
       - design
       - design_review
+      - code_recon
       - code
       - code_preflight
       - run
