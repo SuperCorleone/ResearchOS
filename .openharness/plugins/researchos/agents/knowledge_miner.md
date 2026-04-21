@@ -63,7 +63,12 @@ Search for `wiki/decisions/topic_preferences_*.md` pages. If found, analyze:
 - Which did they REJECT? Avoid similar proposals
 - What feedback did they give? Incorporate their reasoning
 
-4. Generate 2-5 research proposals, each tagged with an innovation_type
+4. Generate 3-5 research proposals, each tagged with an innovation_type.
+   The scheduler will run **competitive selection** (U8) on your proposals:
+   candidates are compared head-to-head via LLM tournament, and the top 2
+   winners are refined before entering evaluation. Generate diverse ideas
+   so the tournament has meaningful choices — avoid 3 variations of the
+   same idea
 
 ## Output
 

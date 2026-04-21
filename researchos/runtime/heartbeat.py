@@ -223,6 +223,19 @@ def _download_pdf(paper: dict, direction_name: str) -> Path | None:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "pdf_file": pdf_filename,
         }
+        # Enrich with Crossref venue (best-effort)
+        venue_info = _resolve_venue_crossref(paper["title"])
+        if venue_info:
+            meta["venue"] = venue_info["venue"]
+            meta["doi"] = venue_info["doi"]
+
+        # Search GitHub for reference implementations (best-effort)
+        title_keywords = [w for w in re.findall(r"\b[a-zA-Z]{4,}\b", paper["title"].lower()) if len(w) > 4][:4]
+        if title_keywords:
+            github_repos = _search_github_repos(title_keywords, max_results=3)
+            if github_repos:
+                meta["github_repos"] = [{"name": r["full_name"], "url": r["url"], "stars": r["stars"]} for r in github_repos]
+
         meta_path.write_text(yaml.dump(meta, default_flow_style=False))
 
         logger.info(
@@ -234,6 +247,111 @@ def _download_pdf(paper: dict, direction_name: str) -> Path | None:
     except Exception as e:
         logger.warning("PDF download failed for %s: %s", paper["arxiv_id"], e)
         return None
+
+
+# ── GitHub repository search ──────────────────────────────────
+
+
+def _search_github_repos(keywords: list[str], max_results: int = 5) -> list[dict[str, Any]]:
+    """Search GitHub for repositories matching research keywords.
+
+    Returns list of {name, full_name, description, url, stars, language, updated_at}.
+    Used to discover reference implementations alongside papers.
+    """
+    query = "+".join(urllib.parse.quote(k) for k in keywords[:5])
+    url = f"https://api.github.com/search/repositories?q={query}&sort=stars&order=desc&per_page={max_results}"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "ResearchOS/1.0",
+            "Accept": "application/vnd.github.v3+json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        repos = []
+        for item in data.get("items", [])[:max_results]:
+            repos.append({
+                "name": item.get("name", ""),
+                "full_name": item.get("full_name", ""),
+                "description": (item.get("description") or "")[:200],
+                "url": item.get("html_url", ""),
+                "stars": item.get("stargazers_count", 0),
+                "language": item.get("language", ""),
+                "updated_at": item.get("updated_at", ""),
+            })
+        return repos
+    except Exception as e:
+        logger.warning("GitHub search failed: %s", e)
+        return []
+
+
+# ── Crossref venue resolution ────────────────────────────────
+
+
+def _resolve_venue_crossref(title: str) -> dict[str, Any] | None:
+    """Query Crossref to resolve publication venue for a paper title.
+
+    Returns {venue, doi, type, published_date} or None on failure.
+    """
+    params = urllib.parse.urlencode({"query.title": title, "rows": 1})
+    url = f"https://api.crossref.org/works?{params}"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "ResearchOS/1.0 (mailto:researchos@example.com)",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        items = data.get("message", {}).get("items", [])
+        if not items:
+            return None
+        item = items[0]
+        venue = ""
+        for cn in item.get("container-title", []):
+            if cn:
+                venue = cn
+                break
+        if not venue:
+            venue = item.get("publisher", "")
+        return {
+            "venue": venue,
+            "doi": item.get("DOI", ""),
+            "type": item.get("type", ""),
+            "published_date": "-".join(str(x) for x in (item.get("published-print", {}).get("date-parts", [[]])[0] or [])),
+        }
+    except Exception as e:
+        logger.debug("Crossref lookup failed for '%s': %s", title[:50], e)
+        return None
+
+
+# ── Semantic Scholar citation graph ──────────────────────────
+
+
+def _get_paper_references(arxiv_id: str, max_refs: int = 10) -> list[dict[str, Any]]:
+    """Get papers referenced by a given paper (1-hop outgoing citations).
+
+    Useful for discovering related work that the paper builds upon.
+    """
+    clean_id = arxiv_id.split("v")[0]
+    url = f"{SEMANTIC_SCHOLAR_API}/ARXIV:{clean_id}/references?fields=title,externalIds,citationCount,year&limit={max_refs}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ResearchOS/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        refs = []
+        for item in data.get("data", []):
+            cited = item.get("citedPaper", {})
+            if not cited or not cited.get("title"):
+                continue
+            ext_ids = cited.get("externalIds", {}) or {}
+            refs.append({
+                "title": cited.get("title", ""),
+                "arxiv_id": ext_ids.get("ArXiv", ""),
+                "citation_count": cited.get("citationCount", 0) or 0,
+                "year": cited.get("year"),
+            })
+        return refs
+    except Exception as e:
+        logger.debug("S2 references lookup failed for %s: %s", arxiv_id, e)
+        return []
 
 
 # ── Main fetch logic ────────────────────────────────────────────

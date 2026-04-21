@@ -71,7 +71,8 @@ _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None]
     (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT): PipelineStep.RUN,
     (PipelineStage.MAIN, PipelineStep.RUN): PipelineStep.RESULTS_REVERIFY,
     (PipelineStage.MAIN, PipelineStep.RESULTS_REVERIFY): PipelineStep.CRITIC,
-    (PipelineStage.MAIN, PipelineStep.CRITIC): PipelineStep.INTERROGATION,
+    (PipelineStage.MAIN, PipelineStep.CRITIC): PipelineStep.EXPERIMENT_ANALYSIS,
+    (PipelineStage.MAIN, PipelineStep.EXPERIMENT_ANALYSIS): PipelineStep.INTERROGATION,
     (PipelineStage.MAIN, PipelineStep.INTERROGATION): PipelineStep.REPORT,
     (PipelineStage.MAIN, PipelineStep.REPORT): PipelineStep.WAITING_APPROVAL,
     (PipelineStage.FAST_FAIL, None): PipelineStep.HYPOTHESIS,
@@ -94,6 +95,7 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.RESULTS_REVERIFY: "reverify_report.json",
     PipelineStep.CRITIC: "analysis_report.md",
     PipelineStep.INTERROGATION: "interrogation_report.md",
+    PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analysis.md",
     PipelineStep.BASELINE_CONFIRM: "metric_contract.json",
     PipelineStep.PRE_PUBLISH_GATE: "pre_publish_gate.md",
 }

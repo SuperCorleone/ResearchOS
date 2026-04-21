@@ -29,6 +29,7 @@ from researchos.runtime.hooks import (
     validate_budget,
     validate_knowledge_access,
 )
+from researchos.runtime.llm_client import build_cached_messages, route_model
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,63 @@ _TOOLS = [
 ]
 
 
+# ── Non-function-calling model support ──────────────────────────
+
+# Models known to NOT support native function/tool calling.
+_NO_FC_PATTERNS = (
+    "deepseek-chat", "deepseek-coder", "deepseek-r1",
+    "qwen/qwen2.5", "qwen/qwen2",
+)
+
+
+def _supports_function_calling(model: str) -> bool:
+    """Check if a model supports native OpenAI-style function calling."""
+    m = model.strip().lower()
+    for pattern in _NO_FC_PATTERNS:
+        if pattern in m:
+            return False
+    return True
+
+
+def _tools_as_text() -> str:
+    """Convert tool schemas to text description for non-FC models."""
+    lines = ["Available tools (call using XML format shown below):\n"]
+    for tool in _TOOLS:
+        fn = tool["function"]
+        params = fn["parameters"].get("properties", {})
+        required = fn["parameters"].get("required", [])
+        lines.append(f"### {fn['name']}")
+        lines.append(f"{fn['description']}")
+        lines.append("Parameters:")
+        for pname, pinfo in params.items():
+            req = " (required)" if pname in required else " (optional)"
+            lines.append(f"  - {pname}: {pinfo.get('description', '')}{req}")
+        lines.append("")
+    lines.append("To call a tool, use this EXACT format:")
+    lines.append("<function=tool_name>")
+    lines.append("<parameter=param_name>value</parameter>")
+    lines.append("</function>")
+    lines.append("")
+    lines.append("You may call multiple tools. After all tool calls, continue with your analysis.")
+    return "\n".join(lines)
+
+
+def _parse_text_tool_calls(text: str) -> list[dict]:
+    """Parse XML-tag style tool calls from text output."""
+    import re as _re
+    calls = []
+    pattern = r'<function=(\w+)>(.*?)</function>'
+    for match in _re.finditer(pattern, text, _re.DOTALL):
+        fn_name = match.group(1)
+        body = match.group(2)
+        params = {}
+        param_pattern = r'<parameter=(\w+)>(.*?)</parameter>'
+        for pm in _re.finditer(param_pattern, body, _re.DOTALL):
+            params[pm.group(1)] = pm.group(2).strip()
+        calls.append({"name": fn_name, "arguments": params})
+    return calls
+
+
 class AgentExecutor:
     """Execute a research agent via LLM API with tool-use loop (OpenAI-compatible)."""
 
@@ -208,6 +266,7 @@ class AgentExecutor:
 
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._execution_backend: Any = None  # lazy remote_executor.ExecutionBackend
+        self._kb_cache: dict[str, str] = {}
 
     # ── Agent definition loading ─────────────────────────────────
 
@@ -366,6 +425,18 @@ class AgentExecutor:
             f"data_manifest.yaml written to pipeline dir."
         )
 
+    MAX_TOOL_OUTPUT_CHARS = 12000
+
+    @staticmethod
+    def _truncate_tool_output(text: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
+        """Truncate long tool outputs keeping head + tail to prevent context bloat."""
+        if not isinstance(text, str) or len(text) <= max_chars:
+            return text
+        head = max_chars * 3 // 5  # 60% head
+        tail = max_chars * 2 // 5  # 40% tail
+        dropped = len(text) - head - tail
+        return f"{text[:head]}\n\n...[output truncated: {dropped} chars omitted]...\n\n{text[-tail:]}"
+
     def _handle_tool_call(
         self,
         tool_name: str,
@@ -392,7 +463,7 @@ class AgentExecutor:
                 return (f"ERROR: File not found: {raw_path}", None)
             try:
                 content = target.read_text(encoding="utf-8")
-                return (content, None)
+                return (self._truncate_tool_output(content), None)
             except Exception as e:
                 return (f"ERROR reading file: {e}", None)
 
@@ -420,14 +491,20 @@ class AgentExecutor:
             query = arguments.get("query", "")
             max_results = arguments.get("max_results", 5)
             max_tokens = arguments.get("max_tokens", 4000)
-            result = search_wiki(query, max_results, max_tokens)
-            return (result, None)
+            cache_key = " ".join(query.lower().split())
+            if cache_key in self._kb_cache:
+                result = self._kb_cache[cache_key]
+            else:
+                result = search_wiki(query, max_results, max_tokens)
+                if isinstance(result, str):
+                    self._kb_cache[cache_key] = result
+            return (self._truncate_tool_output(result), None)
 
         elif tool_name == "execute_python":
             code = arguments.get("code", "")
             timeout = arguments.get("timeout", 120)
             result = self._execute_python(code, timeout)
-            return (result, None)
+            return (self._truncate_tool_output(result), None)
 
         elif tool_name == "fetch_dataset":
             result = self._fetch_dataset(
@@ -451,6 +528,9 @@ class AgentExecutor:
         pipeline_dir: Path,
     ) -> dict[str, Any]:
         """Run the agent in a tool-use loop until completion (OpenAI format)."""
+        if not hasattr(self, "_kb_cache"):
+            self._kb_cache = {}
+        self._kb_cache.clear()
         budget_check = validate_budget(
             pipeline_id, ESTIMATED_COST_PER_CALL, project_root=self.project_root
         )
@@ -463,10 +543,11 @@ class AgentExecutor:
             }
 
         system_prompt = self._load_agent_definition(agent_name)
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
+        messages = build_cached_messages(
+            system_prompt,
+            user_prompt=prompt,
+            model=self.model,
+        )
         artifacts_written: list[str] = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -479,17 +560,24 @@ class AgentExecutor:
         )
         _token_kwarg = "max_completion_tokens" if _uses_completion_tokens else "max_tokens"
 
+        # Detect if model supports native function calling
+        use_fc = _supports_function_calling(self.model)
+        if not use_fc:
+            messages[0]["content"] += "\n\n" + _tools_as_text()
+
         for turn in range(self.max_turns):
             # Retry loop for rate-limit (429) errors
             response = None
             for _retry in range(10):
                 try:
-                    response = self._client.chat.completions.create(
-                        model=self.model,
-                        **{_token_kwarg: self.max_tokens},
-                        tools=_TOOLS,
-                        messages=messages,
-                    )
+                    api_kwargs: dict[str, Any] = {
+                        "model": self.model,
+                        _token_kwarg: self.max_tokens,
+                        "messages": messages,
+                    }
+                    if use_fc:
+                        api_kwargs["tools"] = _TOOLS
+                    response = self._client.chat.completions.create(**api_kwargs)
                     break
                 except Exception as e:
                     err_str = str(e)
@@ -525,6 +613,20 @@ class AgentExecutor:
                 final_text = message.content
 
             tool_calls = message.tool_calls or []
+
+            # Non-FC model: parse tool calls from text output
+            if not use_fc and message.content:
+                text_calls = _parse_text_tool_calls(message.content)
+                if text_calls:
+                    messages.append({"role": "assistant", "content": message.content})
+                    for tc in text_calls:
+                        result_text, artifact = self._handle_tool_call(
+                            tc["name"], tc["arguments"], pipeline_dir, pipeline_id
+                        )
+                        if artifact:
+                            artifacts_written.append(artifact)
+                        messages.append({"role": "user", "content": f"Tool result for {tc['name']}:\n{result_text}"})
+                    continue  # Next turn
 
             if choice.finish_reason != "tool_calls" and not tool_calls:
                 break

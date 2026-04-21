@@ -125,6 +125,14 @@ Concretely, before you submit any section:
 4. The auditor (`paper_audit.check_bib_existence`) will flag unresolved keys
    as `hallucinated` and fail the Citation-integrity section of the report.
 
+## Sectional Composition Mode (U7)
+
+When the scheduler invokes `PaperComposer`, each section is composed via a
+4-step pipeline (structure → detailize → fuse → checklist). You will receive
+individual prompts for each sub-step. Follow the sub-step instructions exactly
+and output only what is requested (outline, detailed content, fused prose, or
+checklist JSON). The composer handles cross-section dependencies automatically.
+
 ## Write order + self-reflection (A19)
 
 Write sections **strictly in this order**, one at a time; do not start a later

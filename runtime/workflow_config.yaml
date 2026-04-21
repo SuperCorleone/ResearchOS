@@ -54,8 +54,9 @@ agent_model_tiers:
   paper_writer: T1
   reviewer_simulator: T1
 
-  # T2 — 8 structured-generation agents (F': reporter downgraded to T2)
+  # T2 — 9 structured-generation agents (F': reporter downgraded to T2)
   design_reviewer: T2
+  experiment_analyser: T2
   concept_extractor: T2
   reporter: T2
   pre_main_reviewer: T2
@@ -164,6 +165,15 @@ steps:
     retries: 3
     type: llm
 
+  experiment_analysis:
+    # U9 — post-experiment analysis: ablation studies, sensitivity analysis,
+    # visualization proposals. Runs between CRITIC and INTERROGATION in MAIN.
+    agent: experiment_analyser
+    output: experiment_analysis.md
+    timeout: 600
+    retries: 2
+    type: llm
+
   waiting_approval:
     # Terminal step -- no agent runs; the scheduler waits for a professor decision.
     agent: null
@@ -197,6 +207,7 @@ stages:
       - code_preflight
       - run
       - critic
+      - experiment_analysis
       - interrogation
       - report
       - waiting_approval

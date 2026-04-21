@@ -196,6 +196,47 @@ def retry_llm(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return _local_retry(fn, *args, **kwargs)
 
 
+# ── Context window overflow recovery ──────────────────────────────
+
+# Collect context-window exception types for catch clause.
+_CONTEXT_EXC: list[type[BaseException]] = []
+try:
+    from openai import BadRequestError
+    _CONTEXT_EXC.append(BadRequestError)
+except Exception:
+    pass
+try:
+    from anthropic import BadRequestError as _AnthropicBadRequest
+    _CONTEXT_EXC.append(_AnthropicBadRequest)
+except Exception:
+    pass
+
+CONTEXT_EXCEPTIONS: tuple[type[BaseException], ...] = tuple(_CONTEXT_EXC) or (Exception,)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English text."""
+    return len(text) // 4
+
+
+def truncate_to_tokens(text: str, max_tokens: int = 10000) -> str:
+    """Truncate text to approximately max_tokens, keeping head + tail."""
+    estimated = _estimate_tokens(text)
+    if estimated <= max_tokens:
+        return text
+    char_budget = max_tokens * 4
+    head_chars = int(char_budget * 0.6)
+    tail_chars = int(char_budget * 0.35)
+    dropped = len(text) - head_chars - tail_chars
+    return f"{text[:head_chars]}\n\n...[truncated {dropped} chars due to context overflow]...\n\n{text[-tail_chars:]}"
+
+
+def is_context_overflow(exc: BaseException) -> bool:
+    """Check if an exception is a context window overflow error."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("context", "token", "length", "too long", "maximum"))
+
+
 # ── Model router ────────────────────────────────────────────────
 
 

@@ -1070,6 +1070,114 @@ class BacklogManager:
             return None
 
 
+# ── Competitive idea selection (U8) ─────────────────────────────
+
+
+async def competitive_select(
+    candidates: list[dict],
+    dispatcher: Any,
+    top_k: int = 2,
+) -> list[dict]:
+    """LLM tournament selection: rank N candidates, return the top_k.
+
+    Each round pits two candidates head-to-head. The LLM picks the
+    stronger research direction based on novelty, feasibility, and
+    potential impact. Survivors advance until top_k remain.
+    """
+    if len(candidates) <= top_k:
+        return candidates
+
+    pool = list(candidates)
+    round_num = 0
+    while len(pool) > top_k:
+        round_num += 1
+        next_pool: list[dict] = []
+        for i in range(0, len(pool) - 1, 2):
+            a, b = pool[i], pool[i + 1]
+            winner = await _head_to_head(a, b, dispatcher)
+            next_pool.append(winner)
+        if len(pool) % 2 == 1:
+            next_pool.append(pool[-1])
+        logger.info("Tournament round %d: %d -> %d", round_num, len(pool), len(next_pool))
+        pool = next_pool
+    return pool[:top_k]
+
+
+async def _head_to_head(a: dict, b: dict, dispatcher: Any) -> dict:
+    """Compare two research proposals via LLM, return the winner."""
+    prompt = (
+        "You are comparing two research proposals. Pick the STRONGER one "
+        "based on novelty, feasibility, and potential impact.\n\n"
+        f"## Proposal A\n"
+        f"Title: {a.get('title', '')}\n"
+        f"Question: {a.get('research_question', '')}\n"
+        f"Hypothesis: {a.get('hypothesis', '')}\n"
+        f"Innovation Type: {a.get('innovation_type', '')}\n\n"
+        f"## Proposal B\n"
+        f"Title: {b.get('title', '')}\n"
+        f"Question: {b.get('research_question', '')}\n"
+        f"Hypothesis: {b.get('hypothesis', '')}\n"
+        f"Innovation Type: {b.get('innovation_type', '')}\n\n"
+        "Output ONLY a JSON object: {\"winner\": \"A\" or \"B\", \"reason\": \"...\"}"
+    )
+    try:
+        result = await dispatcher.dispatch_via_executor(
+            "professor", prompt, "_system_tournament"
+        )
+        if result.get("success"):
+            text = (result.get("output") or "").strip()
+            if '"A"' in text:
+                return a
+            if '"B"' in text:
+                return b
+    except Exception:
+        logger.exception("Tournament head-to-head failed")
+    return a
+
+
+async def refine_idea(candidate: dict, dispatcher: Any) -> dict:
+    """Refine a winning candidate: sharpen hypothesis, tighten scope.
+
+    Returns a new dict with refined fields merged over the original.
+    """
+    prompt = (
+        "You are refining a research proposal that won a competitive selection.\n\n"
+        f"Title: {candidate.get('title', '')}\n"
+        f"Question: {candidate.get('research_question', '')}\n"
+        f"Hypothesis: {candidate.get('hypothesis', '')}\n"
+        f"Motivation: {candidate.get('motivation', '')}\n\n"
+        "Improve the proposal:\n"
+        "1. Sharpen the hypothesis to be more specific and testable\n"
+        "2. Tighten the scope to what can realistically be validated\n"
+        "3. Strengthen the motivation with concrete evidence gaps\n\n"
+        "Output JSON with keys: title, research_question, hypothesis, motivation"
+    )
+    try:
+        result = await dispatcher.dispatch_via_executor(
+            "professor", prompt, "_system_refine"
+        )
+        if result.get("success"):
+            text = (result.get("output") or "").strip()
+            import json as _json
+            if text.startswith("```"):
+                lines = text.split("\n")[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+            try:
+                refined = _json.loads(text)
+                merged = dict(candidate)
+                for k in ("title", "research_question", "hypothesis", "motivation"):
+                    if k in refined and refined[k]:
+                        merged[k] = refined[k]
+                return merged
+            except _json.JSONDecodeError:
+                pass
+    except Exception:
+        logger.exception("Idea refinement failed")
+    return candidate
+
+
 # ── Utilities ────────────────────────────────────────────────────
 
 

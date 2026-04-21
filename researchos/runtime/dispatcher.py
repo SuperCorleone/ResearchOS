@@ -27,6 +27,7 @@ from researchos.runtime.llm_client import (
     extract_json_between_markers,
     strip_reasoning,
 )
+from researchos.runtime.step_cache import StepCache
 from researchos.utils.paths import ARTIFACTS_DIR, DECISIONS_DIR
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ STEP_AGENT: dict[PipelineStep, str | None] = {
     PipelineStep.RUN: "experiment_runner",
     PipelineStep.CRITIC: "critic",
     PipelineStep.INTERROGATION: "interrogator",
+    PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analyser",
     PipelineStep.REPORT: "reporter",
     # Pure-Python / HITL gates — handled in scheduler, never dispatched.
     PipelineStep.WAITING_APPROVAL: None,
@@ -98,6 +100,7 @@ STEP_OUTPUT: dict[PipelineStep, str] = {
     PipelineStep.RUN: "results.json",
     PipelineStep.CRITIC: "analysis_report.md",
     PipelineStep.INTERROGATION: "interrogation_report.md",
+    PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analysis.md",
     PipelineStep.REPORT: "milestone_{n}.md",
 }
 
@@ -352,6 +355,16 @@ class Dispatcher:
             self._simulate_step(pipeline, step)
             return True
 
+        # ── Step cache: skip already-completed steps (U5) ────────
+        pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+        cache = StepCache(pdir)
+        if cache.has_completed(step.value, pipeline.stage.value):
+            logger.info(
+                "Step %s already cached for pipeline %s (stage %s), skipping",
+                step.value, pipeline.pipeline_id, pipeline.stage.value,
+            )
+            return True
+
         # CODE_PREFLIGHT runs as pure Python — no LLM call
         if step == PipelineStep.CODE_PREFLIGHT:
             return self._run_code_preflight(pipeline)
@@ -386,6 +399,12 @@ class Dispatcher:
                     "Agent %s failed: %s", agent_name, result.get("output", "unknown error")
                 )
                 return False
+            # Save successful step to cache (U5)
+            cache.save_completed(step.value, pipeline.stage.value, {
+                "agent": agent_name,
+                "tokens_used": result.get("tokens_used", 0),
+                "artifacts_written": result.get("artifacts_written", []),
+            })
             return True
         else:
             # OpenHarness subprocess path
@@ -688,6 +707,57 @@ class Dispatcher:
         path.write_text(yaml.dump(decision, default_flow_style=False))
         logger.info("Simulated professor decision for pipeline=%s", pipeline_id)
 
+    # ── F' Reporter lazy injection ─────────────────────────────
+
+    _PASS_VERDICTS = {"pass", "supported", "advance", "satisfied"}
+
+    def _maybe_compress_report_artifacts(
+        self, artifacts: dict[str, str], pdir: Path,
+    ) -> dict[str, str]:
+        """Compress non-metric artifacts for REPORT when upstream verdicts are clean.
+
+        Checks critic and interrogation verdicts. If both are clean, replaces
+        hypothesis/design/critic/interrogation with one-line sentinels.
+        results.json kept verbatim (reporter needs full metrics for G4).
+        """
+        critic_path = pdir / "analysis_report.md"
+        interrog_path = pdir / "interrogation_report.md"
+        critic_clean = False
+        interrog_clean = False
+        try:
+            if critic_path.exists():
+                text = critic_path.read_text()[:2000].lower()
+                for v in self._PASS_VERDICTS:
+                    if f"verdict**: {v}" in text or f"verdict: {v}" in text:
+                        critic_clean = True
+                        break
+        except Exception:
+            pass
+        try:
+            if interrog_path.exists():
+                text = interrog_path.read_text()[:2000].lower()
+                for v in self._PASS_VERDICTS:
+                    if f"verdict: {v}" in text or f"verdict**: {v}" in text:
+                        interrog_clean = True
+                        break
+        except Exception:
+            pass
+
+        if not (critic_clean and interrog_clean):
+            return artifacts
+
+        compressed = dict(artifacts)
+        _sentinels = {
+            "hypothesis": "[HYPOTHESIS_PRESENT — read via file_read if details needed]",
+            "design": "[DESIGN_PRESENT — read via file_read if details needed]",
+            "critic": "[CRITIC_VERDICT: PASS — read analysis_report.md for details]",
+            "interrogation": "[INTERROGATION_VERDICT: SATISFIED — read interrogation_report.md for details]",
+        }
+        for key, sentinel in _sentinels.items():
+            if key in compressed:
+                compressed[key] = sentinel
+        return compressed
+
     # ── Prompt builders ──────────────────────────────────────────
 
     def _build_step_prompt(self, pipeline: PipelineState, step: PipelineStep) -> str:
@@ -882,6 +952,13 @@ class Dispatcher:
             filtered = {k: v for k, v in pipeline.artifacts.items() if k in relevant_keys}
         else:
             filtered = pipeline.artifacts
+
+        # F' — Reporter lazy injection: when critic+interrogation verdicts are
+        # clean, compress non-metric artifacts to one-line sentinels. The
+        # reporter still gets full results.json (metrics) but saves ~30-40K
+        # tokens by not ingesting full hypothesis/design/critic/interrogation.
+        if step == PipelineStep.REPORT:
+            filtered = self._maybe_compress_report_artifacts(filtered, pdir)
 
         # Apply size+importance compression heuristic to any artifact whose
         # value is a large non-critical string (filenames stay untouched).

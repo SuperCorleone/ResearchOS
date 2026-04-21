@@ -2,7 +2,7 @@
 
 知识驱动的多智能体科研操作系统，基于 [OpenHarness](./OpenHarness) 构建。
 
-全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、DeepScientist、CycleResearcher、Zochi、FARS 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。
+全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4.1）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、HKUDS/AI-Researcher（MetaChain）、DeepScientist、CycleResearcher、Zochi、FARS 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。v4.1 新增 9 项 AI-Researcher 启发的升级（U1–U9）：三层模型分级、LLM 鲁棒性增强、步骤级缓存、多源文献收集、分节论文写作、竞争式想法筛选、后实验分析循环。
 
 ## 新版核心升级（v4）
 
@@ -26,11 +26,65 @@
 - **A17 Baseline metric contract**（吸收 DeepSci OSS）— `BASELINE_CONFIRM` 是 FAST_FAIL 的**第一步**（由调度器 Wave2 edges 自动插入）：有 baseline 块就固化 `metric_contract.json`，无 baseline 就 SKIP 放行；跑完对表
 - **A2 L1 `bash_exec` 沙箱**（吸收 DeepSci OSS）— `remote_executor.py` 新增 `sandbox` 后端：工作目录白名单 + 1800s watchdog + CUDA 环境变量 + JSONL 日志
 - **A7 Findings Memory**（吸收 DeepSci OSS 结构）— `findings_memory.py` 支持 MEMORY_KINDS(`papers/ideas/decisions/episodes/knowledge/templates/findings`) + markdown+YAML frontmatter + 阶段偏置检索；Critic SUPPORTED 时自动落库
-- **A8 5 轴快速门** — `topic_evaluator.py` 第 0 步：novelty/falsifiability/feasibility/evidence_quality/constraint_fit 各 0/1/2，总分 < 7/10 直接拒绝
+- **A8 5 轴快速门** — `topic_evaluator.py` 第 0 步：novelty/falsifiability/feasibility/evidence_quality/constraint_fit 各 0/1/2，总分 < 7/10 直接拒绝（v3.4 改为 async 原生，不再 `asyncio.run` 嵌套）
 - **A15 4 槽结构化实验 plan**（吸收 HKU）— `experiment_plan.yaml` 顶层应含 `plan_dataset` / `plan_model` / `plan_training` / `plan_testing`；`design_checks.py::check_four_slot_plan` 做 schema 校验（缺槽 ERROR→BLOCK，缺子键 WARN），对全无 4 槽键的旧格式 plan 向后兼容
 - **A10 Reviewer drift 测试** — `tests/test_reviewer_drift.py` 结构化 Proxy MAE 占位测试，季度跑真实评估
 - **R1 `fix` / `continue` 统一** — `fix --user-feedback <path>` 与 `continue` 走同一条路径；`continue` 保留为别名
 - **R2 研究简报 Python 化** — 调度器在添加候选时优先调用 `briefer.py::render_brief()`（读取 `evaluated_<id>.yaml` 的 5D 评分 + 创新声明 + 证伪设计 + KB 片段），失败或缺 YAML 时回退到旧模板；`research_briefer` agent 不再参与生产路径
+
+### v4.1 AI-Researcher 机制吸收（U1–U9）
+
+**LLM 鲁棒性**
+- **U2 上下文溢出自动恢复** — `llm_client.py` 新增 `is_context_overflow(exc)` 检测上下文窗口/token 长度相关 BadRequestError，`truncate_to_tokens(text, max_tokens=10000)` 按 60/35 头尾比截断最后一条消息并重试，避免因单条过长消息导致整个步骤失败
+- **U3 非函数调用模型回退**（吸收 AI-Researcher MetaChain）— `agent_executor.py` 新增 `_supports_function_calling(model)` 检测（DeepSeek、部分 Qwen 等不支持原生 FC 的模型），自动切换为 XML 标签格式工具调用（`<function=name><parameter=key>value</parameter></function>`），`_tools_as_text()` 将 tool schema 注入 system prompt，`_parse_text_tool_calls(text)` 解析 XML 格式调用
+- **U6 工具输出截断** — `agent_executor.py` 新增 `MAX_TOOL_OUTPUT_CHARS = 12000`，对 `file_read`/`kb_retrieve`/`execute_python` 返回值按 60/40 头尾比截断，防止单次工具调用撑爆上下文窗口
+
+**执行效率**
+- **U5 步骤级检查点/恢复**（吸收 AI-Researcher 交互式 cache/resume）— 新增 `step_cache.py::StepCache` 类，按 `pipeline_dir/.step_cache/{stage}__{step}.json` 存储已完成步骤的结果；`dispatcher.dispatch_step` 在派发前检查缓存、成功后写入缓存，支持 `invalidate_from(step)` 级联失效，实现崩溃后幂等重放
+
+**模型成本优化**
+- **U1 三层模型分级**（D'）— `workflow_config.yaml::model_tiers` 定义 T1/T2/T3 三层（默认 gpt-5.4 / gpt-4o / o4-mini），`agent_model_tiers` 将 21 个 agent 分配到对应层级，`llm_client.get_model_for_agent` 按层级路由；支持 `${RESEARCHOS_MODEL_T1:-default}` 环境变量覆盖
+
+**多源文献收集**
+- **U4 多源资源收集器**（吸收 AI-Researcher 多源检索）— `heartbeat.py` 新增：`_search_github_repos` 按关键词搜 GitHub 发现参考实现、`_resolve_venue_crossref` 查 Crossref 解析发表期刊/DOI、`_get_paper_references` 通过 S2 获取 1-hop 引用图谱；`_download_pdf` 的 meta sidecar 自动注入 venue/doi/github_repos 字段
+
+**论文写作**
+- **U7 分节论文写作器**（吸收 AI-Researcher section-by-section 写作）— 新增 `paper_composer.py::PaperComposer`，按依赖顺序（abstract → introduction → related_work → method → experiments → results → discussion → conclusion）逐节写作，每节走 4 步流水线（structure 列大纲 → detailize 填充数据/引用 → fuse 合并为连贯散文 → checklist 质量自检）；后续节可引用前续节内容，避免全文一次生成导致的前后矛盾
+
+**研究发现**
+- **U8 竞争式想法筛选**（吸收 AI-Researcher tournament selection）— `topic_evaluator.py` 新增 `competitive_select(candidates, dispatcher, top_k)` 实现 LLM 锦标赛选拔（两两对比，逐轮淘汰），`refine_idea(candidate, dispatcher)` 对获胜者做假设锐化/范围收紧/动机增强；`knowledge_miner.md` 更新为生成 3-5 个多样化候选，由调度器自动进入锦标赛选拔
+
+**实验深度分析**
+- **U9 后实验分析循环**（吸收 AI-Researcher post-experiment analysis）— 新增 `EXPERIMENT_ANALYSIS` 步骤，MAIN 阶段 CRITIC 之后、INTERROGATION 之前执行；新增 `experiment_analyser` agent（T2 层级），产出 `experiment_analysis.md`（消融研究设计 + 灵敏度分析 + 可视化方案 + 统计显著性评估 + 失败模式目录 + 后续实验推荐）；路由更新：`_NEXT_STEP`、`STEP_AGENT`、`STEP_OUTPUT`、`STEP_ARTIFACT`、`workflow_config.yaml` 同步
+
+### v3.4 增量改进
+
+**创新类型扩展**
+- **知识矿工新增 `methodological_extension` 和 `hybrid_combination` 创新类型** — 前者在已验证方法上增加新机制（非替换），后者组合多篇论文的机制为新架构。两者在 Topic Evaluator 的重复度判定中获得更高容忍度（需 4/4 轴相似才判 HIGH，3/4 仅判 MEDIUM_LOW），并获得 `extension_bonus` 加分（加到 novelty，上限 3）
+- **`innovation_type` 枚举扩展**：`cross_domain | cross_method | gap_analysis | failure_driven | incremental | methodological_extension | hybrid_combination`
+- **假设生成扩展模板** — `hypothesis_gen` 对 `methodological_extension`/`hybrid_combination` 类型使用专用的扩展假设模板（含消融预测 + 扩展自身的证伪标准）
+
+**FAST_FAIL 自动门禁**
+- 调度器在 FAST_FAIL 完成后自动检查 `analysis_report.md`：若 verdict = INCONCLUSIVE + 推荐 ITERATE + 所有 Key Metrics 行均为 FAIL → 自动 PAUSE pipeline（写 `[AUTO-GATE]` 决策），防止无意义地进入 MAIN 浪费 token
+- 可通过 `runtime/workflow_config.yaml` 的 `gates.fast_fail_auto_block: false` 关闭
+
+**概念质量校验**
+- preflight 新增 `_check_concept_quality` 检查：`code_implementation` 字段只允许 `<file>::<function>`、`<slug>::<path>::L<start>-L<end>` 或 `NOT_AVAILABLE`，其余格式（自然语言描述、包名、伪代码）→ ERROR → BLOCK
+- `AtomicConcept` Pydantic 模型新增 `field_validator`，在 schema 层拒绝非法格式
+- 超过 50% 概念为 `NOT_AVAILABLE` 时产生 WARN
+
+**Coder 多文件 + 冒烟测试**
+- Coder 现在可按复杂度拆分为多个模块（`run_experiment.py` 作为入口 + 辅助模块），而非强制单文件
+- 新增自验证协议：写完代码后用 `execute_python` 做冒烟测试，导入检查 + 最小配置运行，失败最多重试 3 次后才生成 `code_patch.diff`
+- preflight 的 `_load_code` 相应升级：拼接 pipeline 目录下所有 `.py` 文件（入口优先），而非只读单个文件
+
+**Concept Extractor 4 阶段**
+- 工作流从 3 阶段扩展为 4 阶段：新增 Phase 0（Code Reconnaissance）— 读取 `code_recon.yaml`，浏览已克隆仓库的源码结构
+- Dispatcher 在 `CONCEPT_EXTRACT` 步自动将 `code_recon.yaml` 内容注入 prompt，省去 file_read 往返
+
+**模型兼容性**
+- `agent_executor.py` 对 gpt-5.x 和 o 系列（o1/o3/o4）自动使用 `max_completion_tokens` 替代 `max_tokens`
+- 默认 T3 模型从 `gpt-o4-mini`（拼写错误）修正为 `o4-mini`
 
 ## 系统架构
 
@@ -60,13 +114,15 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Topic Evaluator（0+8 步）                                            │
 │  [0] 5 轴 0/1/2 快速门（<7/10 拒绝）                                   │
-│  [1-8] BM25 检索 → 在线检索 → 相似度 → 评分 → 创新声明 → 证伪 → 门禁    │
+│  [1-8] BM25 检索 → 在线检索 → 相似度（含创新类型容忍度）→ 评分（含创新加分）│
+│        → 创新声明 → 证伪 → 门禁                                         │
 └─────────────────────┬────────────────────────────────────────────────┘
                      ↓
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Professor（LLM，仅门禁边界案例）  ↔  Pipeline 状态机                   │
 │  PROPOSAL → BASELINE_CONFIRM → FAST_FAIL                              │
-│          → [HITL gate 1: pre-MAIN] → MAIN                            │
+│          → [AUTO-GATE: 全 FAIL 自动 PAUSE] 或 [HITL gate 1: pre-MAIN]│
+│          → MAIN                                                       │
 │          → [HITL gate 2: milestone-N] → ...                          │
 │          → PAPER → [HITL gate 3: pre-publish] → PDF                  │
 └──────────────────────────────────────────────────────────────────────┘
@@ -77,12 +133,13 @@
 ```
 原始论文（PDF / arXiv 心跳抓取）
   → 知识编译器提取全文 → wiki 知识页面
-    → 知识矿工扫描 wiki → 发现空白（含创新模式挖掘 + 用户偏好学习）
+    → 知识矿工扫描 wiki → 发现空白（含 7 种创新模式 + 用户偏好学习）
       → Topic Evaluator：[0] 5 轴快速门 → [1-8] KB/在线/评分/证伪/门禁
         → 通过 → 候选列表（runtime/candidates/ + briefer.py 确定性简报）
           → 用户选择 → Pipeline BASELINE_CONFIRM（写 metric_contract.json）
         → Pipeline FAST_FAIL（精简路径；skip 重型质量层）
           → BASELINE_CONFIRM（写 metric_contract.json 或 SKIP）→ 假设 → 设计 → [代码?] → 运行 → 分析（G9 数据审计）→ 报告
+            → [AUTO-GATE] 全 FAIL + INCONCLUSIVE → 自动 PAUSE（跳过 pre-MAIN，省 token）
             → [HITL gate 1: pre-MAIN] 阅读 pre_main_review.md + user_approve/
                ├─ /research fix --user-feedback → 修复并进入 MAIN
                ├─ /research review --approve  → 直接进入 MAIN
@@ -93,6 +150,7 @@
                → 运行 → RESULTS_REVERIFY（独立子进程重跑比对）
                → Critic（含 advisor_verdict.yaml）
                → [post-CRITIC hook] VLM 图表 review（若有 png/jpg）+ Journal 节点追加
+               → EXPERIMENT_ANALYSIS（消融/灵敏度/可视化/统计/失败模式）
                → Interrogator → Report
               → [HITL gate 2: milestone-N（N≥2 自动暂停）] 复用 user_approve/
               → 达到最大里程碑 → PAPER
@@ -233,6 +291,7 @@ LLM 最顽固的 failure class 是"看似实现了但其实漏关键组件"（HK
 ```
 PROPOSAL ──批准──→ FAST_FAIL(step=BASELINE_CONFIRM) ──→ FAST_FAIL(hypothesis → design → [code?] → run → critic → report)
                                       │
+                                      │  [AUTO-GATE] 全 FAIL + INCONCLUSIVE → 自动 PAUSE
                                       │       [HITL gate 1: pre-MAIN]
                                       ↓
                            user_approve/（inject 模式完整包）
@@ -241,12 +300,13 @@ PROPOSAL ──批准──→ FAST_FAIL(step=BASELINE_CONFIRM) ──→ FAST_F
                                       ↓
 MAIN ──→ hypothesis → design → design_review
      ──→ CODE_RECON（code_recon.yaml；shallow clone + 静态扫）
-     ──→ CONCEPT_EXTRACT（concepts.yaml；reference_codebases 写为三元组）
-     ──→ code（按 concept.id 逐项实现）
-     ──→ code_preflight（每 concept 存在性 BLOCK + 三元组行号验真 BLOCK）
+     ──→ CONCEPT_EXTRACT（concepts.yaml；4 阶段含 Phase 0 代码侦察；reference_codebases 写为三元组）
+     ──→ code（按 concept.id 逐项实现；可拆多文件 + 冒烟测试）
+     ──→ code_preflight（每 concept 存在性 BLOCK + 三元组行号验真 BLOCK + 概念质量校验）
      ──→ run
      ──→ RESULTS_REVERIFY（独立子进程固定 seed 重跑；>10% 漂移 BLOCK）
      ──→ critic（含 advisor_verdict.yaml）
+     ──→ experiment_analysis（消融/灵敏度/可视化/统计显著性/失败模式）
      ──→ interrogator → report
      ──→ milestone
          │
@@ -266,7 +326,7 @@ PAPER ──→ draft.md
       COMPLETED
 ```
 
-FAST_FAIL 跳过 CONCEPT_EXTRACT、RESULTS_REVERIFY、DESIGN_REVIEW、CODE_PREFLIGHT、INTERROGATION 保持轻量。MAIN 全链启用。
+FAST_FAIL 跳过 CONCEPT_EXTRACT、RESULTS_REVERIFY、DESIGN_REVIEW、CODE_PREFLIGHT、EXPERIMENT_ANALYSIS、INTERROGATION 保持轻量。MAIN 全链启用。
 
 ## Professor 决策模式
 
@@ -412,6 +472,8 @@ total              /10
 
 < 7/10 → 直接拒绝（不进入后续 8 步完整评估）。简单、快速、几乎零 token 成本。保留原有 5D scoring 作为通过门后的精细化评分。
 
+通过门后的重复度判定（v3.4 更新）：`methodological_extension` / `hybrid_combination` 类型的重复度阈值提高（需 4/4 轴相似才判 HIGH，3/4 仅判 MEDIUM_LOW），并获得 `extension_bonus` 加分到 novelty 维度（上限 3）。
+
 ## 4 槽结构化实验 Plan（A15）
 
 `experiment_plan.yaml` 顶层必须包含 4 个槽：
@@ -526,7 +588,7 @@ MAIN 阶段在 DESIGN、CONCEPT_EXTRACT、CODE、RUN 之后插入检查点：
 | CODE_PREFLIGHT | 结构+概念映射 | `preflight.py` | 0 token |
 | **RESULTS_REVERIFY**（**新**） | 重跑对表 | `reverify.py` 独立子进程 | 0 token |
 
-FAST_FAIL 跳过 CONCEPT_EXTRACT、RESULTS_REVERIFY、DESIGN_REVIEW、CODE_PREFLIGHT、INTERROGATION 保持速度。
+FAST_FAIL 跳过 CONCEPT_EXTRACT、RESULTS_REVERIFY、DESIGN_REVIEW、CODE_PREFLIGHT、EXPERIMENT_ANALYSIS、INTERROGATION 保持速度。
 
 ## 质询协议（MAIN，v3 保留）
 
@@ -590,22 +652,24 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 
 | 模块 | 职责 | Wave |
 |------|------|------|
-| `scheduler.py` | Tick 驱动调度器 + Wave 2 edges 叠加 + HITL 3 gate + findings hook | — |
+| `scheduler.py` | Tick 驱动调度器 + Wave 2 edges 叠加 + HITL 3 gate + **FAST_FAIL auto-gate** + findings hook | — |
 | `dispatcher.py` | Prompt 构建 + 多后端路由 + `Dispatcher.parse_json_output` | A13 |
-| **`llm_client.py`** | **`extract_json_between_markers` / `strip_reasoning` / `retry_llm` / `route_model`** | **A13** |
+| **`llm_client.py`** | **`extract_json_between_markers` / `strip_reasoning` / `retry_llm` / `route_model` + 上下文溢出恢复（U2）** | **A13 U2** |
 | `state_manager.py` | 原子化文件 CRUD | — |
-| `topic_evaluator.py` | 0+8 步评估（5 轴门 + 完整 8 步） | A8 |
-| `agent_executor.py` | OpenAI 兼容工具调用循环 | — |
+| `topic_evaluator.py` | 0+8 步评估（5 轴门 + 完整 8 步）+ **竞争式锦标赛选拔（U8）** | A8 U8 |
+| `agent_executor.py` | OpenAI 兼容工具调用循环（**gpt-5.x/o 系列自动 `max_completion_tokens`** + 非 FC 模型 XML 回退（U3）+ 工具输出截断（U6）） | U3 U6 |
 | **`briefer.py`** | **研究简报纯 Python 渲染器** | **R2** |
 | `knowledge_compiler.py` | PDF/MD → wiki；pipeline 产物 → wiki | — |
 | `paper_audit.py` | G4 + G5 + **bib existence + chktex** | A6 A19 |
 | `latex_compiler.py` | Markdown → LaTeX → PDF | — |
-| `heartbeat.py` | arXiv PDF 抓取 + 引用过滤 | — |
+| `heartbeat.py` | arXiv PDF 抓取 + 引用过滤 + **GitHub 搜索 + Crossref 期刊解析 + S2 引用图谱** | U4 |
+| **`paper_composer.py`** | **分节 4 步论文写作（structure→detailize→fuse→checklist）** | **U7** |
+| **`step_cache.py`** | **步骤级检查点缓存（幂等重放 + 级联失效）** | **U5** |
 | `publisher.py` | 投稿打包 + 期刊推荐 | — |
 | `frontend_state.py` | React 看板 JSON + `user_approve_pending` 标志 | — |
 | `recovery.py` | 检查点 + 指数退避 + **retry 常量化** | A14 |
 | `design_checks.py` | 实验设计结构验证 | — |
-| `preflight.py` | 代码预检 + **concepts.yaml 逐项校验** | A12 |
+| `preflight.py` | 代码预检 + **concepts.yaml 逐项校验 + 概念质量校验** | A12 |
 | **`reverify.py`** | **独立子进程重执行 + 指标对比** | **A1** |
 | `hooks.py` | 产物写入、KB 访问、预算、schema 校验 | — |
 | `workflow_loader.py` | YAML 工作流配置 | — |
@@ -615,20 +679,21 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | **`findings_memory.py`** | **MEMORY_KINDS + MemoryService + 阶段偏置检索** | **A7** |
 | **`baseline_registry.py`** | **MetricContract + confirm/waive/check_comparability** | **A17** |
 
-## 智能体（21 个）
+## 智能体（22 个）
 
 | Agent | 职责 | Wave |
 |------|------|------|
 | `professor` | 评估提案、审查里程碑、approve/kill/pivot/pause/hold/tweak | — |
-| `knowledge_miner` | 方向感知的知识空白发现 | — |
+| `knowledge_miner` | 方向感知的知识空白发现（7 种创新类型含 extension/hybrid）+ **竞争式多候选生成** | U8 |
 | ~~`research_briefer`~~ | ~~≤500 词候选简报~~（**R2 降级为 `briefer.py::render_brief`**） | R2 |
 | `hypothesis_gen` | 可证伪假设 + G1 关键词可操作化 | — |
 | `exp_designer` | **4 槽结构化实验 plan** + G2/G5/G7/G9 | A15 |
 | `design_reviewer` | MAIN 科学性审查 + 结构检查 | — |
-| **`concept_extractor`**（**新**） | **原子概念 ↔ 代码双向分解** | **A12** |
-| `coder` | **按 concept.id 逐项实现** + G3/G6/G9 | A12 |
+| **`concept_extractor`**（**新**） | **原子概念 ↔ 代码双向分解（4 阶段：侦察→调研→分析→定位）** | **A12** |
+| `coder` | **按 concept.id 逐项实现（多文件 + 冒烟测试）** + G3/G6/G9 | A12 |
 | `experiment_runner` | `execute_python` + `fetch_dataset` | — |
 | `critic` | 结果分析 + G1/G3/G5/G9 + **advisor_verdict.yaml** | A16 |
+| **`experiment_analyser`**（**新**） | **后实验深度分析：消融/灵敏度/可视化/统计/失败模式** | **U9** |
 | `interrogator` | 对抗式质询（MAIN，1-3 轮） | — |
 | `reporter` | 里程碑报告 + G7 开销 | — |
 | `pre_main_reviewer` | FAST_FAIL 后 ≤800 词评审 | — |
@@ -678,6 +743,15 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | A18 | Flat Node + Journal 两级选择 | AI Scientist v2 | 合并入 A3 |
 | A19 | LaTeX 写作硬化 | AI Scientist v1 | `paper_writer.md` + `paper_audit.py` |
 | A20 | 参考代码库静态侦察（URL 抽取 + shallow clone + 三元组验真） | 原创（补 HKU code analyst 缺口） | `knowledge_compiler.extract_code_refs` + `code_recon.py` + `CODE_RECON` step + `preflight._check_reference_codebases` |
+| U1 | 三层模型分级（T1/T2/T3） | AI-Researcher（D'）| `workflow_config.yaml::model_tiers` + `llm_client.get_model_for_agent` |
+| U2 | 上下文溢出自动恢复 | AI-Researcher | `llm_client.py::is_context_overflow` + `truncate_to_tokens` |
+| U3 | 非 FC 模型 XML 标签回退 | AI-Researcher MetaChain | `agent_executor.py::_supports_function_calling` + `_tools_as_text` + `_parse_text_tool_calls` |
+| U4 | 多源资源收集器 | AI-Researcher | `heartbeat.py::_search_github_repos` + `_resolve_venue_crossref` + `_get_paper_references` |
+| U5 | 步骤级检查点/恢复 | AI-Researcher cache/resume | `step_cache.py::StepCache` + `dispatcher.dispatch_step` |
+| U6 | 工具输出截断 | AI-Researcher | `agent_executor.py::_truncate_tool_output` |
+| U7 | 分节 4 步论文写作 | AI-Researcher section-by-section | `paper_composer.py::PaperComposer` + `paper_writer.md` |
+| U8 | 竞争式想法筛选 | AI-Researcher tournament | `topic_evaluator.py::competitive_select` + `refine_idea` + `knowledge_miner.md` |
+| U9 | 后实验分析循环 | AI-Researcher post-experiment | `experiment_analyser.md` + `EXPERIMENT_ANALYSIS` step + 路由更新 |
 | R1 | `fix` / `continue` 统一 | — | `scripts/run_research.py` |
 | R2 | Briefer Python 化 | — | `briefer.py` 取代 `research_briefer` agent |
 | R3 | Reviewer 不重算 G4 | — | `reviewer_simulator.md` |
@@ -692,7 +766,24 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `RESEARCHOS_BASE_URL` | API 基础 URL | 无默认（必须显式设置） |
 | `RESEARCHOS_MODEL` | 模型名称 | 无默认 |
 | `RESEARCHOS_VLM_MODEL` | 视觉语言模型（图表审查） | 回退到 `RESEARCHOS_MODEL` |
+| `RESEARCHOS_MODEL_T1` | T1 层模型（高推理）（U1） | `gpt-5.4` |
+| `RESEARCHOS_MODEL_T2` | T2 层模型（结构化生成）（U1） | `gpt-4o` |
+| `RESEARCHOS_MODEL_T3` | T3 层模型（低推理经济型）（U1） | `o4-mini` |
 | `RESEARCHOS_REVERIFY` | A1 独立重执行（`1`/`true` 启用） | `0`（默认关闭） |
+
+### workflow_config.yaml 新增配置
+
+```yaml
+# 自动门禁（v3.4）
+gates:
+  fast_fail_auto_block: true  # FAST_FAIL 全 FAIL 自动 PAUSE
+
+# 创新类型加分（v3.4 新增 extension_bonus）
+innovation:
+  cross_domain_bonus: 1
+  cross_method_bonus: 1
+  extension_bonus: 1          # methodological_extension / hybrid_combination
+```
 
 ### 多后端支持
 
@@ -764,7 +855,7 @@ python scripts/run_research.py trial --mode simulate   # 不调用 LLM
 
 ```bash
 python -m pytest tests/ -q
-# 207 passed, 4 skipped（v4 基线）
+# 207 passed, 4 skipped（v4 基线；v3.4 含 concept_quality 检查）
 ```
 
 `tests/test_reviewer_drift.py`（A10）包含 reviewer 质量的 Proxy MAE 结构化占位，季度跑真实评估时填入。
@@ -788,6 +879,14 @@ python -m pytest tests/ -q
 15. **硬字数/token 上限** — briefer ≤500w、pre-MAIN ≤800w、query 3000 字符截断
 16. **reviewer 不重复做 auditor 已做的工作**（R3）
 17. **单一修复入口**（R1） — `fix --user-feedback` 统一，continue 作为别名
+18. **FAST_FAIL 自动止损** — 全 FAIL + INCONCLUSIVE 自动 PAUSE，不进 MAIN 浪费 token
+19. **创新类型感知评估** — extension/hybrid 类型在重复度判定和评分中获得校准后的容忍度
+20. **上下文溢出自愈**（U2） — 单条消息撑爆上下文窗口时自动截断重试，不中断 pipeline
+21. **模型能力自适应**（U3） — 不支持函数调用的模型自动降级为 XML 标签工具协议
+22. **步骤级幂等重放**（U5） — 崩溃恢复只重跑未完成的步骤，已完成步骤从缓存直接读取
+23. **分节写作防止前后矛盾**（U7） — 每节独立 4 步流水线 + 质量自检，后续节可引用前续节
+24. **竞争式筛选优于单次生成**（U8） — 多候选锦标赛 + 获胜者精炼，提高提案质量上限
+25. **后实验分析闭环**（U9） — 消融/灵敏度/可视化/统计/失败模式在 paper 之前产出，增强论文证据链
 
 ## 许可证
 

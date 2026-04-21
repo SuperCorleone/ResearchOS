@@ -34,6 +34,7 @@ class PipelineStep(str, Enum):
     RESULTS_REVERIFY = "results_reverify"  # Stream D — reproducibility rerun
     CRITIC = "critic"
     INTERROGATION = "interrogation"
+    EXPERIMENT_ANALYSIS = "experiment_analysis"
     REPORT = "report"
     WAITING_APPROVAL = "waiting_approval"
     BRANCH_SELECT = "branch_select"
