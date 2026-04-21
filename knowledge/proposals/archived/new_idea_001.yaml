@@ -1,0 +1,10 @@
+title: "Bayesian model-averaged orchestration for self-adaptive multi-agent workflows"
+research_question: "Can Bayesian model averaging over multiple workflow-performance models improve runtime task allocation and replanning in multi-agent AI systems compared with selecting a single best orchestration model?"
+hypothesis: "In dynamic multi-agent workflows, maintaining and updating a posterior over several candidate orchestration models will reduce overconfident planning errors, leading to fewer unnecessary replans and better end-to-end task success than single-model orchestration policies."
+direction: "agentic-workflow-optimization"
+evidence:
+  - "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+motivation: "The knowledge base highlights a clear gap in handling model-selection uncertainty inside adaptive feedback loops: existing self-adaptive systems often assume one best model, which can yield poor predictions and unnecessary adaptations. This has been explored in robotics-style self-adaptive systems using Bayesian Model Averaging, but the same uncertainty-aware idea does not appear to have been transferred to AI agent orchestration, where workflow conditions, agent reliability, and task dependencies also shift at runtime. Applying model averaging to multi-agent orchestration is a promising cross-domain direction because it reuses a validated self-adaptation method to address a high-priority AI workflow problem."
+estimated_effort: "low"
+priority: "high"
+budget_request: 20000

@@ -1,0 +1,47 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-19T20:06:47.410618+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Single-model orchestration that selects the currently best workflow-performance
+    model and routes/decomposes tasks using only that model.
+  expected_signal: At least 2% absolute gain in task success and at least 5% relative
+    reduction in unnecessary adaptations under shift.
+  failure_condition: Bayesian model averaging improves task success by less than 2%
+    absolute and does not reduce unnecessary adaptation rate by at least 5% relative
+    versus the single-model baseline across shifted environments.
+  hypothesis: Under distribution shift in task mix and agent performance, Bayesian
+    model averaging-based orchestration yields higher end-to-end task success and
+    fewer unnecessary adaptations than a single best-model orchestration baseline.
+  metric: 'Primary: end-to-end task success rate; Secondary: unnecessary adaptation
+    rate per 100 tasks and expected calibration error of predicted workflow success.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose Bayesian model averaging over multiple plausible workflow-performance
+    models to guide task routing and decomposition decisions in multi-agent orchestration
+    instead of committing to one selected model.
+  problem_gap: Existing methods fail because single-model orchestration policies become
+    overconfident when workflow-performance relationships shift, leading to misrouted
+    tasks, missed adaptations, and unnecessary reconfiguration.
+  why_it_matters: Which improves end-to-end task success, calibration, and adaptation
+    efficiency under nonstationary task distributions and changing environment conditions.
+kb_duplicates:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+kb_related: []
+proposal_id: bayesian_model_averaging_for_u
+re_eval_count: 0
+repeat_degree: low
+research_question: Can Bayesian model averaging over multiple workflow-performance
+  models improve task routing and decomposition decisions in multi-agent systems compared
+  with selecting a single orchestration model?
+retrieval_cache_key: 20bca4f1f7e22756
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 2
+  novelty: 3
+  significance: 3
+similar_papers: []
+title: Bayesian Model Averaging for Uncertainty-Aware Multi-Agent Orchestration

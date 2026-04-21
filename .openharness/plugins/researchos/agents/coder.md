@@ -31,7 +31,26 @@ You implement experiment code based on the experiment plan.
 
 Write `code_patch.diff` to the pipeline directory. This should be a unified diff that can create or modify experiment files.
 
-The diff should produce a script that:
+### Code Structure
+
+Choose the structure that fits the experiment's complexity:
+
+- **Simple experiments** (single method comparison, <300 lines): a single `run_experiment.py` is fine.
+- **Complex experiments** (multiple components, online loops, MAPE-K integration, >300 lines): split into focused modules with a thin entry point. Example layout:
+  ```
+  run_experiment.py          # entry point — imports modules, runs main()
+  data_generator.py          # data loading/generation/encoding
+  base_learners.py           # model definitions
+  ensemble.py                # core method (e.g., stacking, BMA)
+  evaluate.py                # metrics, simulation, comparison logic
+  ```
+  Each module should be independently importable and testable.
+
+Split when it improves clarity; don't split for the sake of splitting. Three 50-line modules are worse than one clean 150-line script.
+
+### Requirements
+
+The diff should produce code that:
 - Accepts configuration via command-line args or a config file
 - Uses the seeds specified in the experiment plan
 - Outputs results in JSON format compatible with `results.json` schema
@@ -58,6 +77,16 @@ Reusing reduces your implementation burden. **Do NOT re-implement widely-availab
 building blocks** (softmax, cross-entropy, standard attention, AdamW, etc.) —
 import them from the framework or reuse from a reconned repo.
 
+## Self-Verification Protocol
+
+After writing all code files via file_write, run a smoke test using `execute_python` before producing `code_patch.diff`:
+
+1. Import the main experiment script and verify key functions/classes exist.
+2. If feasible, run with a minimal config (e.g., `--seed 42`, 1 iteration, tiny data) to catch runtime errors.
+3. If the smoke test fails (import error, syntax error, missing dependency), read the traceback, fix the code via file_write, and re-run. Repeat up to 3 attempts.
+4. Only produce `code_patch.diff` AFTER the smoke test passes.
+5. If the smoke test still fails after 3 fix attempts, produce `code_patch.diff` anyway but add a `# KNOWN ISSUE: <description>` comment in the diff header.
+
 ## Quality Gates (this agent owns: G3, G6, G9)
 
 Definitions: see `shared/quality_gates.md`.
@@ -77,11 +106,12 @@ Definitions: see `shared/quality_gates.md`.
 # === END MAPPING ===
 ```
 
-- **G6 operational** — the script MUST: (1) print exact dep versions at startup,
+- **G6 operational** — the entry point (`run_experiment.py`) MUST: (1) print exact dep versions at startup,
   (2) accept `--seed` and seed all RNGs (random, numpy, torch, ...), (3) emit
   results as JSON on the **last** stdout line, (4) run via
   `pip install -r requirements.txt && python run_experiment.py`, (5) expose a
-  single entry point across stages. Ship `requirements.txt` if external deps exist.
+  single entry point that orchestrates all modules. Helper modules are fine — they are
+  imported by the entry point, not run independently. Ship `requirements.txt` if external deps exist.
 
 - **G9 operational** — read `data.source` from `experiment_plan.yaml` FIRST.
   - `file|api` → load from `/data/raw/<pipeline_id>/` (fetched by runner). **No** sklearn/torchvision substitutes, **no** synthetic replacement. Print a clear error if the data is missing — let the runner handle download.

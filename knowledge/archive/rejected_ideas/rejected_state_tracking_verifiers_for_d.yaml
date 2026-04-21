@@ -1,0 +1,240 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-19T20:19:51.149126+00:00'
+evaluator_model: ''
+falsification:
+  baseline: SagaLLM-style stateful orchestration with context management and validation,
+    but without explicit dependency-state commitment checking across steps.
+  expected_signal: At least +5% absolute end-task success and -15% relative cross-step
+    inconsistency rate with cost increase <= 10%.
+  failure_condition: End-task success improvement < 2% absolute or inconsistency reduction
+    < 10% relative at equal or higher normalized cost.
+  hypothesis: On long-horizon multi-agent workflows with explicit inter-step dependencies,
+    adding a dependency-aware state-tracking verifier yields higher end-task success
+    and fewer downstream inconsistency-induced failures than transaction/validation-based
+    stateful orchestration alone.
+  metric: 'Primary: end-task success rate on long-horizon dependency-rich tasks; Secondary:
+    cross-step inconsistency rate, rollback/replan frequency, and normalized token
+    cost per successful task.'
+  min_budget_ratio: 0.35
+gate_reasons:
+- repeat_degree == high (4/4 axes similar)
+gate_result: reject
+innovation:
+  our_delta: We propose an explicit state-tracking verifier that maintains structured
+    dependency commitments across agents and checks each new action for violations
+    of prior state, temporal, and cross-step constraints.
+  problem_gap: Existing methods fail because they improve routing, coordination, or
+    decomposition without explicitly enforcing consistency between earlier task commitments
+    and later dependent actions, allowing hidden state errors to propagate across
+    long workflow horizons.
+  why_it_matters: Which improves end-task success and reduces cascading failure under
+    long-horizon, dependency-rich multi-agent workflows at comparable inference cost.
+kb_duplicates: []
+kb_related:
+- failures/duplicate_ideas.md
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+- failures/duplicate_ideas.md
+proposal_id: state_tracking_verifiers_for_d
+re_eval_count: 0
+repeat_degree: high
+research_question: Can an explicit state-tracking verifier that monitors intermediate
+  task commitments and cross-step dependencies reduce long-horizon error propagation
+  in multi-agent workflows more effectively than existing routing, debate-depth, and
+  failure-aware decomposition strategies?
+retrieval_cache_key: 8033e35438f914e7
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 3
+  novelty: 2
+  significance: 3
+similar_papers:
+- arxiv_id: '2510.01353'
+  authors:
+  - Darshan Deshpande
+  - Varun Gangal
+  - Hersh Mehta
+  - Anand Kannappan
+  - Rebecca Qian
+  - Peng Wang
+  axes:
+    method: different
+    metric: different
+    problem: similar
+    setting: similar
+  citation_count: 6
+  doi: 10.48550/arXiv.2510.01353
+  source: semantic_scholar
+  title: 'MEMTRACK: Evaluating Long-Term Memory and State Tracking in Multi-Platform
+    Dynamic Agent Environments'
+  venue: arXiv.org
+  weighted_similarity: 0.9
+  year: 2025
+- arxiv_id: '2505.04997'
+  authors:
+  - Ling Yue
+  - Nithin Somasekharan
+  - Yadi Cao
+  - Shaowu Pan
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 17
+  doi: 10.48550/arXiv.2505.04997
+  source: semantic_scholar
+  title: 'Foam-Agent: Towards Automated Intelligent CFD Workflows'
+  venue: arXiv.org
+  weighted_similarity: 0.9
+  year: 2025
+- arxiv_id: '2503.11951'
+  authors:
+  - Edward Y. Chang
+  - Longling Geng
+  axes:
+    method: similar
+    metric: similar
+    problem: similar
+    setting: similar
+  citation_count: 30
+  doi: 10.14778/3750601.3750611
+  source: semantic_scholar
+  title: 'SagaLLM: Context Management, Validation, and Transaction Guarantees for
+    Multi-Agent LLM Planning'
+  venue: Proceedings of the VLDB Endowment
+  weighted_similarity: 0.9
+  year: 2025
+- arxiv_id: '2505.12501'
+  authors:
+  - Edward Y. Chang
+  - Longling Geng
+  axes:
+    method: similar
+    metric: different
+    problem: similar
+    setting: different
+  citation_count: 6
+  doi: 10.1145/3749421.3749436
+  source: semantic_scholar
+  title: 'ALAS: A Stateful Multi-LLM Agent Framework for Disruption-Aware Planning'
+  venue: arXiv.org
+  weighted_similarity: 0.9
+  year: 2025
+- arxiv_id: '2601.19747'
+  authors:
+  - Jiale Liu
+  - Taiyu Zhou
+  - Tianqi Jiang
+  axes:
+    method: similar
+    metric: different
+    problem: similar
+    setting: different
+  citation_count: 2
+  doi: 10.48550/arXiv.2601.19747
+  source: semantic_scholar
+  title: 'Veri-Sure: A Contract-Aware Multi-Agent Framework with Temporal Tracing
+    and Formal Verification for Correct RTL Code Generation'
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2026
+- arxiv_id: ''
+  authors:
+  - A. González-Potes
+  - Ramón A. Félix-Cuadras
+  - Luis J. Mena
+  - V. Félix
+  - Rafael Martínez-Peláez
+  - R. Ostos
+  - P. Velarde-Alvarado
+  - A. Ochoa-Brust
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.3390/technologies14010044
+  source: semantic_scholar
+  title: 'Safety-Aware Multi-Agent Deep Reinforcement Learning for Adaptive Fault-Tolerant
+    Control in Sensor-Lean Industrial Systems: Validation in Beverage CIP'
+  venue: Technologies
+  weighted_similarity: 0.63
+  year: 2026
+- arxiv_id: '2601.09216'
+  authors:
+  - Xinyuan Zhang
+  - Zijian Wang
+  - Chang Dao
+  - Juexiao Zhou
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.48550/arXiv.2601.09216
+  source: semantic_scholar
+  title: Honesty-Aware Multi-Agent Framework for High-Fidelity Synthetic Data Generation
+    in Digital Psychiatric Intake Doctor-Patient Interactions
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2026
+- arxiv_id: ''
+  authors:
+  - Atharva Devikar
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.22214/ijraset.2025.75760
+  source: semantic_scholar
+  title: Real-Time Context-Aware Orchestration of Multi- Platform AI Agents Using
+    Temporal Workflows and Priority-Based Scheduling
+  venue: International Journal for Research in Applied Science and Engineering Technology
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - Zhihan Shi
+  - Weisong Han
+  - Chen Zhang
+  - Guangming Zhang
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 1
+  doi: 10.3390/electronics14091783
+  source: semantic_scholar
+  title: A Modular Prescribed Performance Formation Control Scheme of a High-Order
+    Multi-Agent System with a Finite-Time Extended State Observer
+  venue: Electronics
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: '2512.00797'
+  authors:
+  - Nan Sun
+  - Bo Mao
+  - Yongchang Li
+  - Chenxu Wang
+  - Di Guo
+  - Huaping Liu
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.48550/arXiv.2512.00797
+  source: semantic_scholar
+  title: Transforming Monolithic Foundation Models into Embodied Multi-Agent Architectures
+    for Human-Robot Collaboration
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2025
+title: State-Tracking Verifiers for Dependency-Aware Multi-Agent Workflows

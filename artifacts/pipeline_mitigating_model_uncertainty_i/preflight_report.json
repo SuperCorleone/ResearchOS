@@ -1,0 +1,124 @@
+{
+  "verdict": "WARN",
+  "checks": {
+    "four_slot_plan": true,
+    "syntax_valid": true,
+    "imports_available": true,
+    "models_match_plan": true,
+    "metrics_match_plan": true,
+    "data_source_match": false,
+    "reference_data_consistency": false,
+    "seed_parameter_accepted": true,
+    "timeout_risk": "LOW",
+    "reference_codebases_grounded": true
+  },
+  "issues": [
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'dataset_description'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'dataset_location'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'task_definition'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'read_data_step'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'data_preprocessing_step'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_dataset",
+      "detail": "Slot 'plan_dataset' is missing required sub-key 'data_dataloader_step'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_model",
+      "detail": "Slot 'plan_model' is missing required sub-key 'model_input'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_model",
+      "detail": "Slot 'plan_model' is missing required sub-key 'model_output'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_model",
+      "detail": "Slot 'plan_model' is missing required sub-key 'key_components'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_training",
+      "detail": "Slot 'plan_training' is missing required sub-key 'training_pipeline'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_training",
+      "detail": "Slot 'plan_training' is missing required sub-key 'loss_function'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_training",
+      "detail": "Slot 'plan_training' is missing required sub-key 'training_configurations'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_training",
+      "detail": "Slot 'plan_training' is missing required sub-key 'monitor_and_logging'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_testing",
+      "detail": "Slot 'plan_testing' is missing required sub-key 'test_metric'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_testing",
+      "detail": "Slot 'plan_testing' is missing required sub-key 'test_data'."
+    },
+    {
+      "severity": "WARN",
+      "check": "four_slot_plan_plan_testing",
+      "detail": "Slot 'plan_testing' is missing required sub-key 'test_code'."
+    },
+    {
+      "severity": "WARN",
+      "check": "data_source",
+      "detail": "Plan says data.source='file' but code doesn't reference data/raw/"
+    },
+    {
+      "severity": "WARN",
+      "check": "reference_data_consistency",
+      "detail": "data.consistency_requirement references 'Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging' but code does not reference data/raw/ directory or fetch_dataset. Ensure the reference paper's data is being loaded."
+    }
+  ],
+  "g3_implementation_coverage": {
+    "claims_total": 6,
+    "claims_mapped": 0,
+    "trivial_implementations": 0,
+    "missing_claims": [
+      "No CLAIM-TO-CODE MAPPING table found in code"
+    ],
+    "per_concept": {},
+    "trivial_functions": []
+  },
+  "reference_codebases": {
+    "verdict": "PASS",
+    "repos_indexed": 0,
+    "per_concept": {},
+    "triples_total": 0,
+    "triples_verified": 0
+  }
+}

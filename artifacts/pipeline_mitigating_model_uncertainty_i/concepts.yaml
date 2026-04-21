@@ -1,0 +1,33 @@
+concepts:
+- id: C1
+  definition: "A method that combines predictions from multiple models by weighting their outputs according to their posterior probabilities, improving predictive performance by averaging over model space."
+  math_formula: "p(σ | data) = Σ_i p(σ | Mi, data) * p(Mi | data)"
+  reference_papers:
+    - "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  code_implementation: "bma-package::BayesianModelAveraging.py"
+- id: C2
+  definition: "Self-adaptive systems architecture includes Monitor, Analyze, Plan, Execute, incorporating a model space for decision-making under uncertainty."
+  reference_papers:
+    - "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  code_implementation: "Distributed across MAPE components"
+- id: C3
+  definition: "Strategy for model combination where a meta-learner is trained on out-of-fold predictions from multiple base models, optimizing for predictive accuracy on held-out data."
+  reference_papers:
+    - "To be retrieved related to ensemble stacking methodologies"
+  code_implementation: "Suggests meta-learner model implementations"
+- id: C4
+  definition: "A class of models used for regression and classification that includes linear models with a link function, applied as candidate models in ensemble approaches."
+  reference_papers:
+    - "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  code_implementation: "Implemented using packages like `statsmodels`"
+- id: C5
+  definition: "A metric for assessing the accuracy of probabilistic predictions, where lower scores indicate better calibration."
+  math_formula: "Brier score = (1/n) Σ (f_i - o_i)^2"
+  reference_papers:
+    - "Probabilistic forecasting and model evaluation literature"
+  code_implementation: "sklearn.metrics.brier_score_loss()"
+- id: C6
+  definition: "A scenario involving a search-and-rescue robot, used to evaluate adaptation strategies under uncertainty with predefined system conditions."
+  reference_papers:
+    - "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  code_implementation: "Simulation code in robotics environments like ROS"

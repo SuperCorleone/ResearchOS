@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "hypothesis_ensemble_planning_f",
+  "title": "Hypothesis-Ensemble Planning for Uncertainty-Aware Agentic Workflows",
+  "research_question": "Can maintaining and updating multiple latent failure hypotheses during multi-agent workflow execution reduce unnecessary re-planning and improve task success under distribution shift compared with single-belief orchestration policies?",
+  "hypothesis": "A workflow orchestrator that performs Bayesian-style averaging over multiple workflow-state hypotheses before planning will be better calibrated and more cost-effective than single-hypothesis orchestrators, especially when agent failures stem from ambiguous causes such as tool unreliability, decomposition errors, or verifier disagreement.",
+  "motivation": "The knowledge base surfaces a clear gap around model-selection uncertainty: existing self-adaptive planning work argues that committing to one 'best' model causes overconfident decisions and unnecessary adaptations, yet the rejected workflow ideas indicate that naive transfers of uncertainty handling or verifier allocation into agent orchestration are not novel enough. A stronger direction is to adapt multi-hypothesis runtime planning from self-adaptive systems to agentic workflow optimization, focusing specifically on ambiguous workflow failure causes rather than generic uncertainty or verifier budgeting. This targets a high-priority tracked direction and offers a falsifiable advance over single-belief orchestration.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-19T20:07:42.532506+00:00",
+  "status": "pending"
+}

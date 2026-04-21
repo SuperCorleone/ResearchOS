@@ -51,7 +51,17 @@ Your top-level directive is:
 Include these four lines **verbatim** in your internal reasoning so that
 downstream logs can verify the protocol.
 
-## 3-Phase Workflow
+## 4-Phase Workflow
+
+### Phase 0 — Code Reconnaissance
+
+1. Read `code_recon.yaml` from the pipeline directory via `file_read`.
+2. If it exists and contains repos with `status: ok` or `status: cached`,
+   note their `slug`, `path`, and `entry_points` for use in Phase 3.
+3. For each cloned repo, browse its directory structure and key source files
+   via `file_read` so you have a concrete inventory of what code exists.
+4. If `code_recon.yaml` is absent or has no usable repos, note that code
+   grounding will be limited — many concepts will use `NOT_AVAILABLE`.
 
 ### Phase 1 — Survey (orchestrator)
 
@@ -77,10 +87,17 @@ For each atomic concept:
 
 For each atomic concept:
 
-1. If `reference_code` is available, locate the file/function that implements
-   this concept and record it as `<file>::<func>` in `code_implementation`.
-2. Otherwise, describe the minimal code contract needed (e.g., `softmax(q) over
-   action set`), still in `code_implementation`.
+1. If `reference_code` is available or Phase 0 identified cloned repos, search
+   the actual source files for the function that implements this concept.
+   Record it as `<file>::<func>` in `code_implementation`.
+2. If no concrete implementation can be found in any available codebase,
+   set `code_implementation` to `NOT_AVAILABLE`.
+
+**NEVER use vague english descriptions, package names, or pseudocode in
+`code_implementation`.** The only accepted formats are:
+- `<file>::<function>` (e.g. `train.py::build_model`)
+- `<slug>::<path>::L<start>-L<end>` (codebase triple)
+- `NOT_AVAILABLE` (when no code exists yet)
 3. If `code_recon.yaml` is present and contains a repo whose `status` is `ok`
    or `cached`, open the repo under the reported `path` and locate the
    function or code block that implements this concept. Record the locator

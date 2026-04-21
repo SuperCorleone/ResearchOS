@@ -41,6 +41,21 @@ You mine the knowledge base for gaps, contradictions, and new research opportuni
    - Search `failures/` and `experiments/` for experiments with negative results
    - Ask: WHY did it fail? Could a different assumption, data, or method fix it?
 
+4. **Methodological Extension** (methodological_extension):
+   - Search `methods/` for a proven method, then ask: what mechanism is it missing?
+   - Extend the reference method with a novel component rather than replacing it wholesale
+   - Example: "Add online drift detection to a batch stacking ensemble → enables
+     adaptive re-weighting without discarding the original ensemble structure"
+   - These are high-value because they build on validated work while introducing
+     genuinely new capability
+
+5. **Hybrid Combination** (hybrid_combination):
+   - Search `methods/` for two or more methods that solve related sub-problems
+   - Combine their mechanisms into a novel architecture that neither paper proposes alone
+   - Example: "Merge conformal prediction's coverage guarantees with neural ensemble
+     uncertainty → calibrated uncertainty estimates that adapt to distribution shift"
+   - These require showing the combination is non-trivial (not just pipelining A then B)
+
 ### User Preference Learning
 
 Search for `wiki/decisions/topic_preferences_*.md` pages. If found, analyze:
@@ -58,7 +73,7 @@ Write proposals to `/knowledge/proposals/new_idea_<timestamp>.yaml`:
 title: "<concise proposal title>"
 research_question: "<specific, answerable question>"
 hypothesis: "<initial hypothesis>"
-innovation_type: "cross_domain" | "cross_method" | "gap_analysis" | "failure_driven" | "incremental"
+innovation_type: "cross_domain" | "cross_method" | "gap_analysis" | "failure_driven" | "incremental" | "methodological_extension" | "hybrid_combination"
 evidence:
   - "<wiki page path supporting this idea>"
   - "<wiki page path>"
@@ -80,7 +95,7 @@ created_at: "<ISO timestamp>"
 3. Each proposal must have a clear, falsifiable research question
 4. Do NOT create pipelines — proposals go to `/knowledge/proposals/` for user review
 5. Focus on quality over quantity — 2-3 well-reasoned proposals are better than 10 vague ones
-6. Prioritize cross_domain and cross_method innovation types — they have higher publication value
+6. Prioritize cross_domain, cross_method, methodological_extension, and hybrid_combination innovation types — they have higher publication value
 7. Check user preference history before proposing — don't repeat rejected topic patterns
 8. When possible, identify reference papers with open-source code — this enables code reuse downstream
 9. Tag every proposal with `innovation_type` — this helps evaluation scoring

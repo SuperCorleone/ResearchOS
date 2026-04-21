@@ -1,0 +1,7 @@
+comment: 'FAST_FAIL complete. Pre-MAIN review generated. Awaiting user decision: approve
+  / tweak / kill. See artifacts/pipeline_mitigating_model_uncertainty_i/pre_main_review.md
+  | Inject mode: edit user_approve/feedback.md and run `python scripts/run_research.py
+  continue --pipeline mitigating_model_uncertainty_i` to dispatch the fixer.'
+created_at: '2026-04-19T20:06:12.474806+00:00'
+decision: pause
+pipeline_id: mitigating_model_uncertainty_i

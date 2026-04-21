@@ -1,0 +1,31 @@
+data_snapshot_id: '20260419_200311'
+dataset_name: unknown
+directory_hash: sha256:e740f7a2876cea0b2a8e16f2cfc6f04bd4cd6c5cd4eac209f507a0add629f426
+download_date: '2026-04-19T20:03:11.615170+00:00'
+files:
+- hash: sha256:35e1854d442b5c1722e8b0965c7da12bbdbad58bf37eb90d8d2f05fbe3a2de1d
+  path: cost_input.csv
+  rows: 96
+  size_bytes: 1455
+- hash: sha256:01a8a28dda5242513cb1305b0d0aae0e3dd9f96166192535cb23a847572eec31
+  path: training_rescueRobot_12800_9.csv
+  rows: 12800
+  size_bytes: 1378553
+- hash: sha256:44b641e0f19ef040425bcbe30cc944c726759236cfbe277d49656c10ddeb984f
+  path: training_rescueRobot_25600_64.csv
+  rows: 25600
+  size_bytes: 29908134
+- hash: sha256:f718d20bf77688c81d05f9c4fd4d18cb360b7b503ffb5194edb6299e205318f0
+  path: training_rescueRobot_450.csv
+  rows: 462
+  size_bytes: 19175
+- hash: sha256:f718d20bf77688c81d05f9c4fd4d18cb360b7b503ffb5194edb6299e205318f0
+  path: validation_rescueRobot_450.csv
+  rows: 462
+  size_bytes: 19175
+license: ''
+pipeline_id: mitigating_model_uncertainty_i
+source_url: ''
+total_files: 5
+total_rows: 39420
+version: v1

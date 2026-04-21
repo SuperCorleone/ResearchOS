@@ -847,6 +847,25 @@ class Dispatcher:
                 except Exception:
                     pass
 
+        # For CONCEPT_EXTRACT: inject code_recon.yaml content directly into
+        # the prompt so the agent has it without needing a file_read round-trip.
+        code_recon_notice = ""
+        if step == PipelineStep.CONCEPT_EXTRACT:
+            recon_path = pdir / "code_recon.yaml"
+            if recon_path.exists():
+                try:
+                    recon_text = recon_path.read_text()
+                    code_recon_notice = (
+                        "\n## Code Reconnaissance (code_recon.yaml)\n"
+                        "The following code_recon.yaml was produced by the CODE_RECON step. "
+                        "Use it to ground `code_implementation` and `reference_codebases` "
+                        "fields in real code. Search the cloned repos listed below for "
+                        "concrete implementations of each concept.\n\n"
+                        f"```yaml\n{recon_text}\n```\n"
+                    )
+                except Exception:
+                    logger.debug("Failed to read code_recon.yaml for prompt injection", exc_info=True)
+
         # Only inject artifacts relevant to this step to save tokens
         _relevant_artifacts = {
             PipelineStep.HYPOTHESIS: set(),  # reads from KB only
@@ -882,7 +901,7 @@ Execute step: **{step.value}** for pipeline: **{pipeline.pipeline_id}**
 - Title: {pipeline.title}
 - Research Question: {pipeline.research_question}
 - Current Stage: {pipeline.stage.value}
-{design_check_notice}{data_notice}{ref_notice}{consistency_notice}{directives_notice}
+{design_check_notice}{data_notice}{ref_notice}{consistency_notice}{directives_notice}{code_recon_notice}
 ## CRITICAL: Required Output
 You MUST write exactly this file using file_write: **{expected_output}**
 Use the filename as-is (relative path). Do NOT use absolute paths.

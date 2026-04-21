@@ -1,0 +1,7 @@
+canonical_action: finalize
+comment: Paper artifacts complete. Approving for publication.
+created_at: '2026-04-19T20:36:28.086375+00:00'
+decision: approve
+gate: pre_publish
+next_milestone: paper
+pipeline_id: mitigating_model_uncertainty_i

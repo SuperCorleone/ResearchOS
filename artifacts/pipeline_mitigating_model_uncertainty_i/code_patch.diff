@@ -1,0 +1,203 @@
+*** Begin Patch
+*** Add File: run_experiment.py
++#!/usr/bin/env python3
++"""Fast-fail runner for mitigating_model_uncertainty_i.
++
++This script intentionally enforces the reference-paper data consistency
++requirement before any experiment proceeds. In the current FAST_FAIL stage,
++the exact reference dataset / split / preprocessing artifact is not present,
++so the script exits gracefully with a structured JSON result indicating the
++blocker rather than fabricating data or substituting a different dataset.
++"""
++
++import argparse
++import hashlib
++import json
++import logging
++import os
++import platform
++import random
++import sys
++import time
++from pathlib import Path
++
++try:
++    import yaml  # type: ignore
++except Exception as exc:  # pragma: no cover
++    print(json.dumps({"error": f"PyYAML import failed: {exc}"}))
++    raise
++
++
++PIPELINE_ID = "mitigating_model_uncertainty_i"
++RAW_DATA_DIR = Path(f"/data/raw/{PIPELINE_ID}")
++PIPELINE_ARTIFACT_DIR = Path(".")
++DATA_MANIFEST_PATH = PIPELINE_ARTIFACT_DIR / "data_manifest.yaml"
++
++
++def print_dependency_versions() -> None:
++    versions = {
++        "python": sys.version.replace("\n", " "),
++        "platform": platform.platform(),
++        "pyyaml": getattr(yaml, "__version__", "unknown"),
++    }
++    print("DEPENDENCY_VERSIONS=" + json.dumps(versions, sort_keys=True))
++
++
++def seed_everything(seed: int) -> None:
++    random.seed(seed)
++    try:
++        import numpy as np  # type: ignore
++
++        np.random.seed(seed)
++    except Exception:
++        pass
++    try:
++        import torch  # type: ignore
++
++        torch.manual_seed(seed)
++        if torch.cuda.is_available():
++            torch.cuda.manual_seed_all(seed)
++        torch.backends.cudnn.deterministic = True
++        torch.backends.cudnn.benchmark = False
++    except Exception:
++        pass
++
++
++def load_yaml(path: Path):
++    if not path.exists():
++        return None
++    with path.open("r", encoding="utf-8") as handle:
++        return yaml.safe_load(handle)
++
++
++def sha256_file(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        while True:
++            chunk = handle.read(1024 * 1024)
++            if not chunk:
++                break
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def directory_fingerprint(path: Path) -> str:
++    entries = []
++    for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
++        rel = str(file_path.relative_to(path))
++        entries.append(f"{rel}:{sha256_file(file_path)}")
++    joined = "\n".join(entries).encode("utf-8")
++    return hashlib.sha256(joined).hexdigest() if entries else "missing"
++
++
++def write_minimal_manifest(raw_dir: Path, out_path: Path) -> str:
++    manifest = {
++        "pipeline_id": PIPELINE_ID,
++        "data_dir": str(raw_dir),
++        "directory_hash": directory_fingerprint(raw_dir) if raw_dir.exists() else "missing",
++        "files": [],
++    }
++    if raw_dir.exists():
++        for file_path in sorted(p for p in raw_dir.rglob("*") if p.is_file()):
++            manifest["files"].append(
++                {
++                    "path": str(file_path.relative_to(raw_dir)),
++                    "sha256": sha256_file(file_path),
++                    "size_bytes": file_path.stat().st_size,
++                }
++            )
++    with out_path.open("w", encoding="utf-8") as handle:
++        yaml.safe_dump(manifest, handle, sort_keys=False)
++    return manifest["directory_hash"]
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--plan", type=str, default="experiment_plan.yaml")
++    args = parser.parse_args()
++
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
++    print_dependency_versions()
++    seed_everything(args.seed)
++    start = time.time()
++
++    plan = load_yaml(Path(args.plan)) or {}
++    data_cfg = plan.get("data", {})
++    data_source = data_cfg.get("source", "unknown")
++    data_split_seed = (((plan.get("plan_dataset") or {}).get("split") or {}).get("seed", None))
++
++    if data_source != "file":
++        raise RuntimeError(
++            f"This pipeline requires data.source=file per the reference-paper consistency rule; got {data_source!r}."
++        )
++
++    manifest_hash = write_minimal_manifest(RAW_DATA_DIR, DATA_MANIFEST_PATH)
++
++    if not RAW_DATA_DIR.exists() or not any(RAW_DATA_DIR.rglob("*")):
++        logging.error("Missing reference dataset directory: %s", RAW_DATA_DIR)
++        print(
++            f"PROVENANCE source={data_source} rows=unknown split_seed={data_split_seed} raw_dir={RAW_DATA_DIR}"
++        )
++        result = {
++            "metrics": {},
++            "config": {
++                "data_source": data_source,
++                "data_split_seed": data_split_seed,
++                "data_rows": None,
++                "data_hash": manifest_hash,
++                "pipeline_id": PIPELINE_ID,
++                "status": "blocked_missing_reference_data",
++            },
++            "seed": args.seed,
++            "runtime_seconds": round(time.time() - start, 6),
++            "status": "blocked",
++            "error": (
++                "Reference-paper dataset unavailable. Per experiment_plan.yaml and the data consistency rule, "
++                "the experiment must use the exact runtime traces / replication package from the reference paper. "
++                "No synthetic or substitute dataset is permitted."
++            ),
++        }
++        print(json.dumps(result, sort_keys=True))
++        return 0
++
++    files = [p for p in RAW_DATA_DIR.rglob("*") if p.is_file()]
++    print(f"PROVENANCE source={data_source} rows=unknown split_seed={data_split_seed} file_count={len(files)}")
++
++    result = {
++        "metrics": {},
++        "config": {
++            "data_source": data_source,
++            "data_split_seed": data_split_seed,
++            "data_rows": None,
++            "data_hash": manifest_hash,
++            "pipeline_id": PIPELINE_ID,
++            "status": "blocked_pending_split_and_preprocessing_verification",
++        },
++        "seed": args.seed,
++        "runtime_seconds": round(time.time() - start, 6),
++        "status": "blocked",
++        "error": (
++            "Raw data files may exist, but execution remains blocked until exact filename/hash matching, "
++            "reference split reproduction, and preprocessing diff-checking against the reference implementation "
++            "are verified. FAST_FAIL runner intentionally stops before training."
++        ),
++    }
++    print(json.dumps(result, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
++
++
++# === CLAIM-TO-CODE MAPPING ===
++# | Concept ID | Claim / Concept definition | File/Function | Mechanism |
++# |------------|----------------------------|---------------|-----------|
++# | H1 | replacing BMA with stacking may reduce model-selection uncertainty and improve adaptation quality | run_experiment.py/main | SKIPPED because FAST_FAIL stage blocks execution until exact reference dataset/split/preprocessing are recovered |
++# | H2 | exact reference dataset, train/test split, and preprocessing must be preserved | run_experiment.py/main; write_minimal_manifest | hard gate on /data/raw/mitigating_model_uncertainty_i plus manifest/hash/provenance emission before any training |
++# | H3 | no synthetic or substitute dataset is allowed | run_experiment.py/main | explicit failure path when reference file data are absent; no fallback generation implemented |
++# === END MAPPING ===
+*** Add File: requirements.txt
++PyYAML>=6.0
+*** End Patch

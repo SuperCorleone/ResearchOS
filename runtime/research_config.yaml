@@ -110,6 +110,7 @@ branching:
 
 ## Innovation Scoring Bonus
 innovation:
-  # Bonus points for cross-domain/cross-method innovation types in topic evaluation
+  # Bonus points for innovation types in topic evaluation (added to novelty, capped at 3)
   cross_domain_bonus: 1
   cross_method_bonus: 1
+  extension_bonus: 1

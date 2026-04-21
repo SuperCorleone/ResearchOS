@@ -1,0 +1,50 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-19T20:08:07.158299+00:00'
+evaluator_model: ''
+falsification:
+  baseline: A fixed orchestration workflow that applies the same decomposition and
+    verification pattern to every subproblem, with a matched average cost budget.
+  expected_signal: At least 5-10% improvement in task success per unit cost, with
+    non-inferior or improved absolute success rate at equal average cost.
+  failure_condition: Disproved if the proposed controller improves task success per
+    unit cost by less than 5% over the fixed-policy baseline, or if success rate is
+    not higher at matched average cost across the evaluation suite.
+  hypothesis: A risk-calibrated escalation controller will achieve higher task success
+    per unit cost than a fixed orchestration policy by selectively escalating only
+    high-ambiguity subproblems.
+  metric: 'Primary metric: task success per dollar (or per 1,000 tokens / unit compute).
+    Secondary check: task success rate at equal average cost.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a risk-calibrated multi-agent workflow controller that maintains
+    multiple plausible execution hypotheses and escalates only subproblems whose posterior
+    ambiguity remains high, using added critique, retrieval, or verification selectively
+    rather than uniformly.
+  problem_gap: Existing methods fail because fixed orchestration policies and single-best-controller
+    decisions treat uncertain subproblems too confidently, causing either unnecessary
+    verification cost or missed escalations on genuinely ambiguous steps.
+  why_it_matters: Which improves task success per unit cost and reliability under
+    constrained inference budgets and heterogeneous subproblem uncertainty in agentic
+    workflow execution.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: risk_calibrated_escalation_for
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a multi-agent workflow controller that explicitly models model-selection
+  uncertainty and escalates only high-ambiguity subproblems to additional agents or
+  verification steps improve task success per unit cost versus fixed orchestration
+  policies?
+retrieval_cache_key: 856e7442d45ceacb
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Risk-Calibrated Escalation for Multi-Agent Workflows

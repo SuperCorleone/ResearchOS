@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import subprocess
 import sys
@@ -472,6 +473,12 @@ class AgentExecutor:
         final_text = ""
         start_time = time.monotonic()
 
+        # gpt-5.x and o-series models use max_completion_tokens instead of max_tokens
+        _uses_completion_tokens = bool(
+            re.match(r"(o1|o3|o4|gpt-5)", self.model.split("/")[-1].lower())
+        )
+        _token_kwarg = "max_completion_tokens" if _uses_completion_tokens else "max_tokens"
+
         for turn in range(self.max_turns):
             # Retry loop for rate-limit (429) errors
             response = None
@@ -479,7 +486,7 @@ class AgentExecutor:
                 try:
                     response = self._client.chat.completions.create(
                         model=self.model,
-                        max_tokens=self.max_tokens,
+                        **{_token_kwarg: self.max_tokens},
                         tools=_TOOLS,
                         messages=messages,
                     )

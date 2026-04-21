@@ -8,9 +8,23 @@ side-output that pairs a pass/fail per concept with a one-sentence suggestion.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+# Accepted code_implementation formats:
+#   1. <file>::<function>           e.g. "train.py::build_model"
+#   2. <slug>::<path>::L<start>-L<end>  e.g. "repo__name::src/model.py::L10-L50"
+#   3. Literal "NOT_AVAILABLE"      when no code exists yet
+#   4. Empty string (default)
+_FILE_FUNC_RE = re.compile(
+    r"^[A-Za-z0-9_.\-/]+::[A-Za-z_][A-Za-z0-9_]*$"
+)
+_CODEBASE_TRIPLE_RE = re.compile(
+    r"^[A-Za-z0-9_.\-]+::[^:]+::L\d+-L\d+$"
+)
 
 
 class AtomicConcept(BaseModel):
@@ -19,9 +33,32 @@ class AtomicConcept(BaseModel):
     id: str                                    # C1, C2, ...
     definition: str                            # single self-contained concept
     math_formula: str = ""                     # LaTeX
-    code_implementation: str = ""              # code snippet or file::func locator
+    code_implementation: str = ""              # file::func locator or NOT_AVAILABLE
     reference_papers: list[str] = Field(default_factory=list)
     reference_codebases: list[str] = Field(default_factory=list)
+
+    @field_validator("code_implementation")
+    @classmethod
+    def validate_code_implementation(cls, v: str) -> str:
+        """Reject vague english, package names, and pseudocode.
+
+        Accepted formats:
+        - Empty string (field not yet populated)
+        - ``<file>::<function>`` e.g. ``train.py::build_model``
+        - ``<slug>::<path>::L<start>-L<end>`` (codebase triple)
+        - Literal ``NOT_AVAILABLE``
+        """
+        if not v or v == "NOT_AVAILABLE":
+            return v
+        if _FILE_FUNC_RE.match(v):
+            return v
+        if _CODEBASE_TRIPLE_RE.match(v):
+            return v
+        raise ValueError(
+            f"code_implementation must be '<file>::<function>', "
+            f"'<slug>::<path>::L<start>-L<end>', or 'NOT_AVAILABLE'. "
+            f"Got: {v!r}"
+        )
 
 
 class AdvisorVerdict(BaseModel):

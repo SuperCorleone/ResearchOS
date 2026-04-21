@@ -1,0 +1,9 @@
+pipeline_id: mitigating_model_uncertainty_i
+max_repo_bytes: 524288000
+repos:
+- url: https://github.com/matteocamilli/bma-package
+  slug: matteocamilli__bma-package
+  path: ''
+  status: error
+  error: 'fatal: cannot copy ''/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/commit-msg.sample''
+    to ''/Users/adukopun/Documents/ClaudeCodeWorkspace/ResearchOS/.claude/worktrees/shiny-tickl'

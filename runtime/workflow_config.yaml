@@ -40,7 +40,7 @@
 model_tiers:
   T1: "${RESEARCHOS_MODEL_T1:-gpt-5.4}"
   T2: "${RESEARCHOS_MODEL_T2:-gpt-4o}"
-  T3: "${RESEARCHOS_MODEL_T3:-gpt-o4-mini}"
+  T3: "${RESEARCHOS_MODEL_T3:-o4-mini}"
 
 agent_model_tiers:
   # T1 — 9 high-reasoning agents
@@ -227,3 +227,16 @@ stages:
         alternatives:
           - next: run
             condition: "code already exists from prior iteration"
+
+# ---------------------------------------------------------------------------
+# Gate configuration
+# ---------------------------------------------------------------------------
+# Automated gates that run between stages to prevent token waste.
+#
+#   fast_fail_auto_block — when true (default), the scheduler inspects the
+#   critic's analysis_report.md after FAST_FAIL completes. If the verdict is
+#   INCONCLUSIVE with an ITERATE recommendation AND every Key Metrics row is
+#   FAIL, the pipeline is auto-paused with a decision file instead of
+#   proceeding to pre_main_review and MAIN stage.
+gates:
+  fast_fail_auto_block: true

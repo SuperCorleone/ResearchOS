@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -680,6 +681,83 @@ class ResearchScheduler:
             decision.pipeline_id,
         )
 
+    def _load_gate_config(self) -> dict:
+        """Load the ``gates:`` block from workflow_config.yaml."""
+        import yaml as _yaml
+
+        cfg_path = self.project_root / "runtime" / "workflow_config.yaml"
+        try:
+            if cfg_path.exists():
+                raw = _yaml.safe_load(cfg_path.read_text()) or {}
+                gates = raw.get("gates")
+                if isinstance(gates, dict):
+                    return gates
+        except Exception:
+            logger.debug("Failed to read gates config; using defaults", exc_info=True)
+        return {}
+
+    def _check_fast_fail_gate(
+        self, pipeline: PipelineState
+    ) -> tuple[bool, str]:
+        """Check whether a FAST_FAIL pipeline should be auto-blocked.
+
+        Returns ``(should_block, reason)``.  Blocks when the critic's
+        ``analysis_report.md`` has verdict INCONCLUSIVE **and** every row
+        in the Key Metrics table shows FAIL (no PASS or PARTIAL).
+        """
+        gates = self._load_gate_config()
+        if not gates.get("fast_fail_auto_block", True):
+            return False, ""
+
+        pdir = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+        )
+        report_path = pdir / "analysis_report.md"
+        if not report_path.exists():
+            return False, ""
+
+        try:
+            text = report_path.read_text(errors="replace")
+        except Exception:
+            logger.debug("Could not read analysis_report.md for auto-gate check")
+            return False, ""
+
+        verdict_inconclusive = bool(
+            re.search(r"\*\*Verdict\*\*\s*:\s*INCONCLUSIVE", text, re.IGNORECASE)
+        )
+        has_iterate = bool(
+            re.search(r"^##\s*Recommendation\s*\n+\s*ITERATE", text, re.MULTILINE)
+        )
+
+        if not (verdict_inconclusive and has_iterate):
+            return False, ""
+
+        km_match = re.search(
+            r"###\s*Key Metrics\s*\n(.*?)(?=\n##|\Z)", text, re.DOTALL
+        )
+        if not km_match:
+            return False, ""
+
+        km_section = km_match.group(1)
+        metric_rows = re.findall(r"\|\s*(FAIL|PASS|PARTIAL)\s*\|", km_section)
+        if not metric_rows:
+            return False, ""
+
+        statuses = {s.upper() for s in metric_rows}
+        all_fail = statuses == {"FAIL"}
+
+        if not all_fail:
+            return False, ""
+
+        reason = (
+            f"FAST_FAIL auto-gate: verdict is INCONCLUSIVE with ITERATE recommendation "
+            f"and all {len(metric_rows)} key metrics are FAIL. "
+            f"Pipeline blocked to prevent token waste in MAIN stage."
+        )
+        return True, reason
+
     async def _generate_pre_main_review(
         self, pipeline: PipelineState, pdir: Path
     ) -> None:
@@ -1150,6 +1228,27 @@ class ResearchScheduler:
             pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
 
             if was_fast_fail:
+                # Auto-gate: block pipelines where all metrics FAIL and
+                # verdict is INCONCLUSIVE to avoid wasting tokens in MAIN.
+                should_block, block_reason = self._check_fast_fail_gate(pipeline)
+                if should_block:
+                    logger.warning(
+                        "FAST_FAIL auto-gate triggered for %s: %s",
+                        pipeline.pipeline_id, block_reason,
+                    )
+                    pipeline.last_error = block_reason
+                    self.state.save_pipeline(pipeline)
+                    self._write_default_decision(
+                        pipeline.pipeline_id,
+                        "pause",
+                        comment=f"[AUTO-GATE] {block_reason}",
+                    )
+                    self.state.append_log(
+                        f"FAST_FAIL auto-gate PAUSED pipeline: {block_reason}",
+                        pipeline.pipeline_id,
+                    )
+                    return
+
                 # After FAST_FAIL: generate pre_main_review.md, then block
                 # for user approval (approve / tweak / kill)
                 await self._generate_pre_main_review(pipeline, pdir)

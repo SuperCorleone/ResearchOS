@@ -1,0 +1,6 @@
+directives:
+  - "CRITICAL: Do NOT regenerate or overwrite run_experiment.py. It already exists and runs correctly."
+  - "Target column is 'hazard' (binary 0/1). Features: illuminance, smoke, size, distance, firm (Yes/No), power, band, quality, speed."
+  - "Data: data/raw/mitigating_model_uncertainty_i/training_rescueRobot_450.csv + validation_rescueRobot_450.csv"
+  - "Experiment compares BMA (uniform GLM ensemble, 5 C values) vs Stacking (logistic meta-learner on 5-fold OOF). Already implemented."
+  - "Verified output: BMA Brier~0.172, Stacking Brier~0.173, accuracy ~73%."

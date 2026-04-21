@@ -1,0 +1,53 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-19T20:19:12.382836+00:00'
+evaluator_model: ''
+falsification:
+  baseline: A standard message-passing multi-agent orchestration system that maintains
+    only the current best task interpretation/decomposition and updates it greedily
+    without explicit alternative hypothesis tracking.
+  expected_signal: At least +5% absolute success rate and 10% fewer messages per successful
+    task on ambiguity-heavy tasks.
+  failure_condition: If the belief-state method improves success rate by less than
+    2% absolute at equal communication budget, or fails to reduce messages per successful
+    task by at least 5%, or increases coordination-error rate relative to baseline,
+    the hypothesis is not supported.
+  hypothesis: In partially observable multi-agent workflow tasks with ambiguous intermediate
+    evidence, a shared belief-state memory that tracks multiple task hypotheses and
+    their confidence will achieve higher task success and lower communication cost
+    than standard message-passing orchestration with a single committed task state.
+  metric: 'Primary: success rate under a fixed communication budget. Secondary: messages
+    exchanged per successful task and coordination-error rate due to incorrect early
+    commitment.'
+  min_budget_ratio: 0.25
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a shared belief-state memory that maintains multiple plausible
+    task hypotheses with confidence scores and updates them throughout monitor-analyze-plan-execute
+    cycles instead of collapsing immediately to one workflow state.
+  problem_gap: Existing methods fail because they force multi-agent workflows to commit
+    too early to a single task interpretation or decomposition under partial observability,
+    causing brittle coordination and avoidable communication when that interpretation
+    is wrong.
+  why_it_matters: Which improves end-to-end task success and communication efficiency
+    under partially observable, ambiguity-prone multi-agent workflows where premature
+    commitment creates coordination errors.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: belief_state_memory_for_partia
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a shared belief-state memory that explicitly tracks alternative
+  task hypotheses and their confidence improve end-to-end accuracy and reduce unnecessary
+  agent interactions in partially observable multi-agent workflows?
+retrieval_cache_key: 253498681d0e9674
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Belief-State Memory for Partially Observable Multi-Agent Workflows

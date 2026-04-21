@@ -1,0 +1,34 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-19T20:20:48.309763+00:00'
+evaluator_model: ''
+falsification:
+  baseline: ''
+  expected_signal: ''
+  failure_condition: ''
+  hypothesis: ''
+  metric: ''
+  min_budget_ratio: 0.1
+gate_reasons:
+- 5-axis quick gate total=5/10 < 7 (reject short-circuit)
+gate_result: reject
+innovation:
+  our_delta: ''
+  problem_gap: ''
+  why_it_matters: ''
+kb_duplicates: []
+kb_related: []
+proposal_id: uncertainty_calibrated_causal_
+re_eval_count: 0
+repeat_degree: low
+research_question: Can causal reconstruction of latent inter-step state in multi-agent
+  workflows reduce downstream task failures and unnecessary verification costs compared
+  with step-local verification alone?
+retrieval_cache_key: ''
+scores:
+  differentiation: 0
+  falsifiability: 0
+  feasibility: 0
+  novelty: 0
+  significance: 0
+similar_papers: []
+title: Uncertainty-Calibrated Causal State Reconstruction for Multi-Agent Workflows

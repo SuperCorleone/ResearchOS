@@ -88,6 +88,45 @@ If the pipeline's research question or context mentions a specific paper to impr
 
 Without this information, the experiment designer may simplify the baseline or use different data, invalidating the comparison.
 
+## Extension Beyond Reference
+
+When the research question involves **extending** a reference method (adding a new mechanism
+or component) rather than simply **replacing** one component with another, frame the
+hypothesis accordingly.
+
+**Extension hypothesis** (preferred for `methodological_extension` / `hybrid_combination`):
+- Frame as an **added mechanism**: "We augment method X with mechanism Y, which enables
+  capability Z that X alone lacks."
+- Include **ablation predictions**: "Removing the extension (Y) should degrade performance
+  to baseline (X-only) levels on metric M."
+- Include the **extension's own falsification criterion**: "If the added mechanism Y does
+  not improve metric M by at least T% over baseline X, the extension is not justified."
+
+**Template -- extension hypothesis**:
+```
+Hypothesis: Augmenting [reference method] with [new mechanism] will improve
+[metric] by at least [threshold] on [dataset/setting], because [mechanism]
+addresses [specific limitation] of the reference method.
+
+Ablation prediction: Removing [new mechanism] from the augmented system should
+reduce [metric] to within [tolerance] of the unmodified [reference method],
+confirming the improvement is attributable to the extension.
+
+Falsification: If [metric] improvement < [threshold] OR the ablation shows
+< [min_drop]% degradation when removing the extension, the hypothesis is
+falsified.
+```
+
+**Contrast -- replacement hypothesis** (for simple swap proposals):
+```
+Hypothesis: Replacing [component A] in [reference method] with [component B]
+will improve [metric] by at least [threshold] on [dataset/setting].
+```
+
+Use the extension template whenever the proposal's `innovation_type` is
+`methodological_extension` or `hybrid_combination`. Use the replacement template
+for `cross_method` or `incremental` proposals that swap one component for another.
+
 ## Rules
 
 1. The hypothesis MUST be falsifiable

@@ -93,6 +93,10 @@ def _backlog_config(config: dict) -> dict:
     return config.get("backlog", {})
 
 
+def _innovation_config(config: dict) -> dict:
+    return config.get("innovation", {})
+
+
 # ── Step 1: Local KB retrieval ───────────────────────────────────
 
 
@@ -497,7 +501,7 @@ def _parse_five_axis_scores(raw: str) -> dict[str, int] | None:
     return out
 
 
-def five_axis_quick_gate(
+async def five_axis_quick_gate(
     candidate: dict, dispatcher: Any | None = None
 ) -> tuple[int, str]:
     """DeepScientist-style 5-axis quick triage gate.
@@ -517,28 +521,15 @@ def five_axis_quick_gate(
     if dispatcher is None:
         return 5, "review"
 
-    import asyncio
-
-    async def _run() -> dict[str, int] | None:
-        try:
-            result = await dispatcher.dispatch_via_executor(
-                "professor", _five_axis_prompt(candidate), "_system_quick_gate"
-            )
-            if result.get("success"):
-                return _parse_five_axis_scores(result.get("output", ""))
-        except Exception:
-            logger.exception("5-axis quick gate LLM dispatch failed")
-        return None
-
+    scores: dict[str, int] | None = None
     try:
-        scores = asyncio.run(_run())
-    except RuntimeError:
-        # Already inside an event loop – fall back to deterministic mode
-        logger.debug(
-            "five_axis_quick_gate called inside running event loop; "
-            "returning placeholder."
+        result = await dispatcher.dispatch_via_executor(
+            "professor", _five_axis_prompt(candidate), "_system_quick_gate"
         )
-        return 5, "review"
+        if result.get("success"):
+            scores = _parse_five_axis_scores(result.get("output", ""))
+    except Exception:
+        logger.exception("5-axis quick gate LLM dispatch failed")
 
     if not scores:
         return 5, "review"
@@ -605,21 +596,67 @@ def step7_apply_gating(
     return GateResult.REJECT, [f"total={total} < {backlog_min}"]
 
 
-def _determine_repeat_degree(axes_list: list[SimilarityAxis]) -> RepeatDegree:
-    """Determine repeat degree from the most similar paper's axes."""
+def _determine_repeat_degree(
+    axes_list: list[SimilarityAxis],
+    innovation_type: str = "",
+) -> RepeatDegree:
+    """Determine repeat degree from the most similar paper's axes.
+
+    For ``methodological_extension`` and ``hybrid_combination`` innovation
+    types the thresholds are raised: 4/4 axes required for HIGH (auto-reject)
+    and 4/4 for MEDIUM (professor review) instead of the default 3/4.  This
+    prevents the system from auto-rejecting proposals that deliberately share
+    problem/setting/metric with a reference but add a novel mechanism.
+    """
     if not axes_list:
         return RepeatDegree.LOW
 
     # Use the paper with the highest similarity count
     max_similar = max(a.similar_count for a in axes_list)
-    if max_similar >= 4:
-        return RepeatDegree.HIGH
-    elif max_similar == 3:
-        return RepeatDegree.MEDIUM
-    elif max_similar == 2:
-        return RepeatDegree.MEDIUM_LOW
+
+    # Extension-type proposals get higher tolerance — they intentionally
+    # share axes with existing work while adding novel mechanisms.
+    _extension_types = {"methodological_extension", "hybrid_combination"}
+    if innovation_type in _extension_types:
+        if max_similar >= 4:
+            return RepeatDegree.HIGH
+        else:
+            # 3/4 or fewer is acceptable for extension proposals
+            return RepeatDegree.LOW if max_similar <= 1 else RepeatDegree.MEDIUM_LOW
     else:
-        return RepeatDegree.LOW
+        if max_similar >= 4:
+            return RepeatDegree.HIGH
+        elif max_similar == 3:
+            return RepeatDegree.MEDIUM
+        elif max_similar == 2:
+            return RepeatDegree.MEDIUM_LOW
+        else:
+            return RepeatDegree.LOW
+
+
+def _apply_innovation_bonus(
+    scores: EvaluationScores,
+    innovation_type: str,
+    config: dict,
+) -> int:
+    """Return bonus points for the proposal's innovation type.
+
+    Reads ``innovation.cross_domain_bonus``, ``innovation.cross_method_bonus``,
+    and ``innovation.extension_bonus`` from *config* and returns the applicable
+    bonus (at most one type applies).  The caller adds this to the total score
+    used in gating decisions.
+    """
+    ic = _innovation_config(config)
+    bonus_map: dict[str, str] = {
+        "cross_domain": "cross_domain_bonus",
+        "cross_method": "cross_method_bonus",
+        "methodological_extension": "extension_bonus",
+        "hybrid_combination": "extension_bonus",
+    }
+    key = bonus_map.get(innovation_type, "")
+    if key:
+        return int(ic.get(key, 0))
+    return 0
 
 
 # ── Main evaluation pipeline ────────────────────────────────────
@@ -640,12 +677,13 @@ class TopicEvaluator:
         direction = proposal_data.get("direction", "general")
         hypothesis = proposal_data.get("hypothesis", "")
         motivation = proposal_data.get("motivation", "")
+        innovation_type = proposal_data.get("innovation_type", "")
         proposal_id = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:30]
 
         logger.info("Evaluating proposal: %s", title)
 
         # Early 5-axis quick gate (pre-filter; A8)
-        quick_total, quick_verdict = five_axis_quick_gate(
+        quick_total, quick_verdict = await five_axis_quick_gate(
             proposal_data, dispatcher=self.dispatcher
         )
         logger.info(
@@ -779,7 +817,28 @@ class TopicEvaluator:
             paper.axes = axes_list[i]
 
         # Step 7: Gating rules
-        repeat_degree = _determine_repeat_degree(axes_list)
+        repeat_degree = _determine_repeat_degree(axes_list, innovation_type)
+
+        # Apply innovation-type bonus to scoring before gating
+        innovation_bonus = _apply_innovation_bonus(
+            scores, innovation_type, self.config
+        )
+        if innovation_bonus:
+            # Add bonus to novelty (capped at 3) so it flows through EvaluationScores.total
+            boosted = min(3, scores.novelty + innovation_bonus)
+            if boosted != scores.novelty:
+                logger.info(
+                    "Innovation bonus +%d for %s: novelty %d -> %d",
+                    innovation_bonus, innovation_type, scores.novelty, boosted,
+                )
+                scores = EvaluationScores(
+                    significance=scores.significance,
+                    novelty=boosted,
+                    differentiation=scores.differentiation,
+                    feasibility=scores.feasibility,
+                    falsifiability=scores.falsifiability,
+                )
+
         gate_result, gate_reasons = step7_apply_gating(
             scores, repeat_degree, self.config
         )

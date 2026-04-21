@@ -25,8 +25,17 @@ from pathlib import Path
 import yaml
 
 from researchos.runtime.design_checks import check_four_slot_plan
+from researchos.schemas.concept import AtomicConcept
 
 logger = logging.getLogger(__name__)
+
+# Accepted code_implementation patterns (mirrors AtomicConcept validator).
+_IMPL_FILE_FUNC_RE = re.compile(
+    r"^[A-Za-z0-9_.\-/]+::[A-Za-z_][A-Za-z0-9_]*$"
+)
+_IMPL_TRIPLE_RE = re.compile(
+    r"^[A-Za-z0-9_.\-]+::[^:]+::L\d+-L\d+$"
+)
 
 
 def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
@@ -115,6 +124,13 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     code_ref_result = _check_reference_codebases(pipeline_dir, project_root, issues)
     checks["reference_codebases_grounded"] = code_ref_result.get("verdict", "PASS") != "BLOCK"
 
+    # 11. Concept quality — validate code_implementation fields
+    concept_issues = _check_concept_quality(pipeline_dir / "concepts.yaml")
+    issues.extend(concept_issues)
+    checks["concept_quality"] = not any(
+        i["severity"] == "ERROR" for i in concept_issues
+    )
+
     # Determine verdict
     errors = [i for i in issues if i["severity"] == "ERROR"]
     warns = [i for i in issues if i["severity"] == "WARN"]
@@ -135,12 +151,97 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     }
 
 
+def _check_concept_quality(concepts_path: Path) -> list[dict]:
+    """Validate code_implementation fields in concepts.yaml.
+
+    Returns a list of issue dicts (severity ERROR or WARN).
+    Vague/invalid entries produce ERROR; >50% NOT_AVAILABLE produces WARN.
+    """
+    issues: list[dict] = []
+    if not concepts_path.exists():
+        return issues
+
+    try:
+        raw = yaml.safe_load(concepts_path.read_text()) or []
+    except Exception:
+        issues.append({
+            "severity": "WARN",
+            "check": "concept_quality",
+            "detail": "Failed to parse concepts.yaml for quality check",
+        })
+        return issues
+
+    if isinstance(raw, dict):
+        raw = raw.get("concepts", []) or []
+    if not isinstance(raw, list):
+        return issues
+
+    not_available_count = 0
+    total = 0
+
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        cid = str(entry.get("id", ""))
+        impl = str(entry.get("code_implementation", "")).strip()
+        total += 1
+
+        if not impl:
+            # Empty is allowed (field not yet populated) — skip
+            continue
+
+        if impl == "NOT_AVAILABLE":
+            not_available_count += 1
+            continue
+
+        # Check against accepted patterns
+        if _IMPL_FILE_FUNC_RE.match(impl) or _IMPL_TRIPLE_RE.match(impl):
+            continue
+
+        # Reject everything else
+        issues.append({
+            "severity": "ERROR",
+            "check": "concept_quality",
+            "detail": (
+                f"Concept {cid or '?'} has invalid code_implementation: {impl!r}. "
+                f"Must be '<file>::<function>', '<slug>::<path>::L<start>-L<end>', "
+                f"or 'NOT_AVAILABLE'."
+            ),
+        })
+
+    if total > 0 and not_available_count > total / 2:
+        issues.append({
+            "severity": "WARN",
+            "check": "concept_quality",
+            "detail": (
+                f"More than 50% of concepts ({not_available_count}/{total}) have "
+                f"code_implementation set to NOT_AVAILABLE."
+            ),
+        })
+
+    return issues
+
+
 def _load_code(pipeline_dir: Path) -> str:
-    """Extract Python code from code_patch.diff or run_experiment.py."""
-    # Try run_experiment.py first
-    py_file = pipeline_dir / "run_experiment.py"
-    if py_file.exists():
-        return py_file.read_text(errors="replace")
+    """Extract Python code from pipeline directory.
+
+    Concatenates all ``.py`` files in the pipeline directory (entry point
+    first) so that preflight checks cover helper modules too.  Falls back
+    to ``code_patch.diff`` added-lines when no ``.py`` files exist.
+    """
+    py_files = sorted(pipeline_dir.glob("*.py"))
+    if py_files:
+        # Put the entry point first so line-number diagnostics are intuitive.
+        entry_names = {"run_experiment.py", "experiment.py", "main.py"}
+        entry = [f for f in py_files if f.name in entry_names]
+        rest = [f for f in py_files if f.name not in entry_names]
+        ordered = entry + rest
+        parts = []
+        for f in ordered:
+            parts.append(f"# --- {f.name} ---\n")
+            parts.append(f.read_text(errors="replace"))
+            parts.append("\n")
+        return "\n".join(parts)
 
     # Fall back to code_patch.diff — extract added lines
     diff_file = pipeline_dir / "code_patch.diff"
