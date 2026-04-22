@@ -24,8 +24,11 @@ from researchos.schemas.pipeline import PipelineState, PipelineStep
 from researchos.runtime.workflow_loader import WorkflowConfig
 from researchos.runtime.llm_client import (
     RETRY_EXCEPTIONS,
+    estimate_tokens,
     extract_json_between_markers,
+    get_context_size,
     strip_reasoning,
+    trim_to_budget,
 )
 from researchos.runtime.step_cache import StepCache
 from researchos.utils.paths import ARTIFACTS_DIR, DECISIONS_DIR
@@ -969,7 +972,7 @@ class Dispatcher:
             for k, v in filtered.items()
         }
 
-        return f"""You are executing an atomic research step as the **{agent_name}** agent.
+        prompt = f"""You are executing an atomic research step as the **{agent_name}** agent.
 
 ## Task
 Execute step: **{step.value}** for pipeline: **{pipeline.pipeline_id}**
@@ -993,6 +996,16 @@ Use the filename as-is (relative path). Do NOT use absolute paths.
 ## Existing Artifacts
 {json.dumps(filtered, indent=2)}
 {agent_instructions}"""
+
+        # B5: proactive token budget — reserve 15% for output
+        budget = int(get_context_size(self._resolve_agent_model(agent_name, None) or "") * 0.85)
+        if estimate_tokens(prompt) > budget:
+            logger.warning(
+                "Prompt for %s/%s exceeds budget (%d tokens), trimming",
+                pipeline.pipeline_id, step.value, estimate_tokens(prompt),
+            )
+            prompt = trim_to_budget(prompt, budget)
+        return prompt
 
     def _build_professor_prompt(
         self, pipeline_id: str, context_files: list[str]

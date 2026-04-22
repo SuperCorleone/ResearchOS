@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
-
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -16,6 +14,14 @@ class RepeatDegree(str, Enum):
 
 
 class GateResult(str, Enum):
+    """Outcome of the topic evaluation gate (Step 7).
+
+    PASS — score >= 10 and repeat_degree LOW/MEDIUM_LOW: auto-promote to pipeline.
+    REJECT — score < 5 or repeat_degree HIGH: permanently discarded.
+    PROFESSOR_REVIEW — borderline score or MEDIUM repeat: needs human decision.
+    BACKLOG — feasibility too low but idea has merit: re-evaluate next cycle.
+    """
+
     PASS = "pass"
     REJECT = "reject"
     PROFESSOR_REVIEW = "professor_review"
@@ -122,8 +128,15 @@ class TopicEvaluation(BaseModel):
     falsification: FalsificationDesign = Field(default_factory=FalsificationDesign)
 
     # Step 7: Gate result
-    gate_result: GateResult = GateResult.BACKLOG
-    gate_reasons: list[str] = Field(default_factory=list)
+    gate_result: GateResult = Field(
+        default=GateResult.BACKLOG,
+        description="Final gate outcome: pass (auto-promote), reject (discard), "
+        "professor_review (human decision needed), or backlog (re-evaluate next cycle)."
+    )
+    gate_reasons: list[str] = Field(
+        default_factory=list,
+        description="One-sentence justifications for the gate_result. Include score thresholds that triggered the decision."
+    )
 
     # Metadata
     evaluator_model: str = ""

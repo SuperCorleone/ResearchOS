@@ -92,6 +92,28 @@ Each paper section must meet structural and content completeness criteria:
 
 Owner: `paper_auditor` (structural check), `paper_writer` (enforce during writing).
 
+## G11 — Numerical Cross-Section Consistency
+Every metric value that appears in multiple places (Abstract, tables, body text,
+figure captions) must be identical or differ only by documented rounding. A value
+reported as "56.9%" in the Abstract and "0.568" in Table 1 is a FAIL unless
+the rounding convention is explicit. Cross-references between text and tables
+(e.g., "as shown in Table 1") must point to the correct row/column.
+
+Owner: `paper_auditor`.
+
+## G12 — Citation Utilization & Verification
+(a) **Utilization rate**: at least 85% of papers listed in `evidence_refs` must
+be actively cited (`\cite{}`-d) in the draft. Shallow related work that ignores
+available evidence is a WARN below 85%, FAIL below 70%.
+(b) **Multi-layer verification**: each `\cite{key}` is checked via:
+  1. `references.bib` existence (existing A6 check)
+  2. Semantic Scholar API title fuzzy-match (Levenshtein ≥ 0.7)
+  3. DOI cross-reference via CrossRef (when DOI is in bib entry)
+  4. LLM relevance scoring — is the citation contextually appropriate?
+Layers 2–4 are advisory (WARN) for now; Layer 1 remains BLOCK.
+
+Owners: `paper_auditor` (gatekeeper), `paper_writer` (enforce A6 during writing).
+
 ---
 
 ## Referencing protocol (for agents)

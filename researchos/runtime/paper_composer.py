@@ -70,6 +70,21 @@ _SECTION_TEMPLATES: dict[str, str] = {
     ),
 }
 
+_CLAIMS_EVIDENCE_PROMPT = (
+    "You are building a Claims-Evidence Matrix for an academic paper.\n\n"
+    "## Artifacts\n{artifacts}\n\n"
+    "## Task\n"
+    "From the experimental results and analysis above, extract every "
+    "empirical claim that could appear in the paper. For each claim, "
+    "map it to its supporting evidence.\n\n"
+    "Output a JSON array where each element has:\n"
+    '- "claim": the specific claim (e.g., "Our method achieves 56.9% reduction")\n'
+    '- "evidence_source": which artifact contains the evidence (e.g., "results.json::metrics.reduction")\n'
+    '- "value": the exact value from the source\n'
+    '- "sections": which paper sections should reference this claim (e.g., ["abstract", "results"])\n\n'
+    "Only include claims backed by actual data. No speculative claims."
+)
+
 
 @dataclass
 class SectionDraft:
@@ -89,11 +104,105 @@ class PaperComposer:
         self.pipeline_dir = pipeline_dir
         self.sections: dict[str, SectionDraft] = {}
         self._artifacts_context = ""
+        self._claims_evidence: list[dict] = []
+
+    async def _build_claims_evidence_matrix(self) -> list[dict]:
+        """Step 0 (C3): build claims-evidence matrix before writing."""
+        prompt = _CLAIMS_EVIDENCE_PROMPT.format(artifacts=self._artifacts_context)
+        raw = await self._llm_call("paper_writer", prompt)
+        try:
+            import json as _json
+            import re
+            text = raw.strip()
+            m = re.search(r"\[[\s\S]*\]", text)
+            if m:
+                return _json.loads(m.group())
+        except Exception:
+            logger.warning("Failed to parse claims-evidence matrix")
+        return []
+
+    def _format_claims_for_section(self, section_name: str) -> str:
+        """Filter claims-evidence matrix to claims relevant to this section."""
+        if not self._claims_evidence:
+            return "(no claims-evidence matrix available)"
+        relevant = [
+            c for c in self._claims_evidence
+            if section_name in (c.get("sections") or [])
+        ]
+        if not relevant:
+            return "(no claims mapped to this section)"
+        import json as _json
+        return _json.dumps(relevant, indent=2, ensure_ascii=False)
+
+    async def _score_gated_revision(
+        self, name: str, draft: SectionDraft, refs_text: str, prior_sections: str,
+    ) -> str | None:
+        """C5: revise section only if revision improves quality score."""
+        score_prompt = (
+            f"Rate this '{name}' section on a 1-10 scale for academic quality.\n\n"
+            f"## Section\n{draft.fused}\n\n"
+            "Output JSON: {{\"score\": <int 1-10>, \"weaknesses\": [\"...\"]}}"
+        )
+        score_raw = await self._llm_call("paper_writer", score_prompt)
+        original_score = self._parse_score(score_raw)
+        if original_score >= 8:
+            return None
+
+        revise_prompt = (
+            f"Revise the '{name}' section to address these weaknesses:\n\n"
+            f"## Current Text\n{draft.fused}\n\n"
+            f"## Weaknesses\n{score_raw}\n\n"
+            f"## Prior Sections\n{prior_sections}\n\n"
+            f"## Evidence References\n{refs_text}\n\n"
+            "Produce an improved version. Maintain all citations and numbers."
+        )
+        revised_text = await self._llm_call("paper_writer", revise_prompt)
+        if not revised_text:
+            return None
+
+        rescore_prompt = (
+            f"Rate this revised '{name}' section on a 1-10 scale.\n\n"
+            f"## Section\n{revised_text}\n\n"
+            "Output JSON: {{\"score\": <int 1-10>, \"weaknesses\": [\"...\"]}}"
+        )
+        rescore_raw = await self._llm_call("paper_writer", rescore_prompt)
+        new_score = self._parse_score(rescore_raw)
+
+        if new_score >= original_score:
+            logger.info(
+                "Section '%s' revision accepted: %d -> %d",
+                name, original_score, new_score,
+            )
+            return revised_text
+        logger.info(
+            "Section '%s' revision rejected (score dropped: %d -> %d)",
+            name, original_score, new_score,
+        )
+        return None
+
+    @staticmethod
+    def _parse_score(raw: str) -> int:
+        import json as _json
+        import re
+        try:
+            m = re.search(r"\{[\s\S]*?\}", raw)
+            if m:
+                data = _json.loads(m.group())
+                return int(data.get("score", 5))
+        except Exception:
+            pass
+        return 5
 
     async def compose_all(self, evidence_refs: list[str] | None = None) -> str:
         """Compose all sections in order, return the full paper markdown."""
         self._artifacts_context = self._load_artifacts_context()
         refs_text = "\n".join(f"- {r}" for r in (evidence_refs or []))
+
+        self._claims_evidence = await self._build_claims_evidence_matrix()
+        logger.info(
+            "Claims-evidence matrix built: %d claims",
+            len(self._claims_evidence),
+        )
 
         for section_name in SECTION_ORDER:
             draft = await self._compose_section(section_name, refs_text)
@@ -113,12 +222,16 @@ class PaperComposer:
         prior_sections = self._prior_sections_text(name)
 
         # Step 1: structure
+        claims_text = self._format_claims_for_section(name)
         structure_prompt = (
             f"You are outlining the '{name}' section of an academic paper.\n\n"
             f"## Artifacts\n{self._artifacts_context}\n\n"
+            f"## Claims-Evidence Matrix (C3)\n{claims_text}\n\n"
             f"## Prior Sections\n{prior_sections}\n\n"
             f"## Evidence References\n{refs_text}\n\n"
             f"## Task\n{template}\n\n"
+            "Every claim in your outline MUST map to an entry in the "
+            "Claims-Evidence Matrix above. Do not introduce unsupported claims.\n\n"
             "Output a structured OUTLINE with headings and bullet points "
             "for the key content. Do not write prose yet."
         )
@@ -164,6 +277,12 @@ class PaperComposer:
         )
         check_result = await self._llm_call("paper_writer", check_prompt)
         draft.checklist_pass, draft.issues = self._parse_checklist(check_result)
+
+        # Step 5: score-gated revision (C5)
+        if draft.checklist_pass and draft.fused:
+            revised = await self._score_gated_revision(name, draft, refs_text, prior_sections)
+            if revised is not None:
+                draft.fused = revised
 
         return draft
 

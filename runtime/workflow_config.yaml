@@ -65,6 +65,9 @@ agent_model_tiers:
   vlm_reviewer: T2
   branch_selector: T2
 
+  # T2.5 — figure generation agent (C15)
+  figure_composer: T2
+
   # T3 — 2 low-reasoning agents (pipeline_manager intentionally omitted)
   experiment_runner: T3
   lit_scout: T3
@@ -174,6 +177,16 @@ steps:
     retries: 2
     type: llm
 
+  figure_compose:
+    # C15 — automated figure generation from experiment results.
+    # Runs after experiment_analysis in MAIN, before interrogation.
+    # 5-stage pipeline: Plan → CodeGen → Render → Critic → Integrate.
+    agent: figure_composer
+    output: figures/figure_manifest.yaml
+    timeout: 900
+    retries: 2
+    type: llm
+
   waiting_approval:
     # Terminal step -- no agent runs; the scheduler waits for a professor decision.
     agent: null
@@ -181,6 +194,16 @@ steps:
     timeout: 0
     retries: 0
     type: llm
+
+# ---------------------------------------------------------------------------
+# Review configuration (C7)
+# ---------------------------------------------------------------------------
+# Cross-model adversarial review: neg reviewers use a different model family
+# than the paper writer to eliminate self-review blind spots.
+# Set model_override to route neg reviewer calls through a different model.
+# Leave empty or omit to use the default model for all reviewers.
+review:
+  model_override: ""  # e.g., "gpt-4o" when paper is written by Claude
 
 # ---------------------------------------------------------------------------
 # Stage definitions
@@ -208,6 +231,7 @@ stages:
       - run
       - critic
       - experiment_analysis
+      - figure_compose
       - interrogation
       - report
       - waiting_approval

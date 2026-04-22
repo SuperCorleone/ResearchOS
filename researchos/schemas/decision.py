@@ -61,15 +61,42 @@ class ProfessorDecision(BaseModel):
     authoritative for back-compat.
     """
 
-    pipeline_id: str
-    decision: DecisionType
-    next_milestone: str | None = None
-    comment: str = ""
-    budget_adjustment: int | None = None
-    allocated_budget: int | None = None
+    pipeline_id: str = Field(
+        description="ID of the pipeline this decision applies to."
+    )
+    decision: DecisionType = Field(
+        description="Legacy decision verb. Valid values: approve (proceed), kill (terminate), "
+        "pivot (change direction), pause (suspend), hold (wait for input), tweak (adjust parameters)."
+    )
+    next_milestone: str | None = Field(
+        default=None,
+        description="Label for the next milestone to reach before the next gate. "
+        "None means no explicit milestone target."
+    )
+    comment: str = Field(
+        default="",
+        description="Free-form rationale for the decision. Shown to pipeline agents."
+    )
+    budget_adjustment: int | None = Field(
+        default=None,
+        description="Signed token delta to add to or subtract from the pipeline budget. "
+        "None means no change."
+    )
+    allocated_budget: int | None = Field(
+        default=None,
+        description="Absolute token budget to set. Overrides budget_adjustment when both are present."
+    )
     # A11 additions — all optional, default-None preserves back-compat.
-    gate: str | None = None
-    canonical_action: CanonicalAction | None = None
+    gate: str | None = Field(
+        default=None,
+        description="HITL gate that produced this decision: 'pre_main', 'milestone_<N>', or 'pre_publish'. "
+        "None preserves pre-A11 behaviour."
+    )
+    canonical_action: CanonicalAction | None = Field(
+        default=None,
+        description="A11 canonical verb for stricter routing: continue, launch, branch, write, finalize, stop, tweak. "
+        "None falls back to legacy decision field."
+    )
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )

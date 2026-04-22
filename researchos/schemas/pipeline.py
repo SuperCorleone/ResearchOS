@@ -54,15 +54,20 @@ class PipelineState(BaseModel):
 
     pipeline_id: str
     title: str
-    research_question: str = ""
+    research_question: str = Field(
+        default="",
+        description="Specific, falsifiable research question driving this pipeline."
+    )
     stage: PipelineStage = PipelineStage.DIRECTION
     step: PipelineStep | None = None
     retry_count: int = 0
     max_retries: int = 3
     last_error: str | None = None
 
-    artifacts: dict[str, str] = Field(default_factory=dict)
-    """Maps artifact key -> relative filename within the pipeline directory."""
+    artifacts: dict[str, str] = Field(
+        default_factory=dict,
+        description="Maps artifact key to relative filename within the pipeline directory."
+    )
 
     priority: int = 0
     budget_allocated: int = 0
@@ -73,8 +78,10 @@ class PipelineState(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    evidence_refs: list[str] = Field(default_factory=list)
-    """Reference papers/evidence that motivated this pipeline."""
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description="Reference paper filenames from knowledge/raw/ that motivated this pipeline."
+    )
 
     # Parallel branching support
     active_branch_count: int = 0

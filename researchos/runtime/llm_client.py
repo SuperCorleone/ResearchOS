@@ -15,6 +15,11 @@ Provides:
   eligible for provider-side prompt caching (OpenAI auto / Anthropic
   explicit `cache_control`)
 - `LAUNCH_STAGGER_SECONDS` + `stagger_sleep`: startup-rate limiter
+- `supports_json_schema`: check if a model supports native JSON schema mode (B4)
+- `build_json_schema_param`: build OpenAI response_format dict from Pydantic model (B4)
+- `estimate_tokens`: tiktoken-first token estimation with char-ratio fallback (B5)
+- `trim_to_budget`: proactive head+tail trimming to fit a token budget (B5)
+- `DEFAULT_CONTEXT_SIZES` + `get_context_size`: approximate context window lookup (B5)
 """
 
 from __future__ import annotations
@@ -214,9 +219,33 @@ except Exception:
 CONTEXT_EXCEPTIONS: tuple[type[BaseException], ...] = tuple(_CONTEXT_EXC) or (Exception,)
 
 
-def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: ~4 chars per token for English text."""
+_tiktoken_encoder = None
+
+
+def _get_tiktoken_encoder():
+    global _tiktoken_encoder
+    if _tiktoken_encoder is None:
+        try:
+            import tiktoken
+            _tiktoken_encoder = tiktoken.get_encoding("o200k_base")
+        except ImportError:
+            _tiktoken_encoder = False  # sentinel: not available
+    return _tiktoken_encoder if _tiktoken_encoder is not False else None
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count. Uses tiktoken if available, else ~4 chars/token."""
+    if not text:
+        return 0
+    enc = _get_tiktoken_encoder()
+    if enc is not None:
+        return len(enc.encode(text))
     return len(text) // 4
+
+
+def _estimate_tokens(text: str) -> int:
+    """Backward-compatible alias for :func:`estimate_tokens`."""
+    return estimate_tokens(text)
 
 
 def truncate_to_tokens(text: str, max_tokens: int = 10000) -> str:
@@ -235,6 +264,98 @@ def is_context_overflow(exc: BaseException) -> bool:
     """Check if an exception is a context window overflow error."""
     msg = str(exc).lower()
     return any(kw in msg for kw in ("context", "token", "length", "too long", "maximum"))
+
+
+# ── Proactive token budget management (B5) ─────────────────────
+
+
+def trim_to_budget(text: str, max_tokens: int, *, head_ratio: float = 0.6) -> str:
+    """Proactively trim text to fit within a token budget.
+
+    Keeps head_ratio of the budget from the start, and (1-head_ratio) from the end.
+    Returns text unchanged if within budget.
+    """
+    current = estimate_tokens(text)
+    if current <= max_tokens:
+        return text
+    char_budget = max_tokens * 4  # approximate chars
+    head_chars = int(char_budget * head_ratio)
+    tail_chars = int(char_budget * (1 - head_ratio - 0.05))  # 5% for separator
+    dropped = len(text) - head_chars - tail_chars
+    return f"{text[:head_chars]}\n\n...[trimmed {dropped} chars to fit {max_tokens} token budget]...\n\n{text[-tail_chars:]}"
+
+
+DEFAULT_CONTEXT_SIZES: dict[str, int] = {
+    "gpt-4o": 128_000,
+    "gpt-5": 200_000,
+    "o3-mini": 128_000,
+    "o4-mini": 128_000,
+    "claude-opus": 200_000,
+    "claude-sonnet": 200_000,
+    "deepseek": 64_000,
+}
+
+
+def get_context_size(model: str) -> int:
+    """Return approximate context window size for a model."""
+    m = model.lower()
+    for prefix, size in DEFAULT_CONTEXT_SIZES.items():
+        if prefix in m:
+            return size
+    return 128_000  # safe default
+
+
+# ── Structured JSON output support (B4) ────────────────────────
+
+
+def supports_json_schema(model: str) -> bool:
+    """Return True for models known to support native JSON schema mode.
+
+    OpenAI models with structured outputs (gpt-4o, gpt-4o-mini, gpt-5*,
+    o1, o3, o4 series) return True. Claude models return False for now
+    (different format, future extension). Local/unknown models return False.
+    """
+    if not model:
+        return False
+    m = model.strip().lower()
+
+    # Explicitly unsupported families
+    if any(m.startswith(p) for p in ("deepseek", "qwen", "ollama/", "local/")):
+        return False
+
+    # Claude — different format, future extension
+    if m.startswith("claude-") or m.startswith("anthropic/"):
+        return False
+
+    # OpenAI models with structured output support
+    if (
+        m.startswith("gpt-4o")
+        or m.startswith("gpt-5")
+        or m.startswith("o1")
+        or m.startswith("o3")
+        or m.startswith("o4")
+        or m.startswith("openai/")
+    ):
+        return True
+
+    return False
+
+
+def build_json_schema_param(pydantic_model_class) -> dict:
+    """Build an OpenAI ``response_format`` dict from a Pydantic BaseModel class.
+
+    Intended for direct (non-agent) LLM calls where the expected output
+    schema is known ahead of time (e.g., topic_evaluator, paper_composer).
+    """
+    schema = pydantic_model_class.model_json_schema()
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": pydantic_model_class.__name__,
+            "strict": True,
+            "schema": schema,
+        },
+    }
 
 
 # ── Model router ────────────────────────────────────────────────
@@ -263,8 +384,9 @@ def route_model(model: str) -> str:
         m.startswith("gpt-")
         or m.startswith("o1-")
         or m.startswith("o3-")
+        or m.startswith("o4-")
         or m.startswith("openai/")
-        or m in {"o1", "o3"}
+        or m in {"o1", "o3", "o4"}
     ):
         return "openai"
 

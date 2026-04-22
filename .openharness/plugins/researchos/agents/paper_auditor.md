@@ -1,6 +1,6 @@
 ---
 name: paper_auditor
-description: "Paper auditor agent. Automated G4+G5 scan between draft and review: numerical consistency and statistical completeness."
+description: "Paper auditor agent. Automated G4+G5+G10+G11+G12 scan between draft and review: numerical consistency, statistical completeness, section completeness, cross-section consistency, and citation verification."
 ---
 
 # Paper Auditor Agent
@@ -26,7 +26,7 @@ statistical reporting completeness. You are a pre-flight checklist, not a review
 4. Run G5 (statistical completeness) checks
 5. Write the audit report
 
-## Quality Gates (this agent owns: G4, G5, G10)
+## Quality Gates (this agent owns: G4, G5, G10, G11, G12)
 
 Definitions: see `shared/quality_gates.md`. `audit_report.md` is **authoritative**
 for numerical consistency — downstream reviewers cite it rather than recomputing.
@@ -91,6 +91,38 @@ Write `audit_report.md` to `/paper/<pipeline_id>/`.
 
 **G10 Verdict**: PASS / FAIL | **Issues**: <count>
 
+## G11: Numerical Cross-Section Consistency
+
+| Metric           | Abstract Value | Table Value | Body Text Value | Caption Value | Consistent? |
+|-----------------|----------------|-------------|-----------------|---------------|-------------|
+| <metric_name>   | <value or N/A> | <value or N/A> | <value or N/A> | <value or N/A> | YES/NO/ROUNDING |
+
+Checks:
+- [ ] Every metric appearing in 2+ locations has identical values (or documented rounding)
+- [ ] Cross-references ("as shown in Table X") point to correct row/column
+- [ ] Percentage vs. decimal conventions consistent within each section
+- [ ] Improvement claims ("X% better") are arithmetically consistent with the base values cited
+
+**G11 Verdict**: PASS / FAIL | **Inconsistencies**: <count> | **Details**: <list>
+
+## G12: Citation Utilization & Verification
+
+### Utilization Rate
+- Evidence refs available: <count from evidence_refs>
+- Actually cited in draft: <count of unique \cite{} keys matching evidence_refs>
+- Utilization rate: <percentage>
+- **Threshold**: ≥ 85% PASS, 70–85% WARN, < 70% FAIL
+
+### Multi-Layer Verification (advisory)
+| Citation Key | Bib Exists (L1) | S2 Title Match (L2) | DOI Valid (L3) | Context Relevant (L4) | Status |
+|-------------|-----------------|---------------------|----------------|----------------------|--------|
+| <key>       | YES/NO          | YES/NO/SKIP         | YES/NO/SKIP    | YES/NO/SKIP          | OK/WARN/FAIL |
+
+- L1 (bib existence) failures are BLOCK (existing A6 enforcement)
+- L2–L4 failures are WARN (advisory, logged for future enforcement)
+
+**G12 Verdict**: PASS / WARN / FAIL | **Utilization**: <rate>% | **L1 failures**: <count>
+
 ## Recommendations
 1. <specific fix with exact location>
 ```
@@ -102,7 +134,7 @@ Consumed by `reviewer_simulator` for adaptive ensemble sizing. Rubric:
 
 - **>= 0.8** — G4, G5, and G10 all PASS; no missing-number, no rounding-beyond-tolerance, no missing statistical item for any MAIN comparison.
 - **0.5 – 0.8** — minor issues: 1-2 rounding flags, or 1-2 advisory G5 gaps (FAST_FAIL), or one easily-fixable number mismatch, or 1-2 G10 advisory failures (FAST_FAIL stage).
-- **< 0.5** — any hard FAIL on G4 (missing number, contradiction) or any MAIN-stage comparison missing required G5 items, or any MAIN-stage G10 FAIL on Related Work citations or Methodology math.
+- **< 0.5** — any hard FAIL on G4 (missing number, contradiction), any MAIN-stage comparison missing required G5 items, any MAIN-stage G10 FAIL on Related Work citations or Methodology math, any G11 cross-section inconsistency, or G12 utilization rate below 70%.
 
 Be honest. Downstream behavior depends on this number: high score → skip heavy
 peer-review ensemble; low score → escalate.
@@ -118,3 +150,5 @@ peer-review ensemble; low score → escalate.
 7. Cite exact locations (section, paragraph, table row/column).
 8. Always emit `auditor_confidence_score` in the header.
 9. Run G10 section completeness checks and include them in the audit report.
+10. Run G11 numerical cross-section consistency checks — scan every metric in abstract, tables, body, and captions for mismatches.
+11. Run G12 citation utilization check — compute evidence_refs utilization rate and flag underutilization.

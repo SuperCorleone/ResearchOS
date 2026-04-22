@@ -154,6 +154,7 @@ hard write-order contract.)
 2. Verifies A6 for every `\cite{...}` just added.
 3. Flags any claim not supported by `results.json` or pipeline artifacts.
 4. Runs the section-specific quality checklist from '## Section-Level Quality Checklists' for the current section.
+5. Runs the De-AI Flavor Checklist (C1) — vocabulary blacklist scan + structural pattern check.
 
 If issues surface, rewrite and re-review. Exit the loop for a section **only**
 when you emit the literal phrase `I am done`. The scheduler/auditor treats that
@@ -239,3 +240,55 @@ Additional quick checks borrowed from `chktex`:
 - Orphan `\cite` or `\ref` commands with empty braces.
 - Inline math dropped into section titles.
 - Percent signs `%` not escaped as `\%` when they denote the literal character.
+
+## De-AI Flavor Checklist (C1, mandatory self-check)
+
+After passing the LaTeX error_list, run this de-AI check on each section
+before emitting `"I am done"`. AI-generated academic text has detectable
+patterns that weaken credibility during peer review.
+
+### Vocabulary Blacklist
+
+Replace or rephrase any of these overused AI-generated words/phrases.
+Prefer concrete, specific alternatives:
+
+> Accentuate, Adorn, Amass, Ameliorate, Amplify, Alleviate, Ascertain,
+> Advocate, Articulate, Bolster, Bustling, Cherish, Conceptualize,
+> Conjecture, Consolidate, Convey, Culminate, Decipher, Demonstrate,
+> Depict, Devise, Delineate, Delve, Delve Into, Diverge, Disseminate,
+> Elucidate, Endeavor, Engage, Enumerate, Envision, Exacerbate, Expedite,
+> Foster, Galvanize, Harmonize, Hone, Innovate, Integrate, Interpolate,
+> Intricate, Leverage, Manifest, Mediate, Nurture, Nuance, Nuanced,
+> Obscure, Perceive, Perpetuate, Permeate, Pivotal, Ponder, Prescribe,
+> Prevailing, Profound, Recapitulate, Reconcile, Rectify, Rekindle,
+> Reimagine, Scrutinize, Substantiate, Tailor, Testament, Transcend,
+> Traverse, Underscore, Unveil, Vibrant
+
+Exceptions: when a blacklisted word is technically precise in context
+(e.g., "integrate" in calculus, "manifest" in a medical paper), keep it.
+
+### Structural Patterns to Avoid
+
+- **Em-dash overuse**: ≤ 2 em-dashes (—) per section
+- **Rhetorical padding**: no "It is worth noting that", "Notably,",
+  "Importantly,", "It should be emphasized that"
+- **Promotional tone**: no "groundbreaking", "revolutionary", "novel"
+  (unless justified by a specific comparison to prior art)
+- **Vague attribution**: no "studies show", "research suggests" without
+  a specific `\cite{}`
+- **Triple-adjective stacking**: no "robust, scalable, and efficient"
+  without evidence for each adjective
+- **First-sentence "In recent years"**: rephrase any section opening
+  that begins with temporal padding
+
+### Self-check procedure
+
+For each section, after LaTeX error_list passes:
+1. Scan for blacklisted vocabulary — replace each instance with a
+   concrete, domain-specific alternative
+2. Count em-dashes — if > 2 per section, convert excess to commas or
+   parenthetical asides
+3. Scan for rhetorical padding phrases — delete or rewrite
+4. Verify every attribution has a `\cite{}`
+5. Check for triple-adjective stacks — keep only if each adjective is
+   backed by a specific result

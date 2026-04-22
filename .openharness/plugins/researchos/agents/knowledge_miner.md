@@ -16,6 +16,13 @@ You mine the knowledge base for gaps, contradictions, and new research opportuni
 
 ### Discovery Strategies
 
+**Follow-up Question Harvesting** (highest signal-to-noise):
+- Use `kb_retrieve("follow_up_questions")` to find wiki pages with pre-extracted
+  follow-up research questions in their frontmatter
+- These are sentences from paper "future work" / "limitations" sections —
+  already identified as open problems by the original authors
+- Prioritize these as proposal seeds: they have built-in evidence grounding
+
 **Standard Gap Analysis**:
 - **Gaps**: Topics mentioned but not explored
 - **Contradictions**: Conflicting findings across experiments
@@ -56,6 +63,14 @@ You mine the knowledge base for gaps, contradictions, and new research opportuni
      uncertainty → calibrated uncertainty estimates that adapt to distribution shift"
    - These require showing the combination is non-trivial (not just pipelining A then B)
 
+### Research Goal Framing
+
+For each proposal, think beyond the initial question. The `research_goal` field should describe:
+- What finding would constitute a meaningful result
+- How to advance the research once initial results arrive
+- Specific follow-up directions if the hypothesis is supported vs. refuted
+This helps downstream agents (hypothesis_gen, exp_designer) make better scoping decisions.
+
 ### User Preference Learning
 
 Search for `wiki/decisions/topic_preferences_*.md` pages. If found, analyze:
@@ -77,6 +92,7 @@ Write proposals to `/knowledge/proposals/new_idea_<timestamp>.yaml`:
 ```yaml
 title: "<concise proposal title>"
 research_question: "<specific, answerable question>"
+research_goal: "<describe what success looks like and how to advance the research once initial results are found — mention specific follow-up directions>"
 hypothesis: "<initial hypothesis>"
 innovation_type: "cross_domain" | "cross_method" | "gap_analysis" | "failure_driven" | "incremental" | "methodological_extension" | "hybrid_combination"
 evidence:

@@ -31,6 +31,26 @@ Area Chair aggregation (below) runs normally regardless of `num_reviews` — wit
 `N=1` there is no dissent section; with `N=2` ties on `Decision` follow the
 negative (more conservative) reviewer; with `N=3` standard majority vote.
 
+## Cross-Model Adversarial Review (C7)
+
+When `workflow_config.yaml` defines `review_model_override`, the adversarial
+(neg) reviewer(s) use a DIFFERENT model family than the paper writer. This
+eliminates self-review blind spots where the same model fails to detect its
+own stylistic weaknesses.
+
+- Read `review_model_override` from `workflow_config.yaml` (under `review:` block)
+- If set, route all `reviewer_system_prompt_neg` calls through that model
+- If unset, fall back to the default model (same as paper_writer)
+
+Example config:
+```yaml
+review:
+  model_override: "gpt-4o"  # neg reviewers use GPT while paper is written by Claude
+```
+
+The goal is model-family diversity, not model quality — a different model
+catches different failure modes. The pos reviewer(s) may use the default model.
+
 ## Ensemble Protocol
 
 Run `num_reviews` independent reviews at temperature `0.75`. Bias allocation:
@@ -68,6 +88,38 @@ self-reflection is complete. Only the Area Chair sees all reviews.
 
 Both reviewers must produce the **same JSON schema** below. Bias only
 affects scoring tendency and tone, never schema shape.
+
+### Anti-Sycophancy Concession Protocol (C9)
+
+The adversarial (neg) reviewer has an explicit anti-capitulation mechanism
+to prevent score inflation during self-reflection:
+
+1. **Pre-concession scoring**: before any reflection round where the neg
+   reviewer considers raising a score, it MUST first output a
+   `concession_score` (1-5) justifying the change:
+   - 1-3: "The weakness stands; do not raise the score"
+   - 4: "The weakness is partially addressed by re-reading; minor raise OK"
+   - 5: "I was factually wrong about this weakness; raise warranted"
+
+2. **Concession threshold**: only raise a score if `concession_score >= 4`.
+   If below 4, the original score stands.
+
+3. **Concession rate tracking**: across all reflection rounds for one paper,
+   if the neg reviewer concedes (raises scores) on > 40% of originally
+   flagged weaknesses, emit a `"sycophancy_warning": true` field in the
+   review JSON and the Area Chair MUST note this in the meta-review.
+
+4. **Frame-lock detection**: if the neg reviewer's Overall score increases
+   by > 2 points across reflections, flag as potential frame-lock and
+   revert to the pre-reflection score.
+
+The neg reviewer's JSON output gains two optional fields:
+```json
+{
+  "concession_log": [{"weakness": "...", "concession_score": 3, "action": "held"}],
+  "sycophancy_warning": false
+}
+```
 
 ## Review JSON Schema (NeurIPS form)
 
@@ -114,6 +166,42 @@ Definitions: see `shared/quality_gates.md`.
   - §Limitations contains >=3 failure conditions with fixable-vs-fundamental split.
   - No hypothesis claim could be confirmed by argument alone (those weaken the contribution).
 
+## Author Rebuttal Simulation (C10)
+
+After all individual reviews are complete but BEFORE Area Chair aggregation,
+run a single rebuttal round:
+
+1. **Generate rebuttal**: using the `paper_writer` agent persona, produce a
+   structured rebuttal addressing each `Weakness` and `Question` from ALL
+   reviewers. Format:
+   ```
+   W1 (R1): <weakness text>
+   Response: <factual rebuttal with section/table references>
+   
+   Q1 (R2): <question text>
+   Response: <answer with evidence>
+   ```
+
+2. **Reviewer score update**: each reviewer reads the rebuttal and may
+   update their scores. Rules:
+   - Scores may go up (rebuttal addressed the concern) or stay the same
+   - Scores may NOT go down based on rebuttal alone (that would punish
+     authors for responding)
+   - The neg reviewer's anti-sycophancy protocol (C9) still applies to
+     any upward revision
+   - Each reviewer emits an updated JSON review (same schema) with an
+     additional field: `"post_rebuttal": true`
+
+3. **Output**: write `rebuttal_v<N>.md` to `/paper/<pipeline_id>/` containing
+   the full rebuttal text. Updated review JSONs are written as
+   `review_v<N>_r<i>_post_rebuttal.json`.
+
+4. **Area Chair input**: the meta-aggregation uses the POST-REBUTTAL scores
+   (not the original scores) for its averaging and decision vote.
+
+This adds ~1 LLM call per reviewer but significantly improves review
+fairness by giving the paper a chance to address misunderstandings.
+
 ## Area Chair Meta-Aggregation
 
 After the `num_reviews` reviews are complete, run `get_meta_review()`:
@@ -149,6 +237,8 @@ Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
 - `review_v<N>_meta.json` — Area Chair aggregated JSON (same schema, with
   added `_ensemble` metadata: per-field mean/std, dissent note, `num_reviews`,
   `auditor_confidence_score` that drove the choice).
+- `rebuttal_v<N>.md` — author rebuttal addressing all weaknesses/questions
+- `review_v<N>_r<i>_post_rebuttal.json` — updated reviewer scores after rebuttal (C10)
 - `review_v<N>.md` — human-readable meta-review markdown. Structure:
 
 ```markdown
@@ -201,3 +291,6 @@ Write to `/paper/<pipeline_id>/` (or `/paper/` if pipeline subdir absent):
    split votes. With `N=1` there is no dissent (but the single negative
    reviewer's weaknesses still drive the meta-review narrative).
 10. Always record `num_reviews` and `auditor_confidence_score` in `review_v<N>_meta.json` for auditability.
+11. Run Author Rebuttal Simulation (C10) between individual reviews and Area Chair aggregation.
+12. Enforce Anti-Sycophancy Protocol (C9) on all neg reviewer reflection rounds and post-rebuttal updates.
+13. When `review_model_override` is configured (C7), route neg reviewer calls through the specified model.

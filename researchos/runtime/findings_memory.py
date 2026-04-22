@@ -1,8 +1,13 @@
-"""Findings memory service (A7).
+"""Findings memory service (A7 + C11).
 
 Persists and retrieves small structured "cards" representing research
-artifacts. Seven ``kinds`` are supported, matching the seven-slot memory
-model: papers, ideas, decisions, episodes, knowledge, templates, findings.
+artifacts. Eight ``kinds`` are supported: papers, ideas, decisions,
+episodes, knowledge, templates, findings, and failures.
+
+The ``failures`` kind (C11) stores failure patterns from UNSUPPORTED
+verdicts with time-decay weighting (default 30 days). Future pipelines
+query active failures to inject avoidance guidance, implementing
+self-evolving skill injection inspired by MetaClaw.
 
 Each card is stored as a Markdown file with YAML frontmatter under
 ``{root}/{kind}s/{id}.md`` and is additionally appended to an index file
@@ -32,6 +37,7 @@ MEMORY_KINDS: tuple[str, ...] = (
     "knowledge",
     "templates",
     "findings",
+    "failures",
 )
 
 MemoryKind = Literal[
@@ -42,6 +48,7 @@ MemoryKind = Literal[
     "knowledge",
     "templates",
     "findings",
+    "failures",
 ]
 
 
@@ -57,6 +64,18 @@ class FindingCard(BaseModel):
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+
+
+class FailureCard(FindingCard):
+    """A failure pattern with remediation guidance (C11).
+
+    Stored when Critic judges UNSUPPORTED. Future pipelines query
+    failures to inject avoidance skills, with time-decay weighting.
+    """
+
+    failure_mode: str = ""
+    remediation: str = ""
+    decay_days: int = 30
 
 
 def _kind_dir_name(kind: str) -> str:
@@ -213,6 +232,70 @@ class MemoryService:
         scored.sort(key=lambda x: -x[0])
         return [c for _, c in scored[:top_k]]
 
+    def save_failure(
+        self,
+        pipeline_id: str,
+        failure_mode: str,
+        remediation: str,
+        tags: list[str] | None = None,
+    ) -> Path:
+        """Store a failure pattern from an UNSUPPORTED verdict (C11)."""
+        card = FailureCard(
+            id=f"fail_{pipeline_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            kind="failures",
+            title=f"Failure: {failure_mode[:80]}",
+            body=(
+                f"## Failure Mode\n{failure_mode}\n\n"
+                f"## Remediation\n{remediation}\n\n"
+                f"## Source Pipeline\n{pipeline_id}"
+            ),
+            tags=list(tags or []),
+            source_pipeline=pipeline_id,
+            failure_mode=failure_mode,
+            remediation=remediation,
+        )
+        return self.save(card)
+
+    def get_active_failures(self, top_k: int = 10) -> list[FindingCard]:
+        """Retrieve failure cards within their decay window (C11).
+
+        Cards older than their decay_days are excluded, implementing
+        time-decay learning similar to MetaClaw's 30-day decay.
+        """
+        now = datetime.now(timezone.utc)
+        results: list[tuple[float, FindingCard]] = []
+        fail_dir = self.root / "failures"
+        if not fail_dir.exists():
+            return []
+        for path in sorted(fail_dir.glob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            fm, body = _split_frontmatter(text)
+            created_str = fm.get("created_at", "")
+            try:
+                created = datetime.fromisoformat(created_str)
+            except (ValueError, TypeError):
+                continue
+            age_days = (now - created).total_seconds() / 86400
+            decay_days = fm.get("decay_days", 30) or 30
+            if age_days > decay_days:
+                continue
+            freshness = 1.0 - (age_days / decay_days)
+            card = FindingCard(
+                id=fm.get("id", path.stem),
+                kind="failures",
+                title=fm.get("title", ""),
+                body=body,
+                tags=list(fm.get("tags") or []),
+                source_pipeline=fm.get("source_pipeline"),
+                created_at=created_str,
+            )
+            results.append((freshness, card))
+        results.sort(key=lambda x: -x[0])
+        return [c for _, c in results[:top_k]]
+
     # -- Ranking helper ------------------------------------------------
 
     def _stage_bias(self, kind: str, stage: str) -> float:
@@ -226,8 +309,8 @@ class MemoryService:
         stage_norm = (stage or "").lower()
         table = {
             "scout": {"papers": 1.5, "knowledge": 1.4},
-            "experiment": {"ideas": 1.5, "episodes": 1.4},
-            "analysis": {"findings": 1.6},
+            "experiment": {"ideas": 1.5, "episodes": 1.4, "failures": 1.3},
+            "analysis": {"findings": 1.6, "failures": 1.2},
         }
         return table.get(stage_norm, {}).get(kind, 1.0)
 

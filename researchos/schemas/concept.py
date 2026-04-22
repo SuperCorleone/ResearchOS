@@ -30,12 +30,33 @@ _CODEBASE_TRIPLE_RE = re.compile(
 class AtomicConcept(BaseModel):
     """A single self-contained academic concept with math + code anchors."""
 
-    id: str                                    # C1, C2, ...
-    definition: str                            # single self-contained concept
-    math_formula: str = ""                     # LaTeX
-    code_implementation: str = ""              # file::func locator or NOT_AVAILABLE
-    reference_papers: list[str] = Field(default_factory=list)
-    reference_codebases: list[str] = Field(default_factory=list)
+    id: str = Field(
+        description="Concept identifier (C1, C2, ...). Assign sequentially."
+    )
+    definition: str = Field(
+        description="Single self-contained academic definition of this concept. "
+        "Must be precise enough to verify implementation correctness."
+    )
+    math_formula: str = Field(
+        default="",
+        description="LaTeX formula capturing the core computation. "
+        "Use display-math notation ($$...$$). Leave empty only if concept is purely architectural."
+    )
+    code_implementation: str = Field(
+        default="",
+        description="Exact code location in <file>::<function> or <slug>::<path>::L<start>-L<end> format. "
+        "Use NOT_AVAILABLE if no reference code exists. "
+        "NEVER use natural language descriptions, package names, or pseudocode."
+    )
+    reference_papers: list[str] = Field(
+        default_factory=list,
+        description="PDF filenames from evidence_refs that define this concept."
+    )
+    reference_codebases: list[str] = Field(
+        default_factory=list,
+        description="Code locations as <slug>::<path>::L<start>-L<end> triples. "
+        "Each triple must point to a real file and line range in a cloned reference repo."
+    )
 
     @field_validator("code_implementation")
     @classmethod

@@ -3,6 +3,10 @@ name: research_briefer
 description: Generate a concise research brief for a candidate topic
 ---
 
+> **DEPRECATED (R2)**: This agent is no longer dispatched in production.
+> Research briefing is now handled by `briefer.py::render_brief()`.
+> Kept for reference only.
+
 # Research Briefer Agent
 
 You produce a structured **research brief** for a candidate research topic

@@ -228,6 +228,35 @@ def extract_code_refs(text: str) -> list[str]:
     return urls
 
 
+_FUTURE_WORK_PATTERNS = re.compile(
+    r"(?:future\s+work|open\s+question|limitation|remain(?:s|ing)\s+(?:open|unclear|to\s+be)|"
+    r"further\s+(?:research|investigation|study|exploration))",
+    re.IGNORECASE,
+)
+
+
+def extract_follow_up_questions(text: str, max_questions: int = 3) -> list[str]:
+    """Extract potential follow-up research questions from paper text.
+
+    Uses heuristic sentence extraction from future work / limitations
+    sections. Returns up to max_questions strings.
+    """
+    if not text or len(text) < 500:
+        return []
+
+    candidates: list[str] = []
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    for sent in sentences:
+        if _FUTURE_WORK_PATTERNS.search(sent) and 20 < len(sent) < 500:
+            cleaned = sent.strip()
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+            if len(candidates) >= max_questions * 2:
+                break
+
+    return candidates[:max_questions]
+
+
 def _slugify(text: str) -> str:
     """Convert text to a safe filename slug."""
     slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
@@ -264,6 +293,7 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
         return None
 
     code_refs = extract_code_refs(text)
+    follow_up_questions = extract_follow_up_questions(text)
     content = _make_wiki_page(
         title=stem,
         tags=["raw-import", suffix.lstrip(".")],
@@ -271,6 +301,7 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
         created=ts,
         body=text,
         code_refs=code_refs,
+        follow_up_questions=follow_up_questions,
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
@@ -302,6 +333,7 @@ def _make_wiki_page(
     created: str,
     body: str,
     code_refs: list[str] | None = None,
+    follow_up_questions: list[str] | None = None,
 ) -> str:
     """Format a wiki page with YAML frontmatter.
 
@@ -311,6 +343,8 @@ def _make_wiki_page(
     meta: dict = {"title": title, "tags": tags, "source": source, "created": created}
     if code_refs:
         meta["code_refs"] = list(code_refs)
+    if follow_up_questions:
+        meta["follow_up_questions"] = list(follow_up_questions)
     frontmatter = yaml.dump(meta, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n\n# {title}\n\n{body}\n"
 

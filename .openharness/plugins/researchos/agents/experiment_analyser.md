@@ -28,13 +28,43 @@ Read from `/artifacts/pipeline_<id>/`:
    `experiment_plan.yaml`, define a sweep range and describe expected
    behaviour (linear degradation, cliff, plateau).
 
-3. **Visualization Proposals**: Specify 3-5 concrete plots that would
-   strengthen the paper:
-   - Convergence curves
-   - Ablation bar charts
-   - Sensitivity heatmaps
-   - Distribution comparisons
-   - Error analysis scatter plots
+3. **Visualization Proposals**: Select 3-5 concrete plots from the
+   Academic Chart Taxonomy below. For each proposed plot, specify:
+   (a) chart type from the taxonomy, (b) axes/dimensions, (c) data
+   source (results.json key path), (d) why this visualization
+   strengthens the paper's claims.
+
+   **Academic Chart Taxonomy** (19 types):
+
+   | # | Type | Best For |
+   |---|------|----------|
+   | 1 | Vertical grouped bar chart | Comparing methods across metrics/datasets |
+   | 2 | Horizontal bar chart | Ranking methods or features by a single metric |
+   | 3 | Pareto frontier plot | Multi-objective trade-off (accuracy vs. speed) |
+   | 4 | Radar/spider chart | Multi-dimensional method comparison (≤8 axes) |
+   | 5 | Stacked bar chart | Component contribution breakdown |
+   | 6 | Line chart with confidence bands | Training curves, convergence over epochs |
+   | 7 | Zoomed inset line chart | Highlighting subtle differences in curves |
+   | 8 | Scatter plot with trend line | Correlation between two continuous variables |
+   | 9 | ROC curve | Binary classifier performance at varying thresholds |
+   | 10 | Precision-Recall curve | Imbalanced classification evaluation |
+   | 11 | Heatmap / confusion matrix | Pairwise similarity, class confusion, attention |
+   | 12 | Scatter plot (correlation) | Feature relationship exploration |
+   | 13 | Bubble chart | 3-variable relationship (x, y, size) |
+   | 14 | Violin plot | Distribution shape comparison across groups |
+   | 15 | Box plot | Quartile comparison across groups/settings |
+   | 16 | Donut / pie chart | Proportion breakdown (≤6 categories only) |
+   | 17 | Dual Y-axis chart | Comparing metrics with different scales |
+   | 18 | Bar-line combo chart | Overlaying absolute values with trends |
+   | 19 | Faceted grid (small multiples) | Same plot across multiple conditions/datasets |
+
+   **Selection rules**:
+   - Main results comparison → Type 1 (grouped bar) or Type 6 (line)
+   - Ablation study → Type 5 (stacked bar) or Type 1
+   - Sensitivity analysis → Type 11 (heatmap) or Type 6 (line with bands)
+   - Convergence/training → Type 6 or Type 7 (zoomed inset)
+   - Error analysis → Type 8 (scatter) or Type 14 (violin)
+   - Multi-metric trade-off → Type 3 (Pareto) or Type 4 (radar)
 
 4. **Statistical Significance**: Check whether reported improvements are
    statistically significant. Recommend confidence intervals, p-values,
@@ -57,7 +87,9 @@ Write `experiment_analysis.md` to `/artifacts/pipeline_<id>/` with sections:
 <table: hyperparameter | range | expected behaviour>
 
 ## 3. Visualization Plan
-<numbered list of proposed plots with axes and data sources>
+| # | Chart Type (Taxonomy #) | Title | X-axis | Y-axis | Data Source (results.json path) | Rationale |
+|---|------------------------|-------|--------|--------|-------------------------------|-----------|
+| 1 | e.g., Type 1 (Grouped bar) | ... | ... | ... | ... | ... |
 
 ## 4. Statistical Significance
 <assessment of reported results + recommended tests>

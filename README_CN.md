@@ -2,7 +2,7 @@
 
 知识驱动的多智能体科研操作系统，基于 [OpenHarness](./OpenHarness) 构建。
 
-全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4.2）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、HKUDS/AI-Researcher（MetaChain）、DeepScientist、CycleResearcher、Zochi、FARS 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。v4.1 新增 9 项 AI-Researcher 启发的升级（U1–U9）：三层模型分级、LLM 鲁棒性增强、步骤级缓存、多源文献收集、分节论文写作、竞争式想法筛选、后实验分析循环。v4.2 深化 AI-Researcher 借鉴，新增 4 项补充：分节论文质检清单（U10）、Judge→Coder 迭代协议（A16-loop）、综述笔记合并输出（A12+）、章节完整性质量门（G10）。
+全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4.5）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、HKUDS/AI-Researcher（MetaChain）、DeepScientist、CycleResearcher、Zochi、FARS、deep-research、AutoResearchClaw、PaperOrchestra、SciAgents、awesome-ai-research-writing 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。v4.1 新增 9 项 AI-Researcher 启发的升级（U1–U9）：三层模型分级、LLM 鲁棒性增强、步骤级缓存、多源文献收集、分节论文写作、竞争式想法筛选、后实验分析循环。v4.2 深化 AI-Researcher 借鉴，新增 4 项补充：分节论文质检清单（U10）、Judge→Coder 迭代协议（A16-loop）、综述笔记合并输出（A12+）、章节完整性质量门（G10）。v4.3 借鉴 deep-research（dzhng/deep-research）递归研究模式，新增 6 项改进（B1–B6）：预研澄清问题、结构化研究目标、Follow-up 迭代知识发现、原生 JSON Schema 输出、主动 Token 预算管理、Schema 字段级 Prompt 注入。v4.4 借鉴 awesome-ai-research-writing、PaperOrchestra、AutoResearchClaw、sciwrite，新增 7 项论文质量升级（C1–C5 + G11–G12）。v4.5 借鉴 AgentReview、AutoResearchClaw MetaClaw，新增 5 项审稿与记忆升级（C7 + C9–C11 + C15）。
 
 ## 新版核心升级（v4）
 
@@ -31,6 +31,51 @@
 - **A10 Reviewer drift 测试** — `tests/test_reviewer_drift.py` 结构化 Proxy MAE 占位测试，季度跑真实评估
 - **R1 `fix` / `continue` 统一** — `fix --user-feedback <path>` 与 `continue` 走同一条路径；`continue` 保留为别名
 - **R2 研究简报 Python 化** — 调度器在添加候选时优先调用 `briefer.py::render_brief()`（读取 `evaluated_<id>.yaml` 的 5D 评分 + 创新声明 + 证伪设计 + KB 片段），失败或缺 YAML 时回退到旧模板；`research_briefer` agent 不再参与生产路径
+
+### v4.5 审稿与记忆升级（C7 + C9–C11 + C15）
+
+**审稿质量**（借鉴 AgentReview、ARIS、Imbad0202 academic-research-skills）
+- **C7 跨模型对抗审稿**（借鉴 ARIS cross-model review）— `reviewer_simulator.md` 新增 Cross-Model Adversarial Review 协议：当 `workflow_config.yaml::review.model_override` 配置时，adversarial（neg）审稿者使用不同模型族（如 Claude 写论文、GPT 审稿），消除同模型自审盲区；`workflow_config.yaml` 新增 `review:` 配置块
+- **C9 反谄媚让步阈值协议**（借鉴 Imbad0202 Devil's Advocate protocol）— `reviewer_simulator.md` neg 审稿者新增 Anti-Sycophancy Concession Protocol：反省轮次中提高评分前必须先输出 `concession_score`（1-5），低于 4 分不允许让步；跨全部反省轮次让步率 > 40% 触发 `sycophancy_warning`；Overall 分数跨反省涨幅 > 2 触发 frame-lock 检测并回退
+- **C10 Rebuttal 回复模拟**（借鉴 AgentReview author rebuttal phase）— `reviewer_simulator.md` 新增 Author Rebuttal Simulation：所有独立审稿完成后、Area Chair 聚合前，由 `paper_writer` 角色生成结构化 rebuttal 回复每条 Weakness/Question；审稿者读取 rebuttal 后可上调（但不可下调）评分；Area Chair 使用 post-rebuttal 分数做最终聚合；产出 `rebuttal_v<N>.md` + `review_v<N>_r<i>_post_rebuttal.json`
+
+**跨 pipeline 记忆**（借鉴 AutoResearchClaw MetaClaw）
+- **C11 失败→技能自进化注入**（借鉴 MetaClaw self-evolving skill injection）— `findings_memory.py` 新增第 8 种 memory kind `failures`；新增 `FailureCard` 模型（继承 `FindingCard`，含 `failure_mode`/`remediation`/`decay_days` 字段）；Critic 判 UNSUPPORTED 时自动存储失败模式 + 修复建议到 `knowledge/findings/failures/`；`get_active_failures()` 按 30 天时间衰减排序，仅返回衰减窗口内的失败卡片；dispatcher 下一 pipeline 可注入活跃失败卡片作为规避指导
+
+**图表生成**（借鉴 AutoResearchClaw FigureAgent 5-agent pipeline）
+- **C15 图表生成 agent**（借鉴 AutoResearchClaw Planner→CodeGen→Renderer→Critic→Integrator）— 新增 `figure_composer.md` agent，5 阶段流水线：Plan（从 experiment_analysis.md 可视化计划读取图表规格）→ CodeGen（生成 matplotlib/seaborn 脚本，colorblind-friendly 配色，DPI 300）→ Render（`execute_python` 执行，失败最多重试 3 次）→ Critic（调用 `vlm_reviewer` 审查，最多 2 轮修订）→ Integrate（产出 `figure_manifest.yaml` 含 LaTeX caption）；非信息性图表标记 `appendix_candidate` 降级到附录而非删除；`workflow_config.yaml` MAIN 序列新增 `figure_compose` 步（experiment_analysis 之后、interrogation 之前）
+
+### v4.4 论文质量升级（C1–C5 + G11–G12）
+
+**写作质量**（借鉴 awesome-ai-research-writing、sciwrite）
+- **C1 去 AI 味检查清单**（借鉴 awesome-ai-research-writing 75 词黑名单 + 模式检测）— `paper_writer.md` 新增 De-AI Flavor Checklist：75 个过度使用的 AI 生成词汇黑名单（Leverage/Delve/Nuanced/Pivotal 等）+ 6 项结构模式检查（em-dash ≤2/节、禁修辞填充、禁推销语气、禁模糊归因、禁三形容词堆叠、禁 "In recent years" 开头）；自反省循环新增第 5 步：LaTeX error_list 通过后执行 de-AI 检查
+- **C3 Claims-Evidence 预写作矩阵**（借鉴 ARIS claims-evidence mapping）— `paper_composer.py` 在 4 步流水线前新增 Step 0：从 `results.json` + `experiment_analysis.md` 提取所有可写入论文的实证声明，为每条声明映射证据来源（artifact 键路径）+ 精确数值 + 适用章节；后续每节 structure 步必须引用矩阵行，禁止引入未映射声明
+- **C5 Score-gated 迭代修订**（借鉴 PaperOrchestra AgentReview-gated refinement）— `paper_composer.py` checklist 步后新增 Step 5：对通过检查的章节做 1-10 质量打分，分数 < 8 时尝试修订 → 重新打分，修订后分数下降则丢弃修订保留原文（防止修订退化），分数 ≥ 8 跳过修订节省 token
+
+**审计质量**（借鉴 sciwrite、PaperOrchestra、AutoResearchClaw）
+- **G11 数值跨节一致性**（借鉴 sciwrite numerical cross-consistency）— `quality_gates.md` 新增 G11 定义；`paper_auditor.md` 新增 G11 检查表：扫描同一 metric 在 Abstract/表格/正文/图注中的所有出现，不一致即 FAIL（除非有明确的四舍五入约定）；交叉引用检查（"如表 1 所示"指向正确行列）
+- **G12 引用利用率 + 多层验证**（借鉴 PaperOrchestra ≥90% utilization + AutoResearchClaw 4-layer verification）— `quality_gates.md` 新增 G12 定义；`paper_auditor.md` 新增引用利用率检查（`evidence_refs` 中 ≥85% 被实际 `\cite{}` 使用，<70% 为 FAIL）+ 4 层引用验证链（L1 bib 存在性 BLOCK + L2 Semantic Scholar 标题匹配 + L3 CrossRef DOI 校验 + L4 LLM 相关性评分，L2–L4 当前为 WARN）；`auditor_confidence_score` 评分规则更新：G11 不一致或 G12 利用率 <70% 直接拉低至 <0.5
+
+**实验可视化**（借鉴 awesome-ai-research-writing 19 类图表分类法）
+- **C4 19 类学术图表分类法**（借鉴 awesome-ai-research-writing 实验绘图推荐）— `experiment_analyser.md` 可视化提案段升级为结构化 19 类图表分类法表格（Grouped bar / Pareto / Radar / Heatmap / Violin / Faceted grid 等），含选择规则（主结果 → Type 1、消融 → Type 5、灵敏度 → Type 11 等）；输出模板从自由列表改为结构化表格（Chart Type / Title / Axes / Data Source / Rationale）
+
+### v4.3 deep-research 借鉴（B1–B6）
+
+**知识发现质量**
+- **B1 预研澄清问题**（借鉴 deep-research generateFeedback）— 新增 `clarification.py` 模块，在 `inject`/`create` 路径的 PROPOSAL 阶段之前生成 3 个定向澄清问题（范围边界、指标偏好、数据集倾向），用户回答后通过 `enrich_query_with_answers` 合成为更精确的 `research_question`，产出 `clarification_qa.yaml`，减少后续因方向模糊导致的 HITL 回环
+- **B2 结构化研究目标**（借鉴 deep-research researchGoal 注释）— `knowledge_miner.md` 提案格式新增 `research_goal` 字段：不仅描述"研究什么"，还描述"找到什么后做什么 + 假设成立/不成立时的后续方向"，帮助下游 `hypothesis_gen`、`exp_designer` 做更好的范围决策
+- **B3 Follow-up 迭代知识发现**（借鉴 deep-research followUpQuestions 递归）— `knowledge_compiler.py` 新增 `extract_follow_up_questions` 函数，从论文 future work/limitations 章节启发式提取后续研究问题，写入 wiki frontmatter `follow_up_questions` 字段；`knowledge_miner.md` 新增 "Follow-up Question Harvesting" 策略：优先检查有 `follow_up_questions` 的 wiki 页面作为提案种子，形成 `compile → follow_up → mine → compile` 自动闭环
+
+**LLM 鲁棒性**
+- **B4 原生 JSON Schema 结构化输出**（借鉴 deep-research generateObject + Zod 模式）— `llm_client.py` 新增 `supports_json_schema(model)` 检测（gpt-4o/5.x/o1/o3/o4 系列返回 True）和 `build_json_schema_param(pydantic_model_class)` 工具函数，可将 Pydantic 模型直接转为 OpenAI `response_format` 参数，替代脆弱的 `extract_json_between_markers` 正则提取；对不支持的模型（DeepSeek/Qwen/Ollama）保留现有回退
+- **B5 主动 Token 预算管理**（借鉴 deep-research trimPrompt 预防式策略）— `llm_client.py` 升级 `estimate_tokens` 为 tiktoken 精确计算（有 tiktoken 库时用 `o200k_base` 编码，否则回退 `len//4`），新增 `trim_to_budget(text, max_tokens)` 头尾比截断 + `get_context_size(model)` 窗口查询；`dispatcher.py` 在 `_build_step_prompt` 末尾主动裁剪（预留 15% 给输出），变 U2 被动溢出恢复为主路径预防
+
+**Schema 增强**
+- **B6 Schema 字段级 Prompt 注入**（借鉴 deep-research Zod `.describe()` 模式）— `AtomicConcept`、`PipelineState`、`ProfessorDecision`、`GateResult` 等核心 Pydantic 模型的 `Field(description=...)` 升级为包含生成指令的描述（如 `code_implementation` 描述明确要求 `<file>::<function>` 格式、禁止自然语言），当 B4 启用原生 JSON Schema 模式时这些描述自动成为 LLM 的输出约束
+
+**清理**
+- **R4 `research_briefer` agent 标记废弃** — `research_briefer.md` 顶部添加废弃通知，生产路径已由 `briefer.py::render_brief()` 接管（R2）
+- **R5 `route_model` 补全 o4 系列** — `llm_client.py::route_model` 新增 `o4-*` 和 `o4` 识别，正确路由到 OpenAI 客户端
 
 ### v4.2 AI-Researcher 深化借鉴（U10 + A16-loop + A12+ + G10）
 
@@ -164,11 +209,12 @@
                → Critic（含 advisor_verdict.yaml）
                → [post-CRITIC hook] VLM 图表 review（若有 png/jpg）+ Journal 节点追加
                → EXPERIMENT_ANALYSIS（消融/灵敏度/可视化/统计/失败模式）
+               → FIGURE_COMPOSE（5 阶段图表生成；产出 figure_manifest.yaml）
                → Interrogator → Report
               → [HITL gate 2: milestone-N（N≥2 自动暂停）] 复用 user_approve/
               → 达到最大里程碑 → PAPER
-                → draft.md → Paper Auditor（G4 数值 + citation integrity + chktex）
-                → Reviewer Simulator（ensemble=3 + pos/neg + Area Chair，不重算 G4）
+                → draft.md → Paper Auditor（G4 数值 + G11 跨节一致性 + G12 引用利用率 + chktex）
+                → Reviewer Simulator（ensemble=3 + pos/neg + Area Chair，不重算 G4；含 Rebuttal 模拟 C10）
                 → paper.tex → paper.pdf
                 → [HITL gate 3: pre-publish] → publications/<id>/
                   → 知识沉淀：Critic 判 supported → findings_memory 落 findings card
@@ -320,6 +366,7 @@ MAIN ──→ hypothesis → design → design_review
      ──→ RESULTS_REVERIFY（独立子进程固定 seed 重跑；>10% 漂移 BLOCK）
      ──→ critic（含 advisor_verdict.yaml）
      ──→ experiment_analysis（消融/灵敏度/可视化/统计显著性/失败模式）
+     ──→ figure_compose（5 阶段：Plan→CodeGen→Render→Critic→Integrate；产出 figure_manifest.yaml）
      ──→ interrogator → report
      ──→ milestone
          │
@@ -680,16 +727,17 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 |------|------|------|
 | `scheduler.py` | Tick 驱动调度器 + Wave 2 edges 叠加 + HITL 3 gate + **FAST_FAIL auto-gate** + findings hook | — |
 | `dispatcher.py` | Prompt 构建 + 多后端路由 + `Dispatcher.parse_json_output` | A13 |
-| **`llm_client.py`** | **`extract_json_between_markers` / `strip_reasoning` / `retry_llm` / `route_model` + 上下文溢出恢复（U2）** | **A13 U2** |
+| **`llm_client.py`** | **`extract_json_between_markers` / `strip_reasoning` / `retry_llm` / `route_model` + 上下文溢出恢复（U2）+ `supports_json_schema` / `build_json_schema_param`（B4）+ `estimate_tokens`（tiktoken）/ `trim_to_budget` / `get_context_size`（B5）** | **A13 U2 B4 B5** |
 | `state_manager.py` | 原子化文件 CRUD | — |
 | `topic_evaluator.py` | 0+8 步评估（5 轴门 + 完整 8 步）+ **竞争式锦标赛选拔（U8）** | A8 U8 |
 | `agent_executor.py` | OpenAI 兼容工具调用循环（**gpt-5.x/o 系列自动 `max_completion_tokens`** + 非 FC 模型 XML 回退（U3）+ 工具输出截断（U6）） | U3 U6 |
 | **`briefer.py`** | **研究简报纯 Python 渲染器** | **R2** |
-| `knowledge_compiler.py` | PDF/MD → wiki；pipeline 产物 → wiki | — |
+| **`clarification.py`** | **预研澄清问题生成 + 查询富化** | **B1** |
+| `knowledge_compiler.py` | PDF/MD → wiki；pipeline 产物 → wiki + **`extract_follow_up_questions` 后续问题提取（B3）** | **B3** |
 | `paper_audit.py` | G4 + G5 + **bib existence + chktex** | A6 A19 |
 | `latex_compiler.py` | Markdown → LaTeX → PDF | — |
 | `heartbeat.py` | arXiv PDF 抓取 + 引用过滤 + **GitHub 搜索 + Crossref 期刊解析 + S2 引用图谱** | U4 |
-| **`paper_composer.py`** | **分节 4 步论文写作（structure→detailize→fuse→checklist）** | **U7** |
+| **`paper_composer.py`** | **分节 4 步论文写作（structure→detailize→fuse→checklist）+ C3 Claims-Evidence 矩阵（Step 0）+ C5 Score-gated 修订（Step 5）** | **U7 C3 C5** |
 | **`step_cache.py`** | **步骤级检查点缓存（幂等重放 + 级联失效）** | **U5** |
 | `publisher.py` | 投稿打包 + 期刊推荐 | — |
 | `frontend_state.py` | React 看板 JSON + `user_approve_pending` 标志 | — |
@@ -702,7 +750,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `remote_executor.py` | local/docker/ssh + **sandbox** 后端 | A2 |
 | `experiment_tracker.py` | W&B / MLflow 集成 | — |
 | `branch_manager.py` | **Node/Journal/BFTS + BranchRunner**（K 路并行统一走 BFTS） | A3/A18 |
-| **`findings_memory.py`** | **MEMORY_KINDS + MemoryService + 阶段偏置检索** | **A7** |
+| **`findings_memory.py`** | **MEMORY_KINDS（8 种含 `failures`）+ MemoryService + 阶段偏置检索 + C11 FailureCard + `save_failure` + `get_active_failures`（30 天衰减）** | **A7 C11** |
 | **`baseline_registry.py`** | **MetricContract + confirm/waive/check_comparability** | **A17** |
 
 ## 智能体（22 个）
@@ -719,13 +767,14 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `coder` | **按 concept.id 逐项实现（多文件 + 冒烟测试）；读 `survey_notes.md` + `advisor_verdict.yaml`，A16-loop 迭代修复 fail 概念** + G3/G6/G9 | A12 A16-loop |
 | `experiment_runner` | `execute_python` + `fetch_dataset` | — |
 | `critic` | 结果分析 + G1/G3/G5/G9 + **advisor_verdict.yaml** | A16 |
-| **`experiment_analyser`**（**新**） | **后实验深度分析：消融/灵敏度/可视化/统计/失败模式** | **U9** |
+| **`experiment_analyser`**（**新**） | **后实验深度分析：消融/灵敏度/可视化（C4 19 类图表分类法 + 结构化输出模板）/统计/失败模式** | **U9 C4** |
+| **`figure_composer`**（**新 v4.5**） | **5 阶段图表生成（Plan→CodeGen→Render→Critic→Integrate）；产出 `figure_manifest.yaml`（含 LaTeX caption）；非信息性图表降级为 appendix_candidate** | **C15** |
 | `interrogator` | 对抗式质询（MAIN，1-3 轮） | — |
 | `reporter` | 里程碑报告 + G7 开销 | — |
 | `pre_main_reviewer` | FAST_FAIL 后 ≤800 词评审 | — |
-| `paper_writer` | 学术论文 + **G6/G8 + A6 引用约束 + A19 硬化 + U10 分节质检清单（6 章节专项 + 自反省第 4 步）** | A6 A19 **U10** |
-| `paper_auditor` | G4 + G5 + **G10（章节完整性 11 行检查表）** + bib + chktex | A6 A19 **G10** |
-| `reviewer_simulator` | **ensemble + pos/neg + Area Chair；不重算 G4** | A9 R3 |
+| `paper_writer` | 学术论文 + **G6/G8 + A6 引用约束 + A19 硬化 + U10 分节质检清单（6 章节专项 + 自反省第 4 步）+ C1 去 AI 味检查（自反省第 5 步）** | A6 A19 **U10 C1** |
+| `paper_auditor` | G4 + G5 + **G10（章节完整性 11 行检查表）** + **G11（跨节数值一致性）** + **G12（引用利用率 ≥85% + 4 层验证）** + bib + chktex | A6 A19 **G10 G11 G12** |
+| `reviewer_simulator` | **ensemble + pos/neg + Area Chair；不重算 G4；C7 跨模型对抗审稿；C9 反谄媚让步协议；C10 Rebuttal 模拟** | A9 R3 **C7 C9 C10** |
 | `fixer` | 按评审/用户反馈修正代码并重跑 | R1 |
 | `lit_scout` | kb_retrieve 文献调研 | — |
 | `vlm_reviewer` | **3 段 prompt（review/selection/minimal）+ duplicate detection** | A5 |
@@ -746,6 +795,8 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | G8 | 结论边界 | paper_writer, reviewer_simulator |
 | G9 | 数据有效性与溯源（含参考数据一致性） | exp_designer, coder, experiment_runner, critic |
 | **G10**（**新 v4.2**） | **章节结构完整性**（Abstract 字数/无引用、Related Work 4–10 引用/2× 比例、Methodology 必须有公式、Experiments 无假造数字、Conclusion 不超实验范围） | **paper_writer（写作时执行）, paper_auditor（审计报告 11 行检查表）** |
+| **G11**（**新 v4.4**） | **数值跨节一致性**：扫描同一 metric 在 Abstract/表格/正文/图注中的所有出现，不一致即 FAIL；交叉引用（"如表 1 所示"）指向正确行列 | **paper_auditor** |
+| **G12**（**新 v4.4**） | **引用利用率 + 多层验证**：`evidence_refs` 中 ≥85% 被 `\cite{}` 使用（<70% FAIL）；4 层验证链（L1 bib 存在性 BLOCK + L2 S2 标题匹配 + L3 DOI 校验 + L4 LLM 相关性，L2–L4 为 WARN） | **paper_auditor** |
 
 ## 吸收/精简对照（A1–A19 + R1–R5）
 
@@ -780,9 +831,28 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | U8 | 竞争式想法筛选 | AI-Researcher tournament | `topic_evaluator.py::competitive_select` + `refine_idea` + `knowledge_miner.md` |
 | U9 | 后实验分析循环 | AI-Researcher post-experiment | `experiment_analyser.md` + `EXPERIMENT_ANALYSIS` step + 路由更新 |
 | U10 | **分节论文质检清单**（v4.2） | AI-Researcher section composer checklists | `paper_writer.md` 新增 6 个章节专项清单（Abstract/Introduction/Related Work/Methodology/Experiments/Conclusion）；自反省循环第 4 步执行对应清单 |
+| B1 | **预研澄清问题**（v4.3） | deep-research generateFeedback | `clarification.py::generate_clarifying_questions` + `enrich_query_with_answers` |
+| B2 | **结构化研究目标**（v4.3） | deep-research researchGoal | `knowledge_miner.md::research_goal` 字段 |
+| B3 | **Follow-up 迭代知识发现**（v4.3） | deep-research followUpQuestions | `knowledge_compiler.py::extract_follow_up_questions` + wiki frontmatter `follow_up_questions` + `knowledge_miner.md` Follow-up Harvesting 策略 |
+| B4 | **原生 JSON Schema 结构化输出**（v4.3） | deep-research generateObject + Zod | `llm_client.py::supports_json_schema` + `build_json_schema_param` |
+| B5 | **主动 Token 预算管理**（v4.3） | deep-research trimPrompt | `llm_client.py::estimate_tokens`（tiktoken）+ `trim_to_budget` + `get_context_size` + `dispatcher._build_step_prompt` 末尾裁剪 |
+| B6 | **Schema 字段级 Prompt 注入**（v4.3） | deep-research Zod `.describe()` | `concept.py`/`pipeline.py`/`decision.py`/`evaluation.py` Field descriptions 升级为生成指令 |
 | R1 | `fix` / `continue` 统一 | — | `scripts/run_research.py` |
 | R2 | Briefer Python 化 | — | `briefer.py` 取代 `research_briefer` agent |
 | R3 | Reviewer 不重算 G4 | — | `reviewer_simulator.md` |
+| R4 | **`research_briefer` 废弃标记**（v4.3） | — | `research_briefer.md` 顶部废弃通知 |
+| R5 | **`route_model` 补全 o4**（v4.3） | — | `llm_client.py::route_model` 新增 `o4-*` 识别 |
+| C1 | **去 AI 味检查清单**（v4.4） | awesome-ai-research-writing 75 词黑名单 | `paper_writer.md` De-AI Flavor Checklist；自反省第 5 步 |
+| C3 | **Claims-Evidence 预写作矩阵**（v4.4） | ARIS claims-evidence mapping | `paper_composer.py::_build_claims_evidence_matrix`（Step 0）|
+| C4 | **19 类学术图表分类法**（v4.4） | awesome-ai-research-writing 实验绘图推荐 | `experiment_analyser.md` 可视化提案升级为 19 类表格 + 选择规则 + 结构化输出模板 |
+| C5 | **Score-gated 迭代修订**（v4.4） | PaperOrchestra AgentReview-gated refinement | `paper_composer.py::_score_gated_revision`（Step 5）；分 < 8 修订；修订退化则丢弃 |
+| G11 | **数值跨节一致性**（v4.4） | sciwrite numerical cross-consistency | `quality_gates.md` G11 定义；`paper_auditor.md` G11 检查表；不一致 → auditor_confidence_score < 0.5 |
+| G12 | **引用利用率 + 多层验证**（v4.4） | PaperOrchestra ≥90% util + AutoResearchClaw 4-layer | `quality_gates.md` G12 定义；`paper_auditor.md` G12 检查；利用率 <70% FAIL + L1–L4 验证链 |
+| C7 | **跨模型对抗审稿**（v4.5） | ARIS cross-model review | `reviewer_simulator.md` Cross-Model Adversarial Review；`workflow_config.yaml::review.model_override` |
+| C9 | **反谄媚让步阈值协议**（v4.5） | Imbad0202 Devil's Advocate protocol | `reviewer_simulator.md` Anti-Sycophancy Concession Protocol；`concession_score` < 4 禁止让步；让步率 > 40% 触发 `sycophancy_warning` |
+| C10 | **Rebuttal 回复模拟**（v4.5） | AgentReview author rebuttal phase | `reviewer_simulator.md` Author Rebuttal Simulation；产出 `rebuttal_v<N>.md` + `review_v<N>_r<i>_post_rebuttal.json` |
+| C11 | **失败→技能自进化注入**（v4.5） | MetaClaw self-evolving skill injection | `findings_memory.py::FailureCard` + `save_failure` + `get_active_failures`（30 天衰减） |
+| C15 | **图表生成 agent**（v4.5） | AutoResearchClaw FigureAgent 5-agent pipeline | `figure_composer.md`（新增）；`workflow_config.yaml` MAIN 序列新增 `figure_compose` 步 |
 
 ## 配置
 
@@ -811,6 +881,10 @@ innovation:
   cross_domain_bonus: 1
   cross_method_bonus: 1
   extension_bonus: 1          # methodological_extension / hybrid_combination
+
+# 跨模型审稿（v4.5 C7）
+review:
+  model_override: ""          # e.g., "gpt-4o" — neg 审稿者使用不同模型族
 ```
 
 ### 多后端支持
@@ -918,6 +992,23 @@ python -m pytest tests/ -q
 26. **分节质检清单执行到每节**（U10） — 6 个章节专项清单嵌入自反省循环第 4 步，Related Work 引用数/比例、Methodology 公式要求在写作阶段即被捕获，而非等到审计
 27. **Judge→Coder 闭环，不一次性重写**（A16-loop） — Critic 的 per-concept 裁决驱动 Coder 精准修复，只动 fail 的概念，保留 pass 的，iteration_count.txt 防止无限循环
 28. **综述笔记是代码实现的规范文档**（A12+） — concept_extractor 产出的 survey_notes.md 将理论与代码定位双向绑定，Coder 读注释而非每次重查 kb_retrieve
+29. **预研澄清缩窄方向漏斗**（B1） — inject/create 路径在 PROPOSAL 前生成定向澄清问题，减少后续方向模糊导致的 HITL 回环
+30. **研究目标前瞻性规划**（B2） — 知识矿工提案新增 research_goal 字段，描述"找到什么后做什么"，帮助下游做范围决策
+31. **Follow-up 驱动的知识闭环**（B3） — 编译器从论文 future work 提取后续问题 → wiki frontmatter → 矿工优先消费，形成自动发现循环
+32. **结构化输出优于正则提取**（B4） — 支持原生 JSON Schema 模式的模型直接返回类型安全 JSON，消除 parse 失败
+33. **预防优于恢复**（B5） — 主动 token 预算裁剪在每次 LLM 调用前执行，U2 溢出恢复降级为兜底
+34. **Schema 描述即生成约束**（B6） — Pydantic Field 描述包含格式指令，启用 B4 时自动成为模型输出约束
+35. **去 AI 味是可执行清单，不是风格建议**（C1） — 75 词黑名单 + 6 项结构模式在写作自反省第 5 步强制执行，而非留给审稿人
+36. **证据矩阵先于写作**（C3） — Claims-Evidence 矩阵在任何章节写作前建立，禁止引入未映射声明，消除论文"自说自话"
+37. **图表分类法约束选择，不是自由发挥**（C4） — 19 类学术图表分类法将可视化决策从主观偏好转为可审计的规则
+38. **质量打分驱动修订，修订退化则丢弃**（C5） — 分数 ≥ 8 跳过修订节省 token，分数下降则丢弃修订保留原文，防止修订退化
+39. **数值一致性是可自动化核查的客观问题**（G11） — 同一 metric 在 Abstract/表格/正文/图注中必须完全一致，自动扫描替代人工比对
+40. **引用要用够，用到的要真实存在**（G12） — 利用率门槛（≥85%）防止引用堆砌；4 层验证链防止幻觉引用
+41. **审稿者模型多样性消除自审盲区**（C7） — 用不同模型族的 neg 审稿者捕捉原作者模型的系统性盲点
+42. **让步需要理由，不能被 rebuttal 轻易说服**（C9） — concession_score < 4 不允许让步，防止负面审稿者在 rebuttal 后因顺从性退缩
+43. **Rebuttal 是双向交流，不是单向质疑**（C10） — author rebuttal 阶段给论文一次澄清机会，审稿者读后只能上调不能下调分数
+44. **失败卡片是跨 pipeline 的经验传递**（C11） — UNSUPPORTED 判决自动沉淀失败模式，30 天衰减确保只注入近期相关的规避指导
+45. **图表生成是独立流水线，不是写作的附属品**（C15） — 5 阶段图表生成 agent 将可视化从临时脚本提升为有 VLM 质检和 LaTeX 集成的标准化流程
 
 ## 许可证
 
