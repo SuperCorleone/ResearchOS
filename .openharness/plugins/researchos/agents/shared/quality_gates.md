@@ -80,6 +80,18 @@ substitution when plan says file/api). Reference-paper consistency
 Owners: `exp_designer` (plan), `coder` (implement), `experiment_runner`
 (fetch + provenance), `critic` (audit).
 
+## G10 — Section Completeness
+Each paper section must meet structural and content completeness criteria:
+
+**Abstract**: single paragraph, 150–250 words, no citations, no future work.
+**Introduction**: must have Background + Motivation + Contributions subsections.
+**Related Work**: each subsection cites 4–10 papers; related-work discussion ≥ 2× length of contribution statement; no equations; no section-level introductory paragraph.
+**Methodology**: section title = proposed method name (not "Method"/"Methodology"); every important module has at least one display-math equation.
+**Experiments**: all numbers traceable to `results.json`; at least one ablation for MAIN-stage papers.
+**Conclusion**: no claims beyond §4 experimental scope (mirrors G8 but checks the section structurally).
+
+Owner: `paper_auditor` (structural check), `paper_writer` (enforce during writing).
+
 ---
 
 ## Referencing protocol (for agents)

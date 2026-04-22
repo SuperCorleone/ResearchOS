@@ -153,11 +153,58 @@ hard write-order contract.)
 1. Verifies every item in the LaTeX `error_list` below.
 2. Verifies A6 for every `\cite{...}` just added.
 3. Flags any claim not supported by `results.json` or pipeline artifacts.
+4. Runs the section-specific quality checklist from '## Section-Level Quality Checklists' for the current section.
 
 If issues surface, rewrite and re-review. Exit the loop for a section **only**
 when you emit the literal phrase `I am done`. The scheduler/auditor treats that
 as the exit condition. Do NOT emit it while any checklist item fails. Retry
 budget: `paper_audit.num_error_corrections` (currently 5).
+
+## Section-Level Quality Checklists (borrowed from AI-Researcher)
+
+### Abstract Checklist
+- Single coherent paragraph, no line breaks, 150–250 words
+- Structure: (1) Problem Context — research area, existing approaches, specific gap/challenge; (2) Proposed Solution — main approach + key technical innovation; (3) Results — primary findings only
+- NO citations in the abstract
+- NO future work in the abstract
+- Does NOT begin with "In this paper" or "We present"
+
+### Introduction Checklist
+- Section 1: RESEARCH BACKGROUND (2 paragraphs): broad context → existing methods categorized in 1-3 research lines → use \cite{} extensively
+- Section 2: RESEARCH MOTIVATION (1-2 paragraphs): gaps in existing work → logical progression to our approach → key challenges and research questions
+- Section 3: OUR METHOD (1-2 paragraphs): high-level technical overview only (NOT detailed mechanism — that belongs in Method section)
+- Section 4: CONTRIBUTIONS (bulleted list): 3-5 concrete contributions, each ≤2 sentences
+- All claims about "state-of-the-art" must be backed by citations
+
+### Related Work Checklist
+- The \section{Related Work} heading is immediately followed by \subsection{} headings — NO section-level introductory paragraph
+- Each subsection covers one research LINE (group of related approaches), not individual papers
+- Each subsection structure: (a) discuss related works first, then (b) briefly state relative contribution of THIS paper — NOT the other way around
+- Discussion of related works MUST be ≥ 2× the length of the contribution statement
+- Each subsection: minimum 4 citations, maximum 10 citations, grouped by methodology/approach
+- Each subsection: 1-2 paragraphs only
+- NO equations in Related Work
+- Every citation uses \cite{} and must exist in references.bib (A6)
+
+### Methodology (Method) Checklist
+- Section title MUST be the NAME of the proposed method, NOT a generic "Method" or "Methodology"
+- All important technical modules MUST include math equations with well-defined notation — avoid trivially simple equations
+- Structure: main section → subsections for major components → subsubsections for detailed mechanisms
+- Exclude experimental settings, dataset descriptions, and evaluation procedures from this section (those belong in Experiments)
+- Every novel component needs a formal definition (Definition 1, Proposition 1, etc.) where appropriate
+
+### Experiments Checklist
+- ONLY include numerical results that are explicitly present in results.json — NEVER generate or assume results
+- Verify each number matches results.json before including
+- Required subsections: Setup (dataset + metrics + hyperparams + seeds), Main Results (table with baselines), Ablation Study (≥1 ablation required for MAIN stage)
+- Result tables: include baselines, proposed method, and statistical significance markers
+- Analysis paragraph for each result table: explain WHY the numbers are what they are, not just WHAT they are
+
+### Conclusion Checklist
+- Summarizes contributions from the paper without introducing new claims
+- MUST NOT generalize beyond the experimental scope tested (G8)
+- Future work: 2-3 concrete directions, each grounded in a specific limitation from §6
+- Does NOT promise results not yet obtained
 
 ## LaTeX error_list checklist (A19, mandatory self-check)
 

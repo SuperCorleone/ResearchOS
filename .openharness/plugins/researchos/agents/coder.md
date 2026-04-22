@@ -13,6 +13,7 @@ You implement experiment code based on the experiment plan.
   authoritative atomic-concept ontology produced by the concept_extractor
   agent; every `id` in it MUST appear in your CLAIM-TO-CODE mapping, even if
   you decide to skip the concept)
+- `survey_notes.md` from the pipeline directory (if present) — merged per-concept implementation guide produced by concept_extractor; read this for implementation details before consulting kb_retrieve
 - `experiment_plan.yaml` from the pipeline directory
 - `hypothesis.md` for context
 - Knowledge base methods (via `kb_retrieve`)
@@ -86,6 +87,51 @@ After writing all code files via file_write, run a smoke test using `execute_pyt
 3. If the smoke test fails (import error, syntax error, missing dependency), read the traceback, fix the code via file_write, and re-run. Repeat up to 3 attempts.
 4. Only produce `code_patch.diff` AFTER the smoke test passes.
 5. If the smoke test still fails after 3 fix attempts, produce `code_patch.diff` anyway but add a `# KNOWN ISSUE: <description>` comment in the diff header.
+
+## Advisor Verdict Iteration Protocol (A16-loop)
+
+Before writing any code, check whether `advisor_verdict.yaml` exists in the
+pipeline directory. This file is written by the critic agent after reviewing
+a prior implementation iteration.
+
+### When `advisor_verdict.yaml` is present (iteration N ≥ 2):
+
+1. **Read it first.** Parse `fully_correct`, `per_concept`, and `suggestions`.
+2. **Do not rewrite from scratch.** Read the existing code files in the pipeline
+   directory and modify only what the verdict identifies as failing.
+3. **Apply concept-level fixes:**
+   For every `concept_id` where `per_concept[concept_id] == "fail"`:
+   - Read `suggestions[concept_id]`
+   - Locate the corresponding function in the CLAIM-TO-CODE MAPPING table
+   - Fix the implementation following the suggestion
+   - In the code comment for that function, add:
+     `# A16-fix iter-N: <one-line summary of what was fixed>`
+4. **Do NOT touch passing concepts** (`per_concept[concept_id] == "pass"`) unless
+   fixing a failing concept requires it.
+5. **Update the CLAIM-TO-CODE MAPPING table** to reflect any function renames
+   or new code locations after the fix.
+6. **Re-run the Self-Verification Protocol** (smoke test) on the modified code.
+7. If the smoke test fails again for the same concept after 2 attempts, add:
+   `# A16-unresolved: <description of blocker>` and leave it for the next
+   critic cycle — do not loop infinitely.
+
+### When `fully_correct: true`
+
+`advisor_verdict.yaml` exists but `fully_correct` is true → this run is a
+**post-approval refinement** (e.g., efficiency improvements). Only apply
+`suggestions` that are marked as enhancements, not bug fixes. Do NOT change
+core logic without explicit direction.
+
+### When `advisor_verdict.yaml` is absent (first iteration):
+
+Ignore this section entirely and proceed with the normal workflow.
+
+### A16 iteration counter
+
+The pipeline directory may contain `iteration_count.txt`. If it exists, read
+the integer inside and increment it. If absent, this is iteration 1. Write the
+updated count back to `iteration_count.txt` before producing `code_patch.diff`.
+This counter is used by the scheduler to enforce `max_iter_times` (default: 3).
 
 ## Quality Gates (this agent owns: G3, G6, G9)
 
@@ -171,3 +217,4 @@ Mark applied directives by noting them in the code comments.
 10. Read and apply user_directives.yaml if present
 11. Baseline implementation MUST faithfully reproduce the reference paper — do NOT simplify model space or algorithms
 12. NEVER generate synthetic data when reference paper provides real data or specific simulation parameters
+13. When `advisor_verdict.yaml` is present, apply per-concept suggestions before writing new code — do NOT ignore the advisor verdict.

@@ -2,7 +2,7 @@
 
 知识驱动的多智能体科研操作系统，基于 [OpenHarness](./OpenHarness) 构建。
 
-全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4.1）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、HKUDS/AI-Researcher（MetaChain）、DeepScientist、CycleResearcher、Zochi、FARS 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。v4.1 新增 9 项 AI-Researcher 启发的升级（U1–U9）：三层模型分级、LLM 鲁棒性增强、步骤级缓存、多源文献收集、分节论文写作、竞争式想法筛选、后实验分析循环。
+全自主科研流水线：从论文抓取 → 知识编译 → 研究发现 → 实验设计与执行 → LaTeX 论文 → 投稿打包，全流程闭环。本版本（v4.2）吸收了 AI Scientist v1/v2、AI-Researcher（HKU）、HKUDS/AI-Researcher（MetaChain）、DeepScientist、CycleResearcher、Zochi、FARS 等系统已被 peer review 或开源复现的机制，同时精简了先前版本中冗余的审查链路。v4.1 新增 9 项 AI-Researcher 启发的升级（U1–U9）：三层模型分级、LLM 鲁棒性增强、步骤级缓存、多源文献收集、分节论文写作、竞争式想法筛选、后实验分析循环。v4.2 深化 AI-Researcher 借鉴，新增 4 项补充：分节论文质检清单（U10）、Judge→Coder 迭代协议（A16-loop）、综述笔记合并输出（A12+）、章节完整性质量门（G10）。
 
 ## 新版核心升级（v4）
 
@@ -31,6 +31,19 @@
 - **A10 Reviewer drift 测试** — `tests/test_reviewer_drift.py` 结构化 Proxy MAE 占位测试，季度跑真实评估
 - **R1 `fix` / `continue` 统一** — `fix --user-feedback <path>` 与 `continue` 走同一条路径；`continue` 保留为别名
 - **R2 研究简报 Python 化** — 调度器在添加候选时优先调用 `briefer.py::render_brief()`（读取 `evaluated_<id>.yaml` 的 5D 评分 + 创新声明 + 证伪设计 + KB 片段），失败或缺 YAML 时回退到旧模板；`research_briefer` agent 不再参与生产路径
+
+### v4.2 AI-Researcher 深化借鉴（U10 + A16-loop + A12+ + G10）
+
+**论文质量**
+- **U10 分节论文质检清单**（吸收 AI-Researcher section composer checklists）— `paper_writer.md` 新增 6 个章节专项清单：Abstract（单段 150–250 字，禁引用/禁未来工作，三部式结构）、Introduction（四部分强制结构：Background 2段 → Motivation 1-2段 → Our Method → Contributions 列表）、Related Work（每 subsection 4–10 引用，相关工作篇幅 ≥ 贡献陈述 2 倍，禁 section 级导言段，禁方程）、Methodology（标题 = 方法名，重要模块必须有 display-math 公式）、Experiments（数字必须来自 `results.json`，MAIN 阶段必须含消融实验）、Conclusion（不超出实验范围，未来工作需有局限性支撑）；自反省循环新增第 4 步：每节完成后执行对应专项清单
+
+- **G10 章节完整性门**（吸收 AI-Researcher 质检机制）— `shared/quality_gates.md` 新增 G10 定义；`paper_auditor.md` 接管 G10 ownership，审计报告增加 11 行检查表（Abstract 3项、Introduction 1项、Related Work 3项、Methodology 2项、Experiments 1项、Conclusion 1项）；`auditor_confidence_score` 评分规则同步更新：MAIN 阶段 G10 FAIL 直接拉低可信度 → 触发重度同行评审集成
+
+**实现质量**
+- **A16-loop Judge→Coder 迭代协议**（吸收 AI-Researcher Judge Agent → ML Agent 循环）— `coder.md` 新增 Advisor Verdict Iteration Protocol：运行前读 `advisor_verdict.yaml`（Critic 产出，含 `fully_correct` + per-concept 建议）；只修改 `fail` 的概念，不动 `pass` 的；修改处标注 `# A16-fix iter-N: <描述>`；连续 2 次 smoke test 失败则标注 `# A16-unresolved:` 并交回下轮 Critic；写入 `iteration_count.txt` 驱动 scheduler 的 `max_iter_times` 上限（默认 3 轮）
+
+**知识合成**
+- **A12+ 综述笔记合并输出**（吸收 AI-Researcher Survey Agent 三联笔记合并）— `concept_extractor.md` Phase 4 升级为"Synthesis & Final Output"，额外产出 `survey_notes.md`：每概念输出定义 → 数学公式（`$$...$$`）→ 代码定位 → 来源论文四联笔记，追加 Integration Notes（概念间依赖）和 Known Gaps（需从头实现的概念，标注 LOW/MEDIUM/HIGH 复杂度）；`coder.md` Input 列表新增 `survey_notes.md`，优先于 `kb_retrieve` 查阅
 
 ### v4.1 AI-Researcher 机制吸收（U1–U9）
 
@@ -246,7 +259,7 @@ LLM 最顽固的 failure class 是"看似实现了但其实漏关键组件"（HK
 ### 流程
 
 1. **DESIGN_REVIEW 之后、CODE 之前**：调度器分发 `CONCEPT_EXTRACT` 步给 `concept_extractor` agent
-2. Agent 按 HKU 三阶段协议（survey → paper analyst → code analyst）分解 `hypothesis.md` + `experiment_plan.yaml` + `evidence_refs`，产出 `concepts.yaml`：
+2. Agent 按 HKU 四阶段协议（Phase 0 代码侦察 → Phase 1 Survey → Phase 2 Paper analyst → Phase 3 Code analyst → Phase 4 合成）分解 `hypothesis.md` + `experiment_plan.yaml` + `evidence_refs`，产出 `concepts.yaml` 和 **`survey_notes.md`**（v4.2 新增，见下）：
    ```yaml
    - id: C1
      definition: "adaptive Q-value selection"
@@ -555,10 +568,23 @@ retry:
 - **error_list**：13 项 LaTeX/写作检查（下划线未转义、数学符号未包裹、orphan `\cite`、重复节标题、`\begin/\end` 不匹配、inline 数学无分隔符、`??` 未解析引用、无新引用等）
 - **chktex 修正**：`num_error_corrections = 5` 轮，`chktex {path} -q -n2 -n24 -n13 -n1` 输出回灌修复 prompt
 
+### U10 分节质检清单（v4.2 新增）
+
+`paper_writer.md` 新增 `## Section-Level Quality Checklists`，6 个章节专项清单在自反省循环第 4 步执行：
+
+| 章节 | 关键约束 |
+|------|---------|
+| Abstract | 单段 150–250 字；禁引用；禁未来工作；三部式（背景→方案→结果） |
+| Introduction | 强制四块（Background 2段、Motivation 1-2段、Our Method、Contributions 列表） |
+| Related Work | 每 subsection 4–10 引用；相关工作篇幅 ≥ 贡献陈述 2×；无 section 级导言；无方程 |
+| Methodology | 标题 = 方法名（非泛称）；重要模块必须有 display-math 公式 |
+| Experiments | 数字来自 `results.json`；MAIN 阶段必须含消融；分析段解释为什么，而非只陈述是什么 |
+| Conclusion | 不超实验范围（G8）；未来工作需在 §6 局限性中有依据 |
+
 ### paper_audit.py 新增
 - `check_bib_existence(draft, bib, evidence_refs)` — 解析 `\cite{key}`，校验 bib 成员 + best-effort title 匹配；返回 `{total, resolved, hallucinated, unevidenced}`
 - `run_chktex(tex_path)` — subprocess 调用 chktex
-- `audit_report.md` 自动含 Citation integrity + LaTeX lint 两节
+- `audit_report.md` 自动含 Citation integrity + LaTeX lint + **G10 章节完整性（11 行检查表）** 三节
 
 ## 数据管理（v3 保留）
 
@@ -636,7 +662,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `knowledge/proposals/` | 矿工研究提案 + 评估报告 | 矿工 / Topic Evaluator |
 | `knowledge/backlog/` / `archive/` | 候补 / 过期 / 永久拒绝 | BacklogManager |
 | **`knowledge/findings/`** | **已验证 finding 的跨 pipeline 记忆** | findings_memory（A7） |
-| `artifacts/pipeline_<id>/` | 状态、产出、**concepts.yaml**、**reverify_report.json**、**metric_contract.json**、**advisor_verdict.yaml**、**user_approve/** | Pipeline Agent / 调度器 |
+| `artifacts/pipeline_<id>/` | 状态、产出、**concepts.yaml**、**survey_notes.md**（A12+）、**reverify_report.json**、**metric_contract.json**、**advisor_verdict.yaml**、**iteration_count.txt**（A16-loop）、**user_approve/** | Pipeline Agent / 调度器 |
 | `artifacts/pipeline_<id>/workplace/` | （可选）Docker / sandbox 后端工作目录 | remote_executor |
 | `data/raw/` / `data/processed/` | 原始/清洗数据 | fetch_dataset / coder |
 | `runtime/candidates/` | 候选课题 + 简报（briefer.py 渲染） | Topic Evaluator / briefer |
@@ -689,16 +715,16 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `hypothesis_gen` | 可证伪假设 + G1 关键词可操作化 | — |
 | `exp_designer` | **4 槽结构化实验 plan** + G2/G5/G7/G9 | A15 |
 | `design_reviewer` | MAIN 科学性审查 + 结构检查 | — |
-| **`concept_extractor`**（**新**） | **原子概念 ↔ 代码双向分解（4 阶段：侦察→调研→分析→定位）** | **A12** |
-| `coder` | **按 concept.id 逐项实现（多文件 + 冒烟测试）** + G3/G6/G9 | A12 |
+| **`concept_extractor`**（**新**） | **原子概念 ↔ 代码双向分解（4 阶段：侦察→调研→分析→合成）；产出 `concepts.yaml` + `survey_notes.md`（定义→公式→代码定位→来源 + Integration Notes + Known Gaps）** | **A12 A12+** |
+| `coder` | **按 concept.id 逐项实现（多文件 + 冒烟测试）；读 `survey_notes.md` + `advisor_verdict.yaml`，A16-loop 迭代修复 fail 概念** + G3/G6/G9 | A12 A16-loop |
 | `experiment_runner` | `execute_python` + `fetch_dataset` | — |
 | `critic` | 结果分析 + G1/G3/G5/G9 + **advisor_verdict.yaml** | A16 |
 | **`experiment_analyser`**（**新**） | **后实验深度分析：消融/灵敏度/可视化/统计/失败模式** | **U9** |
 | `interrogator` | 对抗式质询（MAIN，1-3 轮） | — |
 | `reporter` | 里程碑报告 + G7 开销 | — |
 | `pre_main_reviewer` | FAST_FAIL 后 ≤800 词评审 | — |
-| `paper_writer` | 学术论文 + **G6/G8 + A6 引用约束 + A19 硬化** | A6 A19 |
-| `paper_auditor` | G4 + G5 + **bib + chktex** | A6 A19 |
+| `paper_writer` | 学术论文 + **G6/G8 + A6 引用约束 + A19 硬化 + U10 分节质检清单（6 章节专项 + 自反省第 4 步）** | A6 A19 **U10** |
+| `paper_auditor` | G4 + G5 + **G10（章节完整性 11 行检查表）** + bib + chktex | A6 A19 **G10** |
 | `reviewer_simulator` | **ensemble + pos/neg + Area Chair；不重算 G4** | A9 R3 |
 | `fixer` | 按评审/用户反馈修正代码并重跑 | R1 |
 | `lit_scout` | kb_retrieve 文献调研 | — |
@@ -706,7 +732,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | `branch_selector` | 并行实验分支比较选择 | — |
 | `pipeline_manager` | 通用兜底（无专职 agent 时接管步骤） | — |
 
-## 质量门 G1–G9（v4 增强）
+## 质量门 G1–G10（v4 增强）
 
 | 门 | 审查内容 | 位置 |
 |----|---------|------|
@@ -719,6 +745,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | G7 | 开销与资源报告 | exp_designer, reporter |
 | G8 | 结论边界 | paper_writer, reviewer_simulator |
 | G9 | 数据有效性与溯源（含参考数据一致性） | exp_designer, coder, experiment_runner, critic |
+| **G10**（**新 v4.2**） | **章节结构完整性**（Abstract 字数/无引用、Related Work 4–10 引用/2× 比例、Methodology 必须有公式、Experiments 无假造数字、Conclusion 不超实验范围） | **paper_writer（写作时执行）, paper_auditor（审计报告 11 行检查表）** |
 
 ## 吸收/精简对照（A1–A19 + R1–R5）
 
@@ -734,11 +761,11 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | A9 | Reviewer ensemble + pos/neg + Area Chair | AI Scientist v1 | `reviewer_simulator.md` |
 | A10 | Reviewer drift 测试 | v1 fewshots | `tests/test_reviewer_drift.py` |
 | A11 | HITL 3 点 + CanonicalAction | DeepScientist OSS | `decision.py` + scheduler |
-| A12 | 原子概念 ↔ 代码双向映射 | **HKU AI-Researcher** | `concept_extractor.md` + `concept.py` + `preflight.py` |
+| A12 | 原子概念 ↔ 代码双向映射 + **A12+ 综述笔记合并输出**（v4.2） | **HKU AI-Researcher** | `concept_extractor.md` + `concept.py` + `preflight.py` + **`survey_notes.md`**（Phase 4 合并产出：定义→公式→代码定位→来源论文四联笔记 + Integration Notes + Known Gaps） |
 | A13 | LLM 调用层硬化 | AI Scientist v1 | `llm_client.py` |
 | A14 | 重试常量中心化 | AI Scientist v1 | `workflow_config.yaml` + `recovery.py` |
 | A15 | 4 槽结构化 plan | HKU | `exp_designer.md` |
-| A16 | Advisor per-concept 裁决 | HKU | `critic.md` + `concept.py::AdvisorVerdict` |
+| A16 | Advisor per-concept 裁决 + **A16-loop Judge→Coder 迭代协议**（v4.2） | HKU | `critic.md` + `concept.py::AdvisorVerdict` + **`coder.md::Advisor Verdict Iteration Protocol`**（读 `advisor_verdict.yaml` → 仅修 fail 概念 → `# A16-fix iter-N` 标注 → `iteration_count.txt` 驱动 `max_iter_times`） |
 | A17 | Baseline metric contract | DeepScientist OSS | `baseline_registry.py` + `BASELINE_CONFIRM` |
 | A18 | Flat Node + Journal 两级选择 | AI Scientist v2 | 合并入 A3 |
 | A19 | LaTeX 写作硬化 | AI Scientist v1 | `paper_writer.md` + `paper_audit.py` |
@@ -752,6 +779,7 @@ MAIN 阶段在 Critic 之后、Report 之前插入 Interrogator：
 | U7 | 分节 4 步论文写作 | AI-Researcher section-by-section | `paper_composer.py::PaperComposer` + `paper_writer.md` |
 | U8 | 竞争式想法筛选 | AI-Researcher tournament | `topic_evaluator.py::competitive_select` + `refine_idea` + `knowledge_miner.md` |
 | U9 | 后实验分析循环 | AI-Researcher post-experiment | `experiment_analyser.md` + `EXPERIMENT_ANALYSIS` step + 路由更新 |
+| U10 | **分节论文质检清单**（v4.2） | AI-Researcher section composer checklists | `paper_writer.md` 新增 6 个章节专项清单（Abstract/Introduction/Related Work/Methodology/Experiments/Conclusion）；自反省循环第 4 步执行对应清单 |
 | R1 | `fix` / `continue` 统一 | — | `scripts/run_research.py` |
 | R2 | Briefer Python 化 | — | `briefer.py` 取代 `research_briefer` agent |
 | R3 | Reviewer 不重算 G4 | — | `reviewer_simulator.md` |
@@ -887,6 +915,9 @@ python -m pytest tests/ -q
 23. **分节写作防止前后矛盾**（U7） — 每节独立 4 步流水线 + 质量自检，后续节可引用前续节
 24. **竞争式筛选优于单次生成**（U8） — 多候选锦标赛 + 获胜者精炼，提高提案质量上限
 25. **后实验分析闭环**（U9） — 消融/灵敏度/可视化/统计/失败模式在 paper 之前产出，增强论文证据链
+26. **分节质检清单执行到每节**（U10） — 6 个章节专项清单嵌入自反省循环第 4 步，Related Work 引用数/比例、Methodology 公式要求在写作阶段即被捕获，而非等到审计
+27. **Judge→Coder 闭环，不一次性重写**（A16-loop） — Critic 的 per-concept 裁决驱动 Coder 精准修复，只动 fail 的概念，保留 pass 的，iteration_count.txt 防止无限循环
+28. **综述笔记是代码实现的规范文档**（A12+） — concept_extractor 产出的 survey_notes.md 将理论与代码定位双向绑定，Coder 读注释而非每次重查 kb_retrieve
 
 ## 许可证
 

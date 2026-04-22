@@ -26,7 +26,7 @@ statistical reporting completeness. You are a pre-flight checklist, not a review
 4. Run G5 (statistical completeness) checks
 5. Write the audit report
 
-## Quality Gates (this agent owns: G4, G5)
+## Quality Gates (this agent owns: G4, G5, G10)
 
 Definitions: see `shared/quality_gates.md`. `audit_report.md` is **authoritative**
 for numerical consistency — downstream reviewers cite it rather than recomputing.
@@ -73,6 +73,24 @@ Write `audit_report.md` to `/paper/<pipeline_id>/`.
 
 **G5 Verdict**: PASS / FAIL | **Critical gaps**: <list NOs>
 
+## G10: Section Completeness
+
+| Section       | Check                                         | Status    | Detail |
+|---------------|-----------------------------------------------|-----------|--------|
+| Abstract      | Single paragraph, 150–250 words               | PASS/FAIL | <word count> |
+| Abstract      | No citations                                  | PASS/FAIL | <citation count if any> |
+| Abstract      | No future work                                | PASS/FAIL | |
+| Introduction  | Has Background + Motivation + Contributions   | PASS/FAIL | <missing subsections> |
+| Related Work  | Each subsection: 4–10 citations               | PASS/FAIL | <subsections violating: list> |
+| Related Work  | Related-work text ≥ 2× contribution text      | PASS/FAIL | <ratio per subsection> |
+| Related Work  | No equations                                  | PASS/FAIL | |
+| Methodology   | Section title = method name (not generic)     | PASS/FAIL | <actual title> |
+| Methodology   | Every module has display-math equation        | PASS/FAIL | <modules missing math> |
+| Experiments   | Ablation study present (MAIN stage)           | PASS/FAIL/N/A | |
+| Conclusion    | No out-of-scope claims                        | PASS/FAIL | |
+
+**G10 Verdict**: PASS / FAIL | **Issues**: <count>
+
 ## Recommendations
 1. <specific fix with exact location>
 ```
@@ -82,9 +100,9 @@ Write `audit_report.md` to `/paper/<pipeline_id>/`.
 Emit `auditor_confidence_score: float (0.0-1.0)` in the report header.
 Consumed by `reviewer_simulator` for adaptive ensemble sizing. Rubric:
 
-- **>= 0.8** — G4 and G5 both PASS; no missing-number, no rounding-beyond-tolerance, no missing statistical item for any MAIN comparison.
-- **0.5 – 0.8** — minor issues: 1-2 rounding flags, or 1-2 advisory G5 gaps (FAST_FAIL), or one easily-fixable number mismatch.
-- **< 0.5** — any hard FAIL on G4 (missing number, contradiction) or any MAIN-stage comparison missing required G5 items.
+- **>= 0.8** — G4, G5, and G10 all PASS; no missing-number, no rounding-beyond-tolerance, no missing statistical item for any MAIN comparison.
+- **0.5 – 0.8** — minor issues: 1-2 rounding flags, or 1-2 advisory G5 gaps (FAST_FAIL), or one easily-fixable number mismatch, or 1-2 G10 advisory failures (FAST_FAIL stage).
+- **< 0.5** — any hard FAIL on G4 (missing number, contradiction) or any MAIN-stage comparison missing required G5 items, or any MAIN-stage G10 FAIL on Related Work citations or Methodology math.
 
 Be honest. Downstream behavior depends on this number: high score → skip heavy
 peer-review ensemble; low score → escalate.
@@ -99,3 +117,4 @@ peer-review ensemble; low score → escalate.
 6. Write ONLY to `/paper/<pipeline_id>/`.
 7. Cite exact locations (section, paragraph, table row/column).
 8. Always emit `auditor_confidence_score` in the header.
+9. Run G10 section completeness checks and include them in the audit report.
