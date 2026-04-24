@@ -1,94 +1,94 @@
 # Analysis Report
 
 ## Summary
-This fast-fail review is **inconclusive on the scientific hypothesis but decisive on experiment validity**. The hypothesis is well-formed and testable, but `results.json` contains no empirical metrics because the exact reference-paper robotics dataset/traces were not available. Given the explicit data-consistency requirement in both the task and `experiment_plan.yaml`, no substitute or synthetic data is permissible. Therefore, the experiment cannot support or refute the claim that stacking outperforms BMA; the correct outcome at this stage is to block comparison, flag the run as invalid for hypothesis testing, and iterate only after obtaining the original reference data, exact split, and preprocessing pipeline.
+The current fast-fail results do not support the hypothesis yet because no reference-faithful experiment was actually executed. `results.json` explicitly states that execution is blocked until the exact dataset version, train/test split, and preprocessing pipeline from the reference TUNE paper are recovered. Consequently, the observed `accuracy_rq1=0.0` and `accuracy_rq2=0.0` are not substantive performance results; they are placeholders associated with a blocked run. Given the pipeline’s explicit data consistency rule and the reference-paper requirement, the correct verdict is **INCONCLUSIVE** with low confidence, and the immediate recommendation is to **ITERATE** by restoring the original paper data and evaluation protocol before any comparative claim about stacking versus BMA is made.
 
 ## Hypothesis Evaluation
-- **Hypothesis**: Replacing the Analyze-component Bayesian Model Averaging combiner with a stacking-based ensemble meta-learner, while keeping the same candidate GLM model space, dataset, train/test splits, preprocessing, and Plan/Execute logic, will lower Brier score by at least 0.02 and reduce requirement-violating adaptations by at least 5% relative to the BMA baseline on the reference robotics case study.
+- **Hypothesis**: Replacing the BMA estimator in TUNE's Analyze component with a stacking-based ensemble over the same candidate logistic-regression model space, while keeping the same dataset, train/test split, preprocessing pipeline, adaptation space, and Plan component interface, will improve accuracy for prediction and adaptation outcomes by at least 2 percentage points relative to BMA on the reference robotics case study, while keeping computational-cost accuracy no worse than 5 percentage points below the BMA baseline.
 - **Verdict**: INCONCLUSIVE
-- **Confidence**: HIGH
+- **Confidence**: LOW
 
 ## Claim-Experiment Consistency (G1)
 | Claim from hypothesis.md | Measured by | Supported by results? |
 |--------------------------|-------------|----------------------|
-| "stacking variant will achieve at least 0.02 lower Brier score" | Brier score difference vs BMA | NO |
-| "stacking variant will achieve at least 5% fewer requirement-violating adaptation outcomes" | Requirement-violating adaptation rate difference vs BMA | NO |
-| "same runtime data, train/test splits, preprocessing pipeline, and Plan/Execute logic unchanged" | Data provenance and reference-consistency fields in results/config | PARTIAL |
-| "practical gain should remain after analysis cost" | Mean Analyze latency difference | NO |
+| "Stacking improves RQ1 `accuracy` by at least 0.02 over BMA on the same held-out test split." | `accuracy_rq1` vs BMA baseline | NO |
+| "Stacking improves RQ2 `accuracy` by at least 0.02 over BMA with the same Plan component." | `accuracy_rq2` vs BMA baseline | NO |
+| "Computational cost remains within 0.05 of BMA on RQ3-aligned evaluation." | No measured RQ3 result in `results.json` | PARTIAL |
+| "The same dataset, split, preprocessing pipeline, and model space as the reference paper are preserved." | `results.json.config` provenance and plan consistency | NO |
 
-WARN: Claim 'stacking variant will achieve at least 0.02 lower Brier score' has no experimental evidence — the hypothesis could be confirmed by argument alone for this claim; contribution weakened.
-
-WARN: Claim 'stacking variant will achieve at least 5% fewer requirement-violating adaptation outcomes' has no experimental evidence — the hypothesis could be confirmed by argument alone for this claim; contribution weakened.
-
-WARN: Claim 'practical gain should remain after analysis cost' has no experimental evidence — the hypothesis could be confirmed by argument alone for this claim; contribution weakened.
+> WARN: Claim 'Computational cost remains within 0.05 of BMA on RQ3-aligned evaluation.' has no experimental evidence — the hypothesis could be confirmed by argument alone for this claim; contribution weakened.
 
 ## Results Analysis
 
 ### Key Metrics
 | Metric | Expected | Observed | Status |
 |--------|----------|----------|--------|
-| Brier score improvement vs BMA | <= -0.02 | Not measured | FAIL |
-| Requirement-violating adaptation rate improvement vs BMA | <= -5% relative | Not measured | FAIL |
-| Expected calibration error | Lower than BMA | Not measured | FAIL |
-| Mean Analyze latency increase | <= 10% | Not measured | FAIL |
-| Exact reference dataset available | Yes | No (`data_hash: missing`) | FAIL |
+| RQ1 accuracy improvement over BMA | >= +0.02 | Not measured; placeholder run reports `accuracy_rq1 = 0.0` | FAIL |
+| RQ2 accuracy improvement over BMA | >= +0.02 | Not measured; placeholder run reports `accuracy_rq2 = 0.0` | FAIL |
+| RQ3 degradation vs BMA | >= -0.05 | Not measured | FAIL |
+| Reference-faithful dataset recovered | Required | Not recovered | FAIL |
+| Reference-faithful split recovered | Required | Not recovered | FAIL |
+| Reference-faithful preprocessing recovered | Required | Not recovered | FAIL |
 
 ### Statistical Significance
-No statistical analysis is possible. `results.json` contains no comparative metrics, effect sizes, test statistics, degrees of freedom, exact p-values, confidence intervals, standard errors, or sample size for the claimed comparisons.
-
-**G5 audit:** In FAST_FAIL this is advisory, but all required comparison-reporting items are currently missing: effect size, test statistic + df, exact p-value, N, and CI/SE. Once a valid run is possible, these should be added for every BMA-vs-stacking comparison.
+No statistical test is possible from the current `results.json`. The file does not contain per-run comparisons against BMA, no effect sizes, no test statistic, no degrees of freedom, no exact p-values, no confidence intervals, and no standard errors. In FAST_FAIL this is advisory rather than terminal, but it still means the results are insufficient for inferential evaluation.
 
 ### Comparison with Prior Work
-Knowledge-base material for the reference paper supports the baseline rationale: BMA in TUNE is claimed to improve Analyze predictions and downstream planning quality in a robotics self-adaptive system, using candidate GLMs and metaheuristic planning. However, the current pipeline does **not** yet provide a faithful reproduction or a valid head-to-head comparison. Because the dataset/traces, exact split, and preprocessing pipeline were not recovered, there is no empirical basis to say whether stacking is better, worse, or comparable to the BMA approach described in prior work.
-
-### G3 Result-Level Assessment
-- **Plausibility**: No suspiciously good or bad quantitative results are present because no predictive or adaptation metrics were produced.
-- **Contribution test**: Cannot be evaluated; there is no observed performance for stacking, BMA, or even a best-single-GLM sanity baseline.
-- **Claim-result alignment**: The main hypothesis claims are currently unsupported by measurements and must be treated as unverified, not as provisional positives.
-- **Structural preflight input**: `preflight_report.json` was not present, so no structural G3 findings could be incorporated.
+The knowledge base confirms that the reference paper evaluates BMA on three questions: prediction accuracy (RQ1), adaptation-decision effectiveness (RQ2), and computational cost (RQ3), all currently extracted under the coarse metric label `accuracy`. It also confirms that TUNE uses a robotics case study and that BMA is integrated into Analyze while planning remains metaheuristic. The current pipeline has not reproduced those conditions. Therefore, there is no valid empirical comparison with prior work yet. At best, the present result is consistent with a reproduction blocker, not with either success or failure of stacking as a replacement for BMA.
 
 ## Data Validity (G9)
 | Check | Status | Detail |
 |-------|--------|--------|
-| data.source matches code | PARTIAL | `results.json` config states `data_source: file`, matching the plan's declared source type, but no actual reference dataset file was used in a valid comparison run. |
-| Split before preprocessing | N/A | No dataset was loaded and no preprocessing/splitting pipeline was executed. |
-| Leakage risk assessed | PASS | `experiment_plan.yaml` includes risk notes about temporal leakage and preserving reference ordering. |
-| Data provenance in results.json | FAIL | `results.json` includes `data_source` and `split_seed`, but lacks concrete dataset version, filename/hash match to reference package, and split provenance needed for verification. |
-| Synthetic seed recorded | N/A | No synthetic data should be used, and none was reported. |
-| Reference data consistency | FAIL | The required exact reference dataset version, train/test split, and preprocessing pipeline were not recovered or verified; `data_hash` is explicitly `missing`. |
+| data.source matches code | PASS | `results.json.config.data_source` is `file`, matching the plan’s declared file-based source. |
+| Split before preprocessing | FAIL | The exact reference split and preprocessing pipeline were not recovered, so ordering cannot be verified. |
+| Leakage risk assessed | PASS | `experiment_plan.yaml` includes explicit `risk_notes` describing split/preprocessing recovery as a blocker and warns against substitution. |
+| Data provenance in results.json | PASS | `results.json` includes `data_source`, `split_seed`, `data_hash`, and `reference_paper`. |
+| Synthetic seed recorded | N/A | No synthetic data generation is claimed. |
+| Reference data consistency | FAIL | The plan requires matching `dataset_version`, `train_test_split`, and `preprocessing_pipeline`, but the run explicitly says these were not recovered. |
 
 ## Baseline Faithfulness Audit
 | Check | Status | Detail |
 |-------|--------|--------|
-| Model space matches reference | FAIL | No executed baseline demonstrates use of the exact candidate GLM scenario/model space from the reference implementation. |
-| Algorithms match reference | FAIL | The run did not execute the reference BMA + MCMC + unchanged planner pipeline; faithfulness remains unverified. |
-| Reference evaluation metrics included | FAIL | The reference emphasizes accuracy, effectiveness, and cost; no actual metric values were reported. |
-| Data from reference paper used | FAIL | The exact robotics runtime traces from the reference paper were unavailable; no substitute is allowed. |
-| CV strategy matches reference | FAIL | The exact split/order and any internal validation strategy were not reproduced. |
-| Baseline results plausible vs reference | FAIL | No baseline results were produced, so plausibility relative to the paper cannot be checked. |
+| Model space matches reference | FAIL | No executed comparison demonstrates use of the exact candidate logistic-regression model space from the reference implementation. |
+| Algorithms match reference | FAIL | The baseline BMA and proposed stacking comparison were not actually run under a recovered reference-faithful setup. |
+| Reference evaluation metrics included | FAIL | Only placeholder `accuracy_rq1` and `accuracy_rq2` fields appear; there is no faithful reporting of recovered paper-aligned baseline values and no RQ3 result. |
+| Data from reference paper used | FAIL | The run is blocked because the exact paper dataset and split/preprocessing are not yet recovered. Synthetic substitution did not occur, but faithful reference data use is still unverified. |
+| CV strategy matches reference | FAIL | The plan requires the exact reference split, but the run explicitly states it was not recovered. |
+| Baseline results plausible vs reference | FAIL | No baseline result was executed, so plausibility versus the reference paper cannot be assessed. |
 
-**Critical baseline-faithfulness finding:** synthetic-data substitution did not occur, which is good, but the comparison is still invalid because the reference data were unavailable. This is a hard block, not a minor reporting issue.
+The most important faithfulness issue is not a weak baseline implementation but a missing baseline reproduction. Any future claim that stacking outperforms BMA would be invalid until the original dataset, split indices, and preprocessing steps are restored.
 
 ## Strengths
-- The hypothesis is precise, falsifiable, and defines concrete thresholds for Brier score, violation rate, and latency.
-- The experiment plan correctly encodes the crucial faithfulness constraint: same data, same split, same preprocessing, same planner, and no synthetic substitution.
+- The pipeline correctly fast-failed instead of proceeding with a non-faithful substitute dataset or random split, which preserves scientific validity.
+- `experiment_plan.yaml` clearly encodes the reference-faithfulness requirement and identifies the missing dataset/split/preprocessing as blockers.
 
 ## Weaknesses & Limitations
-- The run produced no usable empirical comparison metrics, so none of the central claims are tested.
-- Reference-data consistency is unmet; without the original traces/replication package, any future comparison on alternative data would be scientifically invalid for this paper-improvement claim.
+- No empirical comparison between stacking and BMA was actually executed, so the core hypothesis remains untested.
+- The placeholder baseline value and coarse metric extraction from the knowledge base are inadequate for a serious reproduction or improvement claim.
+- RQ3 computational-cost evaluation is entirely absent.
+- G5 reporting is incomplete: no effect size, test statistic, df, exact p-value, N, CI, or SE are provided for any comparison.
+- G3 result-level contribution cannot be established because the reported zero accuracies reflect a blocked run rather than model behavior.
+
+## G3 Result-Level Assessment
+- **Plausibility**: The observed zeros are not plausible model-performance outcomes for a meaningful experiment; they are explicitly placeholders caused by a blocked execution. This does not suggest a working mechanism.
+- **Contribution test**: No evidence shows stacking improves over BMA or even over a trivial baseline. Because no valid model comparison was run, the proposed mechanism is unsupported.
+- **Claim-result alignment**: The major claims in the hypothesis are currently unmeasured or contradicted by the absence of a faithful experiment. They must be flagged explicitly rather than treated as provisional success.
+
+## G5 Completeness Audit
+For every substantive comparison, the following required items are missing from `results.json`: effect size, test statistic, degrees of freedom, exact p-value, sample size `N`, and CI/SE. In FAST_FAIL this is advisory, but it materially limits interpretability and should be fixed in the next iteration once a real run is possible.
 
 ## Recommendation
 ITERATE
 
 ### If ITERATE:
-- Obtain the exact robotics runtime trace files or replication package used by the reference paper before any further model comparison.
-- Verify dataset identity with filenames and/or hashes, then record those in `results.json`.
-- Reproduce the reference train/test split indices/order exactly; if unavailable, recover them from the reference code or contact authors.
-- Diff-check the preprocessing and encoding pipeline against the reference implementation and document parity explicitly.
-- Execute and report at minimum: BMA baseline, stacking variant, and best single GLM baseline on the same held-out traces.
-- Add complete G5 reporting for each comparison: effect size, test statistic, df, exact p-value, N, and CI/SE.
-- Generate or include `preflight_report.json` and `concepts.yaml` in later stages so structural implementation fidelity and per-concept verdicts can be assessed.
-- Document this negative fast-fail outcome in the knowledge base: the experiment is currently blocked by missing reference data, not by evidence against stacking.
+- Recover the exact robotics case-study dataset from the reference paper artifacts or repository and record dataset version/hash at the raw-file level.
+- Reproduce the exact train/test split indices from the reference implementation; do not create a new random split.
+- Reproduce the original preprocessing pipeline and verify that preprocessing occurs after split application where required.
+- Run the unchanged BMA baseline from the reference methodology first and verify its results are in the same qualitative range as the paper.
+- Only then add the stacking replacement over the identical candidate model pool and Plan interface.
+- Report RQ1 and RQ2 separately with per-seed results, mean, std, `N`, effect sizes, confidence intervals/standard errors, and exact statistical tests.
+- Restore or explicitly defer RQ3 with a paper-faithful timing/instrumentation boundary.
+- Document this negative fast-fail outcome in the knowledge base as a reproducibility blocker: “reference-faithful data/split/preprocessing not yet recovered.”
 
 ## References
 - concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md

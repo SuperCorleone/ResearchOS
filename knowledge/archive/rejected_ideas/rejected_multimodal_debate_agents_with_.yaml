@@ -1,0 +1,35 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T09:04:19.100490+00:00'
+evaluator_model: ''
+falsification:
+  baseline: ''
+  expected_signal: ''
+  failure_condition: ''
+  hypothesis: ''
+  metric: ''
+  min_budget_ratio: 0.1
+gate_reasons:
+- 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+gate_result: reject
+innovation:
+  our_delta: ''
+  problem_gap: ''
+  why_it_matters: ''
+kb_duplicates: []
+kb_related: []
+proposal_id: multimodal_debate_agents_with_
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a multi-agent workflow that adaptively routes between visual
+  evidence retrieval, textual reasoning, and cross-agent critique improve faithfulness
+  and task accuracy in multimodal reasoning compared with static vision-language prompting
+  pipelines?
+retrieval_cache_key: ''
+scores:
+  differentiation: 0
+  falsifiability: 0
+  feasibility: 0
+  novelty: 0
+  significance: 0
+similar_papers: []
+title: Multimodal Debate Agents with Adaptive Evidence Routing

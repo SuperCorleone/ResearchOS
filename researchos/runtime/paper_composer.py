@@ -1,4 +1,4 @@
-"""Section-by-section paper composer (U7).
+"""Section-by-section paper composer.
 
 Implements a 4-step pipeline per section inspired by AI-Researcher:
   1. structure  — outline headings and key points from artifacts
@@ -107,7 +107,7 @@ class PaperComposer:
         self._claims_evidence: list[dict] = []
 
     async def _build_claims_evidence_matrix(self) -> list[dict]:
-        """Step 0 (C3): build claims-evidence matrix before writing."""
+        """Step 0: build claims-evidence matrix before writing."""
         prompt = _CLAIMS_EVIDENCE_PROMPT.format(artifacts=self._artifacts_context)
         raw = await self._llm_call("paper_writer", prompt)
         try:
@@ -137,7 +137,7 @@ class PaperComposer:
     async def _score_gated_revision(
         self, name: str, draft: SectionDraft, refs_text: str, prior_sections: str,
     ) -> str | None:
-        """C5: revise section only if revision improves quality score."""
+        """Revise section only if revision improves quality score."""
         score_prompt = (
             f"Rate this '{name}' section on a 1-10 scale for academic quality.\n\n"
             f"## Section\n{draft.fused}\n\n"
@@ -226,7 +226,7 @@ class PaperComposer:
         structure_prompt = (
             f"You are outlining the '{name}' section of an academic paper.\n\n"
             f"## Artifacts\n{self._artifacts_context}\n\n"
-            f"## Claims-Evidence Matrix (C3)\n{claims_text}\n\n"
+            f"## Claims-Evidence Matrix\n{claims_text}\n\n"
             f"## Prior Sections\n{prior_sections}\n\n"
             f"## Evidence References\n{refs_text}\n\n"
             f"## Task\n{template}\n\n"
@@ -278,7 +278,7 @@ class PaperComposer:
         check_result = await self._llm_call("paper_writer", check_prompt)
         draft.checklist_pass, draft.issues = self._parse_checklist(check_result)
 
-        # Step 5: score-gated revision (C5)
+        # Step 5: score-gated revision
         if draft.checklist_pass and draft.fused:
             revised = await self._score_gated_revision(name, draft, refs_text, prior_sections)
             if revised is not None:

@@ -1,0 +1,46 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-22T20:05:30.645585+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Static decomposition pipeline with fixed task split and fixed escalation/handoff
+    rules.
+  expected_signal: At least 5% relative improvement in success per 1,000 tokens with
+    at least 5% lower median latency or equal latency at lower token cost.
+  failure_condition: Less than 5% relative improvement in success per 1,000 tokens
+    and no latency reduction at equal or lower total token budget versus baseline.
+  hypothesis: A verifier-gated dynamic decomposition policy achieves higher task success
+    per token and lower end-to-end latency than a static multi-agent decomposition
+    pipeline on mixed-difficulty benchmark tasks.
+  metric: 'Primary: task success rate per 1,000 tokens; Secondary: median end-to-end
+    latency at matched task set and model budget.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a verifier-gated orchestration policy that uses lightweight
+    runtime verifier signals to decide when to decompose, merge, or re-route subtasks
+    instead of following a fixed multi-agent decomposition pipeline.
+  problem_gap: Existing methods fail because static decomposition and fixed escalation
+    apply the same handoff granularity to easy and hard cases, causing unnecessary
+    coordination on simple tasks and unchecked error propagation on difficult ones.
+  why_it_matters: Which improves task success per token and per latency budget under
+    heterogeneous task difficulty and failure modes in multi-agent LLM workflows.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: verifier_gated_dynamic_task_de
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a verifier-gated orchestration policy that adaptively decides
+  when to decompose, merge, or re-route subtasks reduce error propagation and coordination
+  overhead compared with static multi-agent task decomposition pipelines?
+retrieval_cache_key: d71d3153b465b6be
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 3
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Verifier-Gated Dynamic Task Decomposition for Multi-Agent LLM Workflows

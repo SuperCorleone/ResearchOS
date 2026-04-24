@@ -25,21 +25,22 @@ class PipelineStage(str, Enum):
 class PipelineStep(str, Enum):
     HYPOTHESIS = "hypothesis"
     DESIGN = "design"
-    DESIGN_REVIEW = "design_review"
-    CODE_RECON = "code_recon"  # A20 — shallow clone + static scan of reference codebases
-    CONCEPT_EXTRACT = "concept_extract"  # Stream C — atomic concept decomposition
+    # DESIGN_REVIEW retired (2026-04): exp_designer now runs its own
+    # scientific self-review; structural checks remain in design_checks.py.
+    CODE_RECON = "code_recon"  # shallow clone + static scan of reference codebases
+    CONCEPT_EXTRACT = "concept_extract"  # atomic concept decomposition (legacy 1-pass)
+    CONCEPT_PAPER = "concept_paper"  # 2-pass: paper side (math + refs)
+    CONCEPT_CODE = "concept_code"  # 2-pass: code side (locators)
     CODE = "code"
     CODE_PREFLIGHT = "code_preflight"
     RUN = "run"
-    RESULTS_REVERIFY = "results_reverify"  # Stream D — reproducibility rerun
+    RESULTS_REVERIFY = "results_reverify"  # reproducibility rerun
     CRITIC = "critic"
     INTERROGATION = "interrogation"
     EXPERIMENT_ANALYSIS = "experiment_analysis"
+    JUDGE = "judge"  # merges critic + experiment_analysis + interrogation
     REPORT = "report"
-    WAITING_APPROVAL = "waiting_approval"
-    BRANCH_SELECT = "branch_select"
-    BASELINE_CONFIRM = "baseline_confirm"  # Stream F / A17 — baseline lock-in
-    PRE_PUBLISH_GATE = "pre_publish_gate"  # Stream E / A11 — HITL before paper publish
+    BASELINE_CONFIRM = "baseline_confirm"  # baseline lock-in
 
 
 def _now_iso() -> str:

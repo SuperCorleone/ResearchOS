@@ -104,8 +104,10 @@ async def run_test() -> bool:
         assert artifact_path.exists(), f"Expected artifact {expected_artifact} not found"
         print(f"  -> Artifact produced: {expected_artifact} ({artifact_path.stat().st_size} bytes)")
 
-    # ── Tick 8: WAITING_APPROVAL → MILESTONE + professor dispatch
-    print("\n[Tick 8] Waiting for approval -> Milestone...")
+    # ── Tick 8: REPORT → MILESTONE + professor dispatch
+    # (HITL WAITING_APPROVAL gate was removed in 2026-04 refactor;
+    # after REPORT the pipeline auto-transitions to MILESTONE stage.)
+    print("\n[Tick 8] Report complete -> Milestone...")
     await scheduler.tick()
 
     pipeline = sm.load_pipeline("e2e_test")

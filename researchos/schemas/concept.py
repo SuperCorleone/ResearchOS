@@ -1,4 +1,4 @@
-"""Atomic concept and advisor verdict schemas (Wave 1 A12 / A16).
+"""Atomic concept and advisor verdict schemas.
 
 Adapted from HKU AI-Researcher's idea decomposition pattern — each paper is
 broken into atomic academic definitions that are independently traceable to

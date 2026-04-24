@@ -1,9 +1,9 @@
 {
   "pipeline_id": "mitigating_model_uncertainty_i",
-  "title": "Mitigating Model Uncertainty in Self-Adaptive Systems via Stacking-Based Ensemble",
-  "research_question": "Can replacing BMA with a stacking-based ensemble meta-learner in the MAPE-K analyze component reduce model-selection uncertainty and improve adaptation quality in self-adaptive systems?",
+  "title": "Mitigating Model Uncertainty in Self-Adaptive Systems",
+  "research_question": "How can stacking-based ensemble methods replace Bayesian Model Averaging (BMA) in the MAPE-K loop to better handle model-selection uncertainty in self-adaptive systems?",
   "stage": "completed",
-  "step": null,
+  "step": "report",
   "retry_count": 0,
   "max_retries": 3,
   "last_error": null,
@@ -11,29 +11,17 @@
     "baseline_confirm": "metric_contract.json",
     "hypothesis": "hypothesis.md",
     "design": "experiment_plan.yaml",
-    "code": "code_patch.diff",
-    "run": "results.json",
-    "critic": "analysis_report.md",
-    "report": "milestone_3.md",
-    "design_review": "design_review.md",
-    "code_recon": "code_recon.yaml",
-    "concept_extract": "concepts.yaml",
-    "code_preflight": "preflight_report.json",
-    "results_reverify": "reverify_report.json",
-    "interrogation": "interrogation_report.md"
+    "code": "run_experiment.py",
+    "run": "results.json"
   },
   "priority": 0,
   "budget_allocated": 20000,
-  "budget_used": 2057,
+  "budget_used": 0,
   "milestone_count": 3,
-  "created_at": "2026-04-19T20:00:08.180882+00:00",
-  "updated_at": "2026-04-19T20:36:54.569356+00:00",
+  "created_at": "2026-04-24T08:36:27.456979+00:00",
+  "updated_at": "2026-04-24T10:59:53.022000+00:00",
   "metadata": {
-    "source": "user_inject",
-    "user_approve_pending": true,
-    "user_approve_dir": "artifacts/pipeline_mitigating_model_uncertainty_i/user_approve",
-    "user_approve_completed_at": "2026-04-19T20:21:59.775288+00:00",
-    "user_approve_gate": "pre_publish"
+    "source": "user_inject"
   },
   "evidence_refs": [
     "/Users/adukopun/Documents/ClaudeCodeWorkspace/papers/Taming model uncertainty in self-adaptive systems using Bayesian Model Averaging.pdf"

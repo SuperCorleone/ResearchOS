@@ -115,7 +115,7 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
     trivial = _detect_trivial_implementations(code_text, issues)
     g3["trivial_functions"] = trivial
 
-    # 10. A20 — reference-codebase locator verification.
+    # 10. Reference-codebase locator verification.
     # For each concept's ``reference_codebases`` entry of the form
     # ``<slug>::<path>::L<a>-L<b>``, verify the file exists in the cloned
     # repo and the line range lies within the file. A bad triple BLOCKs
@@ -580,7 +580,7 @@ def _extract_mapping_rows(code: str) -> list[str]:
 def _check_g3_mapping(code: str, pipeline_dir: Path, issues: list[dict] | None = None) -> dict:
     """Check G3 claim-to-code mapping completeness.
 
-    Prefers loading ``concepts.yaml`` (A12 atomic-concept ontology). If present,
+    Prefers loading ``concepts.yaml`` (atomic-concept ontology). If present,
     every ``AtomicConcept.id`` must appear as a row in the CLAIM-TO-CODE MAPPING
     comment block — either mapped to a real file/function that exists in
     ``code_text`` (substring check), or explicitly marked ``SKIPPED``.
@@ -948,7 +948,7 @@ def _collect_returns(body: list[ast.stmt]) -> list[ast.Return]:
     return returns
 
 
-# ── A20 reference-codebase locator check ────────────────────────────
+# ── Reference-codebase locator check ────────────────────────────────
 
 # Matches "<slug>::<path>::L<start>-L<end>" locators emitted by
 # concept_extractor when code_recon.yaml reports a cloned repo.
@@ -1019,7 +1019,7 @@ def _verify_triple(
 def _check_reference_codebases(
     pipeline_dir: Path, project_root: Path, issues: list[dict]
 ) -> dict:
-    """A20 — verify grounded ``reference_codebases`` locators against cloned repos.
+    """Verify grounded ``reference_codebases`` locators against cloned repos.
 
     Every entry of the form ``<slug>::<path>::L<a>-L<b>`` must point at a
     file that exists in the corresponding clone, with a line range that
@@ -1084,7 +1084,7 @@ def _check_reference_codebases(
                     "severity": "ERROR",
                     "check": "reference_codebases",
                     "detail": (
-                        f"A20: concept {cid or '?'} cites repo '{slug}' but "
+                        f"concept {cid or '?'} cites repo '{slug}' but "
                         f"code_recon.yaml has no ok/cached entry for it"
                     ),
                 })
@@ -1103,7 +1103,7 @@ def _check_reference_codebases(
                     "severity": "ERROR",
                     "check": "reference_codebases",
                     "detail": (
-                        f"A20: concept {cid or '?'} reference_codebases entry "
+                        f"concept {cid or '?'} reference_codebases entry "
                         f"'{entry}' failed verification ({detail})"
                     ),
                 })

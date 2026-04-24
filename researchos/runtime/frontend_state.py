@@ -42,15 +42,7 @@ def get_research_state(project_root: Path) -> dict[str, Any]:
             "research_question": p.research_question,
             "created_at": p.created_at,
             "source": p.metadata.get("source"),
-            "user_approve_pending": bool(
-                p.metadata.get("user_approve_pending")
-            ),
         }
-        if entry["user_approve_pending"]:
-            entry["user_approve_dir"] = p.metadata.get(
-                "user_approve_dir",
-                f"artifacts/pipeline_{p.pipeline_id}/user_approve",
-            )
         pipeline_data.append(entry)
 
     # Load cost summaries and tracking URLs per pipeline

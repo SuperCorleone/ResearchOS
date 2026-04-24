@@ -1,4 +1,4 @@
-"""Results reverification — Wave 1/2 item A1.
+"""Results reverification.
 
 Launches the pipeline's experiment entry script in a fresh, isolated subprocess
 (copy of the pipeline directory under ``/scratch/<pipeline_id>_reverify_<ts>/``)
@@ -265,6 +265,65 @@ def reverify_results(
         except OSError:
             stdout_hash_match = None
 
+    # --- Baseline comparison against metric_contract.json ---
+    # Thresholds are wider than rerun-vs-rerun because baseline values are
+    # LLM-extracted estimates from the paper and may have inherent error.
+    _CONTRACT_WARN_PCT = 15.0   # >15% diff -> WARN
+    _CONTRACT_BLOCK_PCT = 30.0  # >30% diff -> BLOCK (upgraded to WARN only; see below)
+
+    baseline_comparison: dict[str, Any] = {}
+    contract_path = pipeline_dir / "metric_contract.json"
+    current_metrics = _flatten(rerun_metrics_raw) if rerun_metrics_raw else {}
+
+    if contract_path.exists():
+        try:
+            contract = json.loads(contract_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("reverify: failed to load metric_contract.json: %s", exc)
+            contract = {}
+
+        if (
+            contract
+            and contract.get("status") != "SKIP"
+            and contract.get("baseline_values")
+        ):
+            baseline_values = contract["baseline_values"]
+            for metric_name, baseline_val in baseline_values.items():
+                if metric_name in current_metrics and baseline_val != 0:
+                    actual_val = current_metrics[metric_name]
+                    diff_pct = (
+                        abs(actual_val - baseline_val) / abs(baseline_val) * 100.0
+                    )
+                    if diff_pct > _CONTRACT_BLOCK_PCT:
+                        status = "BLOCK"
+                    elif diff_pct > _CONTRACT_WARN_PCT:
+                        status = "WARN"
+                    else:
+                        status = "PASS"
+                    baseline_comparison[metric_name] = {
+                        "baseline": baseline_val,
+                        "actual": actual_val,
+                        "diff_pct": round(diff_pct, 3),
+                        "status": status,
+                    }
+
+            # Upgrade overall verdict to WARN if any metric deviates >30% from
+            # the paper baseline.  We do not BLOCK here because the baseline
+            # itself is an LLM estimate and may be imprecise.
+            if baseline_comparison:
+                worst_contract_status = max(
+                    (v["status"] for v in baseline_comparison.values()),
+                    key=lambda s: {"PASS": 0, "WARN": 1, "BLOCK": 2}[s],
+                )
+                if worst_contract_status in ("WARN", "BLOCK") and verdict == "PASS":
+                    verdict = "WARN"
+                    logger.info(
+                        "reverify: verdict upgraded to WARN due to baseline deviation "
+                        ">%.0f%% in metric_contract.json (baseline is LLM estimate — "
+                        "not blocking).",
+                        _CONTRACT_WARN_PCT,
+                    )
+
     report = {
         "verdict": verdict,
         "reason": (
@@ -278,6 +337,7 @@ def reverify_results(
         "stdout_hash_match": stdout_hash_match,
         "metrics_diff": metrics_diff,
         "rerun_metrics_raw": rerun_metrics_raw,
+        "baseline_comparison": baseline_comparison,
         "stdout_tail": stdout_tail,
         "stderr_tail": stderr_tail,
     }

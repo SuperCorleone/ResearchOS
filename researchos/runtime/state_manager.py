@@ -11,9 +11,16 @@ from pathlib import Path
 
 import yaml
 
+from researchos.core.contract_guard import ContractViolation, enforce_all
 from researchos.schemas.budget import BudgetState
 from researchos.schemas.decision import ProfessorDecision
-from researchos.schemas.pipeline import PipelineDefinition, PipelineState
+from researchos.schemas.digest import (
+    ConceptsDigest,
+    HypothesisDigest,
+    PlanDigest,
+    RunDigest,
+)
+from researchos.schemas.pipeline import PipelineDefinition, PipelineStage, PipelineState
 from researchos.utils.paths import (
     ARTIFACTS_DIR,
     BUDGET_FILE,
@@ -25,6 +32,14 @@ from researchos.utils.paths import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Map digest filename → (Pydantic model, kwarg name used by enforce_all)
+_DIGEST_LOADERS: dict[str, tuple[type, str]] = {
+    "hypothesis.digest.json": (HypothesisDigest, "hypothesis"),
+    "plan.digest.json":       (PlanDigest,       "plan"),
+    "concepts.digest.json":   (ConceptsDigest,   "concepts"),
+    "run.digest.json":        (RunDigest,        "run"),
+}
 
 
 class StateManager:
@@ -67,8 +82,8 @@ class StateManager:
             return None
         return PipelineState.model_validate_json(sf.read_text())
 
-    def save_pipeline(self, state: PipelineState) -> None:
-        """Atomic write: write to temp file then rename."""
+    def _atomic_write_state(self, state: PipelineState) -> None:
+        """Atomic write of ``state.json`` without running contract guards."""
         state.updated_at = datetime.now(timezone.utc).isoformat()
         dest = self.artifacts_dir / f"pipeline_{state.pipeline_id}" / "state.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +100,80 @@ class StateManager:
                 pass
             if os.path.exists(tmp):
                 os.unlink(tmp)
+            raise
+
+    def _load_step_digests(self, pdir: Path) -> dict[str, object]:
+        """Load whatever StepDigest files are currently on disk for a pipeline.
+
+        Each digest is validated by its Pydantic model — a malformed digest
+        raises ``pydantic.ValidationError`` here, which the caller turns into
+        a ``ContractViolation`` so the pipeline blocks instead of silently
+        advancing on bad data.
+        """
+        loaded: dict[str, object] = {}
+        for filename, (model_cls, kwarg) in _DIGEST_LOADERS.items():
+            path = pdir / filename
+            if not path.exists():
+                continue
+            try:
+                loaded[kwarg] = model_cls.model_validate_json(path.read_text())
+            except Exception as exc:
+                raise ContractViolation(
+                    f"digest_parse::{filename}",
+                    f"Failed to parse {filename}: {exc}",
+                ) from exc
+        return loaded
+
+    def save_pipeline(
+        self,
+        state: PipelineState,
+        *,
+        enforce_contracts: bool = True,
+    ) -> None:
+        """Atomic write + StepDigest contract enforcement.
+
+        After the state write succeeds, every StepDigest present on disk is
+        validated and cross-digest invariants are checked via
+        ``contract_guard.enforce_all``. On ``ContractViolation`` the pipeline
+        is re-saved with ``stage=BLOCKED`` and the exception is re-raised so
+        the scheduler can log / surface it.
+
+        ``enforce_contracts=False`` skips the guard — reserved for
+        bootstrap writes where we genuinely have no digests yet (tests,
+        initial proposal intake).
+        """
+        self._atomic_write_state(state)
+        if not enforce_contracts:
+            return
+        # Terminal states should not re-block — preserve their final stage.
+        if state.stage in {
+            PipelineStage.COMPLETED,
+            PipelineStage.FAILED,
+            PipelineStage.BLOCKED,
+        }:
+            return
+
+        pdir = self.artifacts_dir / f"pipeline_{state.pipeline_id}"
+        try:
+            digests = self._load_step_digests(pdir)
+            manifest = pdir / "data_manifest.yaml"
+            enforce_all(
+                **digests,
+                data_manifest_path=manifest if manifest.exists() else None,
+            )
+        except ContractViolation as cv:
+            logger.error(
+                "[contract_violation][%s] %s", state.pipeline_id, cv
+            )
+            state.stage = PipelineStage.BLOCKED
+            state.last_error = f"contract_violation:{cv.guard_name}:{cv}"
+            try:
+                self._atomic_write_state(state)
+            except Exception:
+                logger.exception(
+                    "Failed to record BLOCKED stage for %s after violation",
+                    state.pipeline_id,
+                )
             raise
 
     # ── Proposals ────────────────────────────────────────────────

@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "meta_adaptive_task_decompositi",
+  "title": "Meta-Adaptive Task Decomposition for Multi-Agent LLM Workflows",
+  "research_question": "Can a MAPE-K-style meta-controller that adaptively switches among multiple task-decomposition strategies reduce unnecessary agent handoffs and improve end-to-end task success in multi-agent LLM workflows under changing task conditions?",
+  "hypothesis": "A self-adaptive orchestration layer that models decomposition-strategy uncertainty and dynamically selects among alternative decomposition policies will outperform any fixed decomposition strategy on both success rate and coordination efficiency when task structure varies over time.",
+  "motivation": "The knowledge base shows a concrete open problem in self-adaptive systems: current controllers often commit to a single model, while Bayesian model averaging work explicitly highlights future work on applying such ideas to additional domains. At the same time, recently rejected ideas in agentic workflow optimization focused on uncertainty averaging and escalation, suggesting that simple risk-aware orchestration is not novel enough. A stronger gap is to transfer self-adaptive model-selection ideas into multi-agent LLM orchestration at the level of task decomposition itself: instead of averaging agent outputs or adding escalation heuristics, the system would monitor workflow signals, reason over competing decomposition strategies, and adapt the workflow structure online. This targets a high-priority tracked direction and addresses a likely bottleneck in agent collaboration: fixed decompositions are brittle when task complexity, ambiguity, or modality mix changes across instances.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-22T20:07:09.010142+00:00",
+  "status": "pending"
+}

@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "heterogeneous_goal_mape_k_for_",
+  "title": "Heterogeneous-Goal MAPE-K for Adaptive AI Agent Workflows",
+  "research_question": "Can a MAPE-K controller that explicitly models heterogeneous requirements—mixing hard thresholds such as safety/cost limits with optimization goals such as task quality and latency—improve adaptation decisions in AI agent workflows compared with single-objective or fixed-policy orchestration?",
+  "hypothesis": "Extending MAPE-K with explicit heterogeneous requirement handling will reduce unnecessary adaptations and improve overall workflow utility in multi-agent AI systems, especially under uncertainty and changing workload conditions.",
+  "motivation": "The knowledge base surfaces a concrete open problem: prior self-adaptive systems work explicitly names heterogeneous requirements, including threshold and optimization goals, as future work. At the same time, recently rejected ideas in agentic workflow optimization cluster around routing, uncertainty-aware scheduling, and adaptive orchestration, suggesting that another scheduler variant is unlikely to be novel enough. A stronger gap is to transfer the heterogeneous-requirement formulation from self-adaptive systems into AI agent orchestration, where workflows must jointly satisfy hard constraints such as budget, safety, and context-window limits while optimizing answer quality, latency, and collaboration depth. This creates a clearer research gap than generic uncertainty-aware routing and aligns with the high-priority direction on agentic workflow optimization.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T09:07:16.622914+00:00",
+  "status": "pending"
+}

@@ -1,0 +1,49 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-22T20:04:55.600339+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Standard planner-only orchestration that generates a decomposition once
+    and executes it without verification-driven re-planning.
+  expected_signal: '>= 2 percentage point absolute gain in success rate and >= 5%
+    reduction in agent-call cost.'
+  failure_condition: Disproved if success-rate improvement is < 2 percentage points
+    or if cost is not reduced by at least 5% versus the planner-only baseline across
+    the evaluation suite.
+  hypothesis: A verifier-guided orchestration loop achieves higher end-to-end success
+    rate and at least modestly lower agent-call cost than a planner-only workflow
+    on the same multi-agent benchmark tasks.
+  metric: 'Primary: task success rate. Secondary: mean agent calls per successfully
+    completed task (or total orchestration cost per task).'
+  min_budget_ratio: 0.25
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a verifier-guided orchestration loop that scores decomposition
+    soundness and inter-agent dependency consistency before and during execution,
+    and triggers selective re-planning only when verification flags issues.
+  problem_gap: Existing methods fail because planner-only multi-agent workflows can
+    commit to flawed task decompositions and inconsistent dependencies too early,
+    causing downstream errors and unnecessary agent calls before problems are detected.
+  why_it_matters: Which improves end-to-end task success and reduces orchestration
+    cost under multi-agent LLM workflows where poor decomposition quality would otherwise
+    propagate expensive execution-time failures.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: verifier_guided_task_decomposi
+re_eval_count: 0
+repeat_degree: low
+research_question: Can integrating a lightweight verifier that scores decomposition
+  soundness and inter-agent dependency consistency improve task success and reduce
+  wasted agent calls in multi-agent LLM workflows compared with standard planner-only
+  orchestration?
+retrieval_cache_key: 777349b7c3760a14
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Verifier-Guided Task Decomposition for Multi-Agent LLM Workflows

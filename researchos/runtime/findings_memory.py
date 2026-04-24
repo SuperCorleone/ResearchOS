@@ -1,10 +1,10 @@
-"""Findings memory service (A7 + C11).
+"""Findings memory service.
 
 Persists and retrieves small structured "cards" representing research
 artifacts. Eight ``kinds`` are supported: papers, ideas, decisions,
 episodes, knowledge, templates, findings, and failures.
 
-The ``failures`` kind (C11) stores failure patterns from UNSUPPORTED
+The ``failures`` kind stores failure patterns from UNSUPPORTED
 verdicts with time-decay weighting (default 30 days). Future pipelines
 query active failures to inject avoidance guidance, implementing
 self-evolving skill injection inspired by MetaClaw.
@@ -67,7 +67,7 @@ class FindingCard(BaseModel):
 
 
 class FailureCard(FindingCard):
-    """A failure pattern with remediation guidance (C11).
+    """A failure pattern with remediation guidance.
 
     Stored when Critic judges UNSUPPORTED. Future pipelines query
     failures to inject avoidance skills, with time-decay weighting.
@@ -239,7 +239,7 @@ class MemoryService:
         remediation: str,
         tags: list[str] | None = None,
     ) -> Path:
-        """Store a failure pattern from an UNSUPPORTED verdict (C11)."""
+        """Store a failure pattern from an UNSUPPORTED verdict."""
         card = FailureCard(
             id=f"fail_{pipeline_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             kind="failures",
@@ -257,7 +257,7 @@ class MemoryService:
         return self.save(card)
 
     def get_active_failures(self, top_k: int = 10) -> list[FindingCard]:
-        """Retrieve failure cards within their decay window (C11).
+        """Retrieve failure cards within their decay window.
 
         Cards older than their decay_days are excluded, implementing
         time-decay learning similar to MetaClaw's 30-day decay.

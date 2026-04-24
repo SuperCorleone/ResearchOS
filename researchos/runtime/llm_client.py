@@ -1,4 +1,4 @@
-"""LLM client hardening utilities (A13).
+"""LLM client hardening utilities.
 
 Provides:
 - `extract_json_between_markers`: robust JSON extraction from LLM output
@@ -8,18 +8,18 @@ Provides:
   else a local helper)
 - `route_model`: model-prefix based client router
 - `get_model_for_agent`: resolve agent role -> model id via
-  workflow_config.yaml tier mapping (D' model tiering)
+  workflow_config.yaml tier mapping
 - `compute_artifact_fingerprint`: SHA256 digest prefix used as prompt-cache
-  variant key so caches invalidate when artifacts change (A' caching)
+  variant key so caches invalidate when artifacts change
 - `build_cached_messages`: assemble a messages list whose stable prefix is
   eligible for provider-side prompt caching (OpenAI auto / Anthropic
   explicit `cache_control`)
 - `LAUNCH_STAGGER_SECONDS` + `stagger_sleep`: startup-rate limiter
-- `supports_json_schema`: check if a model supports native JSON schema mode (B4)
-- `build_json_schema_param`: build OpenAI response_format dict from Pydantic model (B4)
-- `estimate_tokens`: tiktoken-first token estimation with char-ratio fallback (B5)
-- `trim_to_budget`: proactive head+tail trimming to fit a token budget (B5)
-- `DEFAULT_CONTEXT_SIZES` + `get_context_size`: approximate context window lookup (B5)
+- `supports_json_schema`: check if a model supports native JSON schema mode
+- `build_json_schema_param`: build OpenAI response_format dict from Pydantic model
+- `estimate_tokens`: tiktoken-first token estimation with char-ratio fallback
+- `trim_to_budget`: proactive head+tail trimming to fit a token budget
+- `DEFAULT_CONTEXT_SIZES` + `get_context_size`: approximate context window lookup
 """
 
 from __future__ import annotations
@@ -266,7 +266,7 @@ def is_context_overflow(exc: BaseException) -> bool:
     return any(kw in msg for kw in ("context", "token", "length", "too long", "maximum"))
 
 
-# ── Proactive token budget management (B5) ─────────────────────
+# ── Proactive token budget management ──────────────────────────
 
 
 def trim_to_budget(text: str, max_tokens: int, *, head_ratio: float = 0.6) -> str:
@@ -305,7 +305,7 @@ def get_context_size(model: str) -> int:
     return 128_000  # safe default
 
 
-# ── Structured JSON output support (B4) ────────────────────────
+# ── Structured JSON output support ─────────────────────────────
 
 
 def supports_json_schema(model: str) -> bool:

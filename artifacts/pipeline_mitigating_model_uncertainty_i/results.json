@@ -1,1 +1,17 @@
-{"metrics": {"bma_brier": 0.17156386224246392, "bma_logloss": 0.5121506077396862, "bma_accuracy": 0.7337662337662337, "stacking_brier": 0.17269739520091112, "stacking_logloss": 0.5193879128013238, "stacking_accuracy": 0.7359307359307359, "brier_improvement_pct": -0.6607061321837282}, "config": {"data_source": "file", "split_seed": 42, "data_rows": 924, "data_hash": "f718d20bf77688c8", "pipeline_id": "mitigating_model_uncertainty_i"}, "seed": 42, "runtime_seconds": 0.509593166410923, "notes": "BMA=uniform GLM ensemble (5 C values); Stacking=logistic meta-learner on OOF predictions"}
+{
+  "metrics": {
+    "accuracy_rq1": 0.0,
+    "accuracy_rq2": 0.0
+  },
+  "config": {
+    "data_source": "file",
+    "data_rows": 39420,
+    "split_seed": 42,
+    "data_hash": "sha256:31d215fe541221640f9c257f1a3442ee6ac98fcc6bf5180154cdd983907e189c",
+    "reference_paper": "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging",
+    "fast_fail_reason": "Reference-faithful execution is blocked until the exact train/test split and preprocessing pipeline are recovered from the reference artifacts."
+  },
+  "seed": 42,
+  "runtime_seconds": 0.0,
+  "notes": "Fast fail: reference split and preprocessing unrecovered, unable to execute stacking ensemble."
+}

@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "self_adaptive_modality_routing",
+  "title": "Self-Adaptive Modality Routing for Multimodal Agent Workflows",
+  "research_question": "Can a self-adaptive controller that dynamically selects when an agent workflow should invoke visual reasoning, textual reasoning, or both reduce unnecessary multimodal calls while improving end-task accuracy under changing input difficulty?",
+  "hypothesis": "A MAPE-K-style controller that monitors uncertainty and task context, then routes subtasks to text-only, vision-language, or hybrid reasoning modes, will outperform static multimodal pipelines by improving cost-accuracy trade-offs and reducing failures caused by overconfident single-model selection.",
+  "motivation": "The knowledge base shows an explicit open problem around extending self-adaptive uncertainty handling to additional domains and heterogeneous optimization goals. At the same time, several nearby agent-orchestration ideas have already been rejected, especially those focused on uncertainty averaging, escalation, and verifier-guided decomposition. This suggests a gap: instead of proposing yet another generic uncertainty-aware orchestrator, a more novel direction is to transfer self-adaptive model-selection ideas into multimodal agent workflows, where the key decision is not just which agent to call, but whether visual reasoning is necessary at all. This targets a practical bottleneck in multimodal systems—high cost, latency, and brittle routing—while remaining distinct from the rejected ideas by centering on adaptive modality selection rather than general orchestration or Bayesian averaging alone.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-22T20:34:37.938959+00:00",
+  "status": "pending"
+}

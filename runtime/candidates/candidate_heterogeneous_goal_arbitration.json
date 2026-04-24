@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "heterogeneous_goal_arbitration",
+  "title": "Heterogeneous-Goal Arbitration for Self-Adaptive Agent Workflows",
+  "research_question": "Can a self-adaptive controller that explicitly arbitrates between threshold-style constraints (e.g., cost, latency, safety) and optimization goals (e.g., quality, task success) improve multi-agent workflow performance over static orchestration policies under changing task conditions?",
+  "hypothesis": "A MAPE-K-style orchestration layer with heterogeneous-goal arbitration will reduce unnecessary replanning and improve overall utility for multi-agent workflows compared with static or single-objective adaptive controllers, especially when task conditions and objective trade-offs shift over time.",
+  "motivation": "The knowledge base surfaces an explicit future-work gap: existing self-adaptive control work plans to consider heterogeneous requirements such as threshold and optimization goals, but the published evaluation remains limited to another domain. At the same time, multiple nearby ideas in agentic workflow optimization have already been rejected, especially those centered on Bayesian routing, generic uncertainty-aware scheduling, or verifier-guided decomposition. This suggests a narrower but still open direction: instead of proposing another uncertainty-aware scheduler, study how self-adaptive control can arbitrate mixed hard constraints and soft optimization targets in agent workflows. This is important because real AI workflows rarely optimize a single metric; they must satisfy budget, latency, and safety constraints while still maximizing answer quality. A successful result would provide a more deployable control layer for agent orchestration under realistic multi-objective settings.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T09:10:18.985858+00:00",
+  "status": "pending"
+}

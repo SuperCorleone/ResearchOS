@@ -1,0 +1,53 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T09:10:49.889163+00:00'
+evaluator_model: ''
+falsification:
+  baseline: 'Compare against two fixed strategies: (1) fixed coarse decomposition
+    and (2) fixed fine decomposition, with matched model pool and stopping budget.'
+  expected_signal: '>= 3% absolute success-rate gain over fixed coarse and >= 10%
+    reduction in agent calls or token cost versus fixed fine.'
+  failure_condition: Disproved if the adaptive controller improves success rate by
+    less than 2 percentage points over fixed coarse, or fails to reduce mean agent
+    calls/token cost by at least 10% versus fixed fine, or loses on both success and
+    cost-normalized success.
+  hypothesis: An online curriculum-adaptive decomposition controller achieves higher
+    end-to-end task success than a fixed coarse decomposition baseline while using
+    fewer redundant agent calls than a fixed fine decomposition baseline on mixed-difficulty
+    benchmark tasks.
+  metric: 'Primary: end-to-end success rate. Secondary: mean agent calls per solved
+    task and total token cost. Aggregate comparison can use success rate subject to
+    non-inferior cost, or cost-normalized success.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a multi-agent workflow controller that starts with coarse
+    task decomposition and adaptively refines only recurrently failing or high-difficulty
+    subtasks using online failure patterns and a task-difficulty curriculum.
+  problem_gap: Existing methods fail because fixed decomposition granularity treats
+    easy and hard tasks alike, causing either unnecessary agent/tool calls on simple
+    cases or compounded failures on difficult cases, while prior adaptive workflow
+    ideas emphasize routing, uncertainty, or verifier control rather than online curriculum-based
+    granularity adjustment from observed failure trajectories.
+  why_it_matters: Which improves end-to-end success rate and lowers token/agent-execution
+    cost under heterogeneous task difficulty and limited inference budgets.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: curriculum_adaptive_task_decom
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a multi-agent workflow controller that adapts task decomposition
+  granularity online using failure patterns and task-difficulty curricula improve
+  end-to-end success rate and reduce redundant agent calls compared with fixed decomposition
+  strategies?
+retrieval_cache_key: 06d35c024e2c1b7b
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 3
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Curriculum-Adaptive Task Decomposition for Multi-Agent Workflows

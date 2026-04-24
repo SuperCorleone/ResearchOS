@@ -22,7 +22,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# A19 retry counter: how many self-correction passes the writer/auditor may make
+# Retry counter: how many self-correction passes the writer/auditor may make
 # on LaTeX or citation issues before blocking.
 num_error_corrections = 5
 
@@ -364,7 +364,7 @@ def audit_figures(
 
 
 # ---------------------------------------------------------------------------
-# A6: citation integrity
+# Citation integrity
 # ---------------------------------------------------------------------------
 
 _CITE_RE = re.compile(r"\\cite[a-zA-Z]*\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}")
@@ -435,7 +435,7 @@ def check_bib_existence(
     bib_path: Path,
     evidence_refs: list[str],
 ) -> dict:
-    """A6: verify every \\cite{key} in draft is defined in references.bib and,
+    """Verify every \\cite{key} in draft is defined in references.bib and,
     best-effort, matches a title from ``evidence_refs``.
 
     Returns::
@@ -495,7 +495,7 @@ def check_bib_existence(
 
 
 # ---------------------------------------------------------------------------
-# A19: chktex LaTeX lint
+# chktex LaTeX lint
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
     g4 = audit_g4_numerical_consistency(draft_path, results_path)
     g5 = audit_g5_statistical_completeness(draft_path)
 
-    # A6: collect evidence_refs from experiment_plan.yaml (best effort).
+    # Collect evidence_refs from experiment_plan.yaml (best effort).
     evidence_refs: list[str] = []
     plan_path = pdir / "experiment_plan.yaml"
     if plan_path.exists():
@@ -630,7 +630,7 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
     elif fig_audit.get("note"):
         lines.append(f"\n## Figure Quality Audit (VLM)\n{fig_audit['note']}\n")
 
-    # --- A6: Citation integrity --------------------------------------------
+    # --- Citation integrity ------------------------------------------------
     lines.extend([
         "\n## Citation integrity\n",
         f"**Verdict**: {'PASS' if bib_check['passed'] else 'FAIL'}\n",
@@ -654,7 +654,7 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
     if bib_check.get("note"):
         lines.append(f"\n_Note_: {bib_check['note']}\n")
 
-    # --- A19: LaTeX lint ---------------------------------------------------
+    # --- LaTeX lint --------------------------------------------------------
     lines.append("\n## LaTeX lint\n")
     if not tex_path.exists():
         lines.append("_No .tex file found; lint skipped._\n")

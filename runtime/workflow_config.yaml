@@ -33,17 +33,15 @@
 #   T3 — economy tier for low-reasoning steps (defaults to gpt-o4-mini)
 #
 # `agent_model_tiers` assigns each agent role to a tier. Agents that are
-# not listed (including `pipeline_manager`, which is deliberately deferred
-# pending investigation under task C) fall back to the environment variable
-# `RESEARCHOS_MODEL` inside `llm_client.get_model_for_agent`, preserving
-# full backward compatibility with deployments that do not define tiers.
+# not listed fall back to the environment variable `RESEARCHOS_MODEL`
+# inside `llm_client.get_model_for_agent`.
 model_tiers:
   T1: "${RESEARCHOS_MODEL_T1:-gpt-5.4}"
   T2: "${RESEARCHOS_MODEL_T2:-gpt-4o}"
   T3: "${RESEARCHOS_MODEL_T3:-o4-mini}"
 
 agent_model_tiers:
-  # T1 — 9 high-reasoning agents
+  # T1 — high-reasoning agents
   professor: T1
   knowledge_miner: T1
   hypothesis_gen: T1
@@ -51,26 +49,23 @@ agent_model_tiers:
   coder: T1
   critic: T1
   interrogator: T1
+  judge: T1                  # merges critic + experiment_analyser + interrogator
   paper_writer: T1
   reviewer_simulator: T1
 
-  # T2 — 9 structured-generation agents (F': reporter downgraded to T2)
-  design_reviewer: T2
+  # T2 — structured-generation agents
+  # design_reviewer removed — scientific review merged into exp_designer self-review
   experiment_analyser: T2
-  concept_extractor: T2
-  reporter: T2
-  pre_main_reviewer: T2
+  concept_extractor: T2      # legacy 1-pass; being replaced by 2-pass below
+  concept_extract_paper: T2  # 2-pass: paper side (math + refs)
+  concept_extract_code: T2   # 2-pass: code side (locators)
+  # reporter removed — REPORT step is now rendered by researchos.core.publisher
   paper_auditor: T2
-  fixer: T2
   vlm_reviewer: T2
-  branch_selector: T2
-
-  # T2.5 — figure generation agent (C15)
   figure_composer: T2
 
-  # T3 — 2 low-reasoning agents (pipeline_manager intentionally omitted)
+  # T3 — low-reasoning agents
   experiment_runner: T3
-  lit_scout: T3
 
 # ---------------------------------------------------------------------------
 # Retry state-machine constants (A14)
@@ -110,16 +105,13 @@ steps:
     retries: 3
     type: llm
 
-  design_review:
-    agent: design_reviewer
-    output: design_review.md
-    timeout: 300
-    retries: 3
-    type: llm
+  # design_review step retired 2026-04 — exp_designer now self-reviews
+  # in its own turn (scientific validity) and design_checks.py runs the
+  # structural checks (zero-token).
 
   code_recon:
-    # A20 — shallow-clone reference codebases + static scan.
-    # Pure Python; no LLM. Runs only in MAIN, between DESIGN_REVIEW and CONCEPT_EXTRACT.
+    # Shallow-clone reference codebases + static scan.
+    # Pure Python; no LLM. Runs only in MAIN, between DESIGN and CONCEPT_EXTRACT.
     agent: code_recon
     output: code_recon.yaml
     timeout: 240
@@ -162,11 +154,13 @@ steps:
     type: llm
 
   report:
-    agent: reporter
+    # REPORT is deterministic — rendered by researchos.core.publisher.render_milestone
+    # (no LLM, no agent). The scheduler's _run_report() handles it.
+    agent: null
     output: "milestone_{n}.md"
-    timeout: 300
-    retries: 3
-    type: llm
+    timeout: 60
+    retries: 1
+    type: python
 
   experiment_analysis:
     # U9 — post-experiment analysis: ablation studies, sensitivity analysis,
@@ -187,16 +181,37 @@ steps:
     retries: 2
     type: llm
 
-  waiting_approval:
-    # Terminal step -- no agent runs; the scheduler waits for a professor decision.
-    agent: null
-    output: null
-    timeout: 0
-    retries: 0
+  judge:
+    # Merged post-run verdict: replaces critic + experiment_analysis + interrogation.
+    # Reads digests, calls gen_code_tree_structure / list_file_symbols /
+    # grep_code / execute_python, and emits judge_verdict.json (typed).
+    agent: judge
+    output: judge_verdict.json
+    timeout: 600
+    retries: 2
+    type: llm
+
+  concept_paper:
+    # 2-pass concept extraction, paper side: definition + math_formula +
+    # reference_papers. No code inspection at this step.
+    agent: concept_extract_paper
+    output: concepts_paper.digest.json
+    timeout: 300
+    retries: 3
+    type: llm
+
+  concept_code:
+    # 2-pass concept extraction, code side: walks code_recon repos with
+    # list_file_symbols and fills code_implementation locators. Emits the
+    # final merged concepts.digest.json that concept_atomicity guard validates.
+    agent: concept_extract_code
+    output: concepts.digest.json
+    timeout: 300
+    retries: 3
     type: llm
 
 # ---------------------------------------------------------------------------
-# Review configuration (C7)
+# Review configuration
 # ---------------------------------------------------------------------------
 # Cross-model adversarial review: neg reviewers use a different model family
 # than the paper writer to eliminate self-review blind spots.
@@ -223,23 +238,20 @@ stages:
   main:
     sequence:
       - hypothesis
-      - design
-      - design_review
+      - design                 # includes integrated scientific self-review
       - code_recon
+      - concept_paper          # 2-pass concept extraction (paper side)
+      - concept_code           # 2-pass concept extraction (code side)
       - code
       - code_preflight
       - run
-      - critic
-      - experiment_analysis
+      - judge                  # merged: critic + experiment_analysis + interrogation
       - figure_compose
-      - interrogation
       - report
-      - waiting_approval
     dynamic_routing:
-      # After DESIGN, the scheduler checks whether to go to DESIGN_REVIEW
-      # (normal path) or skip directly to CODE (e.g., when design was reused).
+      # DESIGN_REVIEW retired 2026-04 — exp_designer self-reviews inline.
       design:
-        default: design_review
+        default: code_recon
         alternatives:
           - next: code
             condition: "design already reviewed or reused from prior milestone"
@@ -250,13 +262,11 @@ stages:
       - design
       - code
       - run
-      - critic
+      - judge
       - report
-      - waiting_approval
     dynamic_routing:
-      # After DESIGN in fast_fail, go directly to CODE (no review step).
-      # The dynamic_routing here documents that DESIGN -> CODE is intentional,
-      # skipping design_review, code_preflight, and interrogation for speed.
+      # After DESIGN in fast_fail, go directly to CODE.
+      # Skips code_preflight and interrogation for speed.
       design:
         default: code
         alternatives:

@@ -190,7 +190,7 @@ def _extract_pdf_text(pdf_path: Path, max_pages: int = 20) -> str:
     return "\n\n".join(pages)
 
 
-# A20: code-reference URL extraction from paper text.
+# Code-reference URL extraction from paper text.
 _CODE_HOST_RE = re.compile(
     r"https?://(?:www\.)?"
     r"(?:github\.com|gitlab\.com|bitbucket\.org|huggingface\.co|codeberg\.org)"
@@ -257,6 +257,83 @@ def extract_follow_up_questions(text: str, max_questions: int = 3) -> list[str]:
     return candidates[:max_questions]
 
 
+def extract_evaluation_protocol(text: str) -> dict:
+    """Heuristically extract evaluation protocol from paper text.
+
+    Returns structured dict with rq_list, or empty dict if not found.
+    No LLM call — pure text parsing to keep it fast and cheap.
+    """
+    lower = text.lower()
+    # Only process papers that have evaluation sections
+    has_eval = any(kw in lower for kw in [
+        "research question", "rq1", "rq2", "rq3",
+        "empirical evaluation", "experimental evaluation",
+        "evaluation setup", "evaluation design"
+    ])
+    if not has_eval:
+        return {}
+
+    protocol: dict = {"has_explicit_rqs": False, "rq_list": [], "evaluation_setup": ""}
+
+    # Extract RQ definitions (pattern: "RQ1:", "RQ1 (", "RQ1.")
+    rq_pattern = re.compile(
+        r'RQ(\d+)[:\.\s\(]+([^\n]{20,300})',
+        re.IGNORECASE,
+    )
+    for m in rq_pattern.finditer(text):
+        rq_id = f"RQ{m.group(1)}"
+        question = m.group(2).strip().rstrip("?").strip() + "?"
+        protocol["rq_list"].append({
+            "id": rq_id,
+            "question": question[:300],
+            "metrics": [],
+            "baseline_result": "",
+        })
+
+    if protocol["rq_list"]:
+        protocol["has_explicit_rqs"] = True
+
+    # Extract metric names mentioned near RQ sections
+    metric_keywords = [
+        "precision", "recall", "f1", "f-measure",
+        "relative error", "success rate", "accuracy",
+        "wall-clock time", "execution time", "running time",
+        "mae", "rmse", "auc", "roc",
+        "throughput", "latency", "overhead",
+    ]
+    _canonical: dict[str, str] = {
+        "f1": "F1 score",
+        "f-measure": "F1 score",
+        "relative error": "Relative Error (RE)",
+        "success rate": "success_rate",
+        "wall-clock time": "wall-clock time (seconds)",
+        "execution time": "wall-clock time (seconds)",
+        "running time": "wall-clock time (seconds)",
+    }
+
+    for rq in protocol["rq_list"]:
+        rq_num = rq["id"]
+        idx = lower.find(rq_num.lower())
+        if idx >= 0:
+            snippet = lower[idx : idx + 1000]
+            found_metrics: list[str] = []
+            for metric in metric_keywords:
+                if metric in snippet:
+                    canonical = _canonical.get(metric, metric)
+                    if canonical not in found_metrics:
+                        found_metrics.append(canonical)
+            rq["metrics"] = found_metrics
+
+    # Try to find brief evaluation setup description
+    eval_idx = lower.find("evaluation setup")
+    if eval_idx < 0:
+        eval_idx = lower.find("experimental design")
+    if eval_idx >= 0:
+        protocol["evaluation_setup"] = text[eval_idx : eval_idx + 400].split("\n")[0][:200]
+
+    return protocol
+
+
 def _slugify(text: str) -> str:
     """Convert text to a safe filename slug."""
     slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
@@ -294,6 +371,7 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
 
     code_refs = extract_code_refs(text)
     follow_up_questions = extract_follow_up_questions(text)
+    eval_protocol = extract_evaluation_protocol(text)
     content = _make_wiki_page(
         title=stem,
         tags=["raw-import", suffix.lstrip(".")],
@@ -302,6 +380,7 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
         body=text,
         code_refs=code_refs,
         follow_up_questions=follow_up_questions,
+        evaluation_protocol=eval_protocol if eval_protocol.get("has_explicit_rqs") else None,
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
@@ -334,17 +413,25 @@ def _make_wiki_page(
     body: str,
     code_refs: list[str] | None = None,
     follow_up_questions: list[str] | None = None,
+    evaluation_protocol: dict | None = None,
 ) -> str:
     """Format a wiki page with YAML frontmatter.
 
     When ``code_refs`` is non-empty, a ``code_refs:`` list is added to the
-    frontmatter. These URLs are consumed by the CODE_RECON step (A20).
+    frontmatter. These URLs are consumed by the CODE_RECON step.
+
+    When ``evaluation_protocol`` is provided and contains explicit RQs it is
+    stored under the ``evaluation_protocol:`` frontmatter key so that
+    hypothesis_gen can read structured RQ/metric definitions directly without
+    relying on full-text BM25 search.
     """
     meta: dict = {"title": title, "tags": tags, "source": source, "created": created}
     if code_refs:
         meta["code_refs"] = list(code_refs)
     if follow_up_questions:
         meta["follow_up_questions"] = list(follow_up_questions)
+    if evaluation_protocol and evaluation_protocol.get("has_explicit_rqs"):
+        meta["evaluation_protocol"] = evaluation_protocol
     frontmatter = yaml.dump(meta, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n\n# {title}\n\n{body}\n"
 

@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "heterogeneous_goal_model_uncer",
+  "title": "Heterogeneous-Goal Model Uncertainty for Self-Adaptive MAPE-K Security Loops",
+  "research_question": "Can Bayesian model averaging over multiple candidate environment and threat models improve adaptation decisions in self-adaptive security systems when the MAPE-K loop must optimize heterogeneous goals such as protection, latency, and cost?",
+  "hypothesis": "Extending model-uncertainty-aware adaptation with heterogeneous goal handling will reduce maladaptive or unnecessary security reconfigurations and improve overall decision quality under shifting operating conditions compared with single-model or single-goal baselines.",
+  "motivation": "The knowledge base surfaces an explicit open problem: current Bayesian model averaging for self-adaptive systems was evaluated on a robotics case study and future work calls for additional domains plus heterogeneous requirements such as threshold and optimization goals. Security-oriented self-adaptive systems are a natural but apparently unexplored target, where wrong model selection can trigger either under-reaction to threats or costly unnecessary adaptations. This proposal also avoids recently rejected agentic-workflow ideas by targeting a distinct, evidence-backed gap in self-adaptation.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "self-adaptive-systems",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T08:45:04.648958+00:00",
+  "status": "pending"
+}

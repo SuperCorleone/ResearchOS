@@ -89,11 +89,13 @@ class TestInterrogationProtocol:
         from researchos.schemas.pipeline import PipelineStep
         assert PipelineStep.INTERROGATION.value == "interrogation"
 
-    def test_main_critic_goes_to_interrogation(self):
+    def test_main_critic_goes_to_experiment_analysis(self):
+        # After 2026-04 refactor: CRITIC → EXPERIMENT_ANALYSIS → INTERROGATION.
+        # (Soon to be replaced by CRITIC-merge-into-JUDGE in Phase 1.)
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
         key = (PipelineStage.MAIN, PipelineStep.CRITIC)
-        assert _NEXT_STEP[key] == PipelineStep.INTERROGATION
+        assert _NEXT_STEP[key] == PipelineStep.EXPERIMENT_ANALYSIS
 
     def test_main_interrogation_goes_to_report(self):
         from researchos.runtime.scheduler import _NEXT_STEP
@@ -113,7 +115,7 @@ class TestInterrogationProtocol:
         assert STEP_ARTIFACT[PipelineStep.INTERROGATION] == "interrogation_report.md"
 
     def test_interrogator_agent_exists(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/interrogator.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/interrogator.md"
         assert path.exists()
         content = path.read_text()
         assert "anomaly" in content.lower()
@@ -154,26 +156,28 @@ class TestReferenceCodeReuse:
     """Feature 3: code reuse and data consistency enforcement."""
 
     def test_exp_designer_has_reference_code(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/exp_designer.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/exp_designer.md"
         content = path.read_text()
         assert "reference_code" in content
         assert "fork_and_extend" in content
         assert "consistency_requirement" in content
 
     def test_coder_has_reference_reuse(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/coder.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/coder.md"
         content = path.read_text()
-        assert "Reference Code Reuse" in content
+        # Section was renamed from "Reference Code Reuse" to "Code Reuse Protocol"
+        assert "Code Reuse Protocol" in content
         assert "OUR CONTRIBUTION" in content
 
     def test_critic_has_data_consistency(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/critic.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/critic.md"
         content = path.read_text()
-        assert "Reference Data Consistency" in content
+        # Phrase appears as "Reference data consistency" (lowercase d) in audit table
+        assert "reference data consistency" in content.lower()
         assert "consistency_requirement" in content
 
     def test_exp_designer_has_user_directives(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/exp_designer.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/exp_designer.md"
         content = path.read_text()
         assert "user_directives.yaml" in content
 
@@ -226,7 +230,7 @@ class TestInnovationPatterns:
     """Feature 5: innovation_type in miner + scoring bonus."""
 
     def test_miner_has_innovation_patterns(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/knowledge_miner.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/knowledge_miner.md"
         content = path.read_text()
         assert "cross_domain" in content
         assert "cross_method" in content
@@ -235,13 +239,13 @@ class TestInnovationPatterns:
         assert "innovation_type" in content
 
     def test_miner_has_user_preference_learning(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/knowledge_miner.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/knowledge_miner.md"
         content = path.read_text()
         assert "topic_preferences" in content
         assert "User Preference Learning" in content
 
     def test_miner_has_reference_papers_field(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/knowledge_miner.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/knowledge_miner.md"
         content = path.read_text()
         assert "reference_papers" in content
         assert "has_code" in content
@@ -254,7 +258,7 @@ class TestInnovationPatterns:
         assert cfg["innovation"]["cross_method_bonus"] == 1
 
     def test_proposal_format_has_innovation_type(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/knowledge_miner.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/knowledge_miner.md"
         content = path.read_text()
         # YAML template should include innovation_type
         assert 'innovation_type:' in content

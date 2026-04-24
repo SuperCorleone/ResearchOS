@@ -5,7 +5,7 @@ Provides:
 - Rollback to previous checkpoint
 - Failed pipeline recovery
 - Exponential backoff retry logic
-- YAML-driven retry-policy constants (A14)
+- YAML-driven retry-policy constants
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from researchos.runtime.state_manager import StateManager
 logger = logging.getLogger(__name__)
 
 
-# ── Retry config defaults (A14) ─────────────────────────────────
+# ── Retry config defaults ────────────────────────────────────────
 
 RETRY_DEFAULTS: dict[str, Any] = {
     "max_runs": 5,              # pipeline-level attempts per milestone

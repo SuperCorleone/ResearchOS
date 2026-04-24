@@ -1,5 +1,0 @@
-pipeline_id: "mitigating_model_uncertainty_i"
-decision: "pause"
-next_milestone: "paper"
-comment: "Milestones 1 and 2 both report an inconclusive outcome because the exact reference dataset from the prior BMA study was unavailable, so no empirical comparison between stacking and the baseline was executed. The knowledge base confirms that the cited SEAMS 2022 paper establishes BMA for mitigating model-selection uncertainty in self-adaptive systems, but the current pipeline has not yet produced evidence that a stacking-based replacement improves calibration, Brier score, or requirement-violating adaptation rate. Given that the research question remains untested rather than falsified, this should not be approved for paper stage. A pause is appropriate until the exact dataset or a defensible alternative benchmark is secured and the planned evaluation is actually run."
-created_at: "2026-04-19T00:00:00+00:00"

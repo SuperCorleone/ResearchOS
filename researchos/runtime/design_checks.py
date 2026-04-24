@@ -130,7 +130,7 @@ def check_four_slot_plan(plan: dict) -> list[dict]:
     # a 4-slot plan.  A plan is considered 4-slot format when AT LEAST ONE
     # of the four slots is present, OR when an explicit marker
     # (``schema_version: "four_slot"``) is set.  Legacy plans with none of
-    # these markers skip the check silently (A15 is opt-in via exp_designer
+    # these markers skip the check silently (opt-in via exp_designer
     # prompt producing the new format).
     has_any_slot = any(s in plan for s in _FOUR_SLOT_SCHEMA)
     is_declared = plan.get("schema_version") == "four_slot"

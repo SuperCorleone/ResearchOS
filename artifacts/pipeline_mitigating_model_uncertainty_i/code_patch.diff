@@ -1,15 +1,6 @@
-*** Begin Patch
-*** Add File: run_experiment.py
-+#!/usr/bin/env python3
-+"""Fast-fail runner for mitigating_model_uncertainty_i.
-+
-+This script intentionally enforces the reference-paper data consistency
-+requirement before any experiment proceeds. In the current FAST_FAIL stage,
-+the exact reference dataset / split / preprocessing artifact is not present,
-+so the script exits gracefully with a structured JSON result indicating the
-+blocker rather than fabricating data or substituting a different dataset.
-+"""
-+
+--- /dev/null
++++ b/run_experiment.py
+@@ -0,0 +1,193 @@
 +import argparse
 +import hashlib
 +import json
@@ -22,182 +13,187 @@
 +from pathlib import Path
 +
 +try:
-+    import yaml  # type: ignore
-+except Exception as exc:  # pragma: no cover
-+    print(json.dumps({"error": f"PyYAML import failed: {exc}"}))
-+    raise
++    import numpy as np
++except ImportError:  # pragma: no cover
++    np = None
 +
 +
 +PIPELINE_ID = "mitigating_model_uncertainty_i"
 +RAW_DATA_DIR = Path(f"/data/raw/{PIPELINE_ID}")
-+PIPELINE_ARTIFACT_DIR = Path(".")
-+DATA_MANIFEST_PATH = PIPELINE_ARTIFACT_DIR / "data_manifest.yaml"
++MANIFEST_PATH = Path("data_manifest.yaml")
++REQUIRED_METRICS = ["accuracy_rq1", "accuracy_rq2"]
++REFERENCE_PAPER = "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
 +
 +
-+def print_dependency_versions() -> None:
-+    versions = {
-+        "python": sys.version.replace("\n", " "),
-+        "platform": platform.platform(),
-+        "pyyaml": getattr(yaml, "__version__", "unknown"),
-+    }
-+    print("DEPENDENCY_VERSIONS=" + json.dumps(versions, sort_keys=True))
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description="Fast-fail experiment harness for stacking vs BMA on the TUNE robotics case study."
++    )
++    parser.add_argument("--seed", type=int, default=42, help="Global random seed.")
++    parser.add_argument(
++        "--data-dir",
++        type=str,
++        default=str(RAW_DATA_DIR),
++        help="Directory expected to contain the exact reference dataset artifacts.",
++    )
++    return parser.parse_args()
 +
 +
 +def seed_everything(seed: int) -> None:
 +    random.seed(seed)
-+    try:
-+        import numpy as np  # type: ignore
-+
++    os.environ["PYTHONHASHSEED"] = str(seed)
++    if np is not None:
 +        np.random.seed(seed)
-+    except Exception:
-+        pass
-+    try:
-+        import torch  # type: ignore
-+
-+        torch.manual_seed(seed)
-+        if torch.cuda.is_available():
-+            torch.cuda.manual_seed_all(seed)
-+        torch.backends.cudnn.deterministic = True
-+        torch.backends.cudnn.benchmark = False
-+    except Exception:
-+        pass
 +
 +
-+def load_yaml(path: Path):
-+    if not path.exists():
++def dependency_versions() -> dict:
++    return {
++        "python": platform.python_version(),
++        "numpy": getattr(np, "__version__", "NOT_INSTALLED"),
++        "platform": platform.platform(),
++    }
++
++
++def read_manifest_hash(manifest_path: Path) -> str:
++    if not manifest_path.exists():
 +        return None
-+    with path.open("r", encoding="utf-8") as handle:
-+        return yaml.safe_load(handle)
++    for line in manifest_path.read_text(encoding="utf-8").splitlines():
++        if line.strip().startswith("directory_hash:"):
++            return line.split(":", 1)[1].strip().strip('"').strip("'")
++    return None
 +
 +
-+def sha256_file(path: Path) -> str:
-+    digest = hashlib.sha256()
-+    with path.open("rb") as handle:
-+        while True:
-+            chunk = handle.read(1024 * 1024)
-+            if not chunk:
-+                break
-+            digest.update(chunk)
-+    return digest.hexdigest()
++def hash_directory(path: Path) -> str:
++    hasher = hashlib.sha256()
++    for file_path in sorted([p for p in path.rglob("*") if p.is_file()]):
++        hasher.update(str(file_path.relative_to(path)).encode("utf-8"))
++        hasher.update(file_path.read_bytes())
++    return hasher.hexdigest()
 +
 +
-+def directory_fingerprint(path: Path) -> str:
-+    entries = []
-+    for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
-+        rel = str(file_path.relative_to(path))
-+        entries.append(f"{rel}:{sha256_file(file_path)}")
-+    joined = "\n".join(entries).encode("utf-8")
-+    return hashlib.sha256(joined).hexdigest() if entries else "missing"
-+
-+
-+def write_minimal_manifest(raw_dir: Path, out_path: Path) -> str:
-+    manifest = {
-+        "pipeline_id": PIPELINE_ID,
-+        "data_dir": str(raw_dir),
-+        "directory_hash": directory_fingerprint(raw_dir) if raw_dir.exists() else "missing",
++def locate_reference_data(data_dir: Path) -> dict:
++    info = {
++        "exists": data_dir.exists(),
++        "rows": 0,
++        "data_hash": read_manifest_hash(MANIFEST_PATH),
 +        "files": [],
 +    }
-+    if raw_dir.exists():
-+        for file_path in sorted(p for p in raw_dir.rglob("*") if p.is_file()):
-+            manifest["files"].append(
-+                {
-+                    "path": str(file_path.relative_to(raw_dir)),
-+                    "sha256": sha256_file(file_path),
-+                    "size_bytes": file_path.stat().st_size,
-+                }
-+            )
-+    with out_path.open("w", encoding="utf-8") as handle:
-+        yaml.safe_dump(manifest, handle, sort_keys=False)
-+    return manifest["directory_hash"]
++    if not data_dir.exists():
++        return info
++    files = sorted([p for p in data_dir.rglob("*") if p.is_file()])
++    info["files"] = [str(p) for p in files]
++    if info["data_hash"] is None:
++        info["data_hash"] = hash_directory(data_dir)
++    return info
++
++
++def build_not_implemented_metrics(data_present: bool) -> dict:
++    missing_suffix = (
++        "reference dataset directory is missing at /data/raw/mitigating_model_uncertainty_i"
++        if not data_present
++        else "exact reference split/preprocessing and planner interface are unrecovered in current fast-fail artifacts"
++    )
++    metrics = {
++        "accuracy_rq1": (
++            "NOT_IMPLEMENTED: requires exact reference robotics dataset, recovered train/test split, "
++            f"and paper-faithful preprocessing from {REFERENCE_PAPER}; {missing_suffix}"
++        ),
++        "accuracy_rq2": (
++            "NOT_IMPLEMENTED: requires exact Analyze-to-Plan interface, reference planner/metaheuristic, "
++            f"and recovered paper split from {REFERENCE_PAPER}; {missing_suffix}"
++        ),
++    }
++    for metric_name in REQUIRED_METRICS:
++        if metric_name not in metrics:
++            raise RuntimeError(f"Required metric missing from output: {metric_name}")
++    return metrics
++
++
++def emit_provenance(data_dir: Path, data_info: dict) -> None:
++    print(f"[provenance] data_source=file")
++    print(f"[provenance] reference_paper={REFERENCE_PAPER}")
++    print(f"[provenance] expected_data_dir={data_dir}")
++    print(f"[provenance] data_exists={data_info['exists']}")
++    print(f"[provenance] data_rows={data_info['rows']}")
++    print(f"[provenance] split_sizes=NOT_AVAILABLE_UNTIL_REFERENCE_SPLIT_RECOVERED")
++
++
++def write_results(result: dict) -> None:
++    Path("results.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
 +
 +
 +def main() -> int:
-+    parser = argparse.ArgumentParser()
-+    parser.add_argument("--seed", type=int, default=42)
-+    parser.add_argument("--plan", type=str, default="experiment_plan.yaml")
-+    args = parser.parse_args()
-+
-+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-+    print_dependency_versions()
++    args = parse_args()
++    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
++    start_time = time.perf_counter()
++    print(json.dumps({"dependency_versions": dependency_versions()}))
 +    seed_everything(args.seed)
-+    start = time.time()
 +
-+    plan = load_yaml(Path(args.plan)) or {}
-+    data_cfg = plan.get("data", {})
-+    data_source = data_cfg.get("source", "unknown")
-+    data_split_seed = (((plan.get("plan_dataset") or {}).get("split") or {}).get("seed", None))
++    data_dir = Path(args.data_dir)
++    data_info = locate_reference_data(data_dir)
++    emit_provenance(data_dir, data_info)
 +
-+    if data_source != "file":
-+        raise RuntimeError(
-+            f"This pipeline requires data.source=file per the reference-paper consistency rule; got {data_source!r}."
++    if not data_info["exists"]:
++        logging.error(
++            "Reference dataset missing. Per data consistency rules, no synthetic or substitute data may be used. "
++            "Populate /data/raw/%s with the exact TUNE artifacts before rerunning.",
++            PIPELINE_ID,
 +        )
 +
-+    manifest_hash = write_minimal_manifest(RAW_DATA_DIR, DATA_MANIFEST_PATH)
-+
-+    if not RAW_DATA_DIR.exists() or not any(RAW_DATA_DIR.rglob("*")):
-+        logging.error("Missing reference dataset directory: %s", RAW_DATA_DIR)
-+        print(
-+            f"PROVENANCE source={data_source} rows=unknown split_seed={data_split_seed} raw_dir={RAW_DATA_DIR}"
-+        )
-+        result = {
-+            "metrics": {},
-+            "config": {
-+                "data_source": data_source,
-+                "data_split_seed": data_split_seed,
-+                "data_rows": None,
-+                "data_hash": manifest_hash,
-+                "pipeline_id": PIPELINE_ID,
-+                "status": "blocked_missing_reference_data",
-+            },
-+            "seed": args.seed,
-+            "runtime_seconds": round(time.time() - start, 6),
-+            "status": "blocked",
-+            "error": (
-+                "Reference-paper dataset unavailable. Per experiment_plan.yaml and the data consistency rule, "
-+                "the experiment must use the exact runtime traces / replication package from the reference paper. "
-+                "No synthetic or substitute dataset is permitted."
-+            ),
-+        }
-+        print(json.dumps(result, sort_keys=True))
-+        return 0
-+
-+    files = [p for p in RAW_DATA_DIR.rglob("*") if p.is_file()]
-+    print(f"PROVENANCE source={data_source} rows=unknown split_seed={data_split_seed} file_count={len(files)}")
-+
++    metrics = build_not_implemented_metrics(data_info["exists"])
++    runtime_seconds = time.perf_counter() - start_time
 +    result = {
-+        "metrics": {},
++        "metrics": metrics,
 +        "config": {
-+            "data_source": data_source,
-+            "data_split_seed": data_split_seed,
-+            "data_rows": None,
-+            "data_hash": manifest_hash,
-+            "pipeline_id": PIPELINE_ID,
-+            "status": "blocked_pending_split_and_preprocessing_verification",
++            "data_source": "file",
++            "data_split_seed": 42,
++            "data_rows": data_info["rows"],
++            "data_hash": data_info["data_hash"],
++            "reference_paper": REFERENCE_PAPER,
++            "expected_data_dir": str(data_dir),
++            "fast_fail_reason": "Reference-faithful execution is blocked until the exact dataset, split, preprocessing, and planner interface are recovered.",
 +        },
 +        "seed": args.seed,
-+        "runtime_seconds": round(time.time() - start, 6),
-+        "status": "blocked",
-+        "error": (
-+            "Raw data files may exist, but execution remains blocked until exact filename/hash matching, "
-+            "reference split reproduction, and preprocessing diff-checking against the reference implementation "
-+            "are verified. FAST_FAIL runner intentionally stops before training."
-+        ),
++        "runtime_seconds": runtime_seconds,
 +    }
-+    print(json.dumps(result, sort_keys=True))
++    write_results(result)
++    print(json.dumps(result))
 +    return 0
 +
 +
 +if __name__ == "__main__":
 +    sys.exit(main())
 +
-+
 +# === CLAIM-TO-CODE MAPPING ===
 +# | Concept ID | Claim / Concept definition | File/Function | Mechanism |
 +# |------------|----------------------------|---------------|-----------|
-+# | H1 | replacing BMA with stacking may reduce model-selection uncertainty and improve adaptation quality | run_experiment.py/main | SKIPPED because FAST_FAIL stage blocks execution until exact reference dataset/split/preprocessing are recovered |
-+# | H2 | exact reference dataset, train/test split, and preprocessing must be preserved | run_experiment.py/main; write_minimal_manifest | hard gate on /data/raw/mitigating_model_uncertainty_i plus manifest/hash/provenance emission before any training |
-+# | H3 | no synthetic or substitute dataset is allowed | run_experiment.py/main | explicit failure path when reference file data are absent; no fallback generation implemented |
++# | C1 | SKIPPED because concepts.yaml is absent in fast_fail stage, so no authoritative atomic concept IDs were available. |  |  |
 +# === END MAPPING ===
-*** Add File: requirements.txt
-+PyYAML>=6.0
-*** End Patch
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,1 @@
++numpy>=1.24
+--- /dev/null
++++ b/results.json
+@@ -0,0 +1,16 @@
++{
++  "metrics": {
++    "accuracy_rq1": "NOT_IMPLEMENTED: requires exact reference robotics dataset, recovered train/test split, and paper-faithful preprocessing from Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging; reference dataset directory is missing at /data/raw/mitigating_model_uncertainty_i",
++    "accuracy_rq2": "NOT_IMPLEMENTED: requires exact Analyze-to-Plan interface, reference planner/metaheuristic, and recovered paper split from Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging; reference dataset directory is missing at /data/raw/mitigating_model_uncertainty_i"
++  },
++  "config": {
++    "data_source": "file",
++    "data_split_seed": 42,
++    "data_rows": 0,
++    "data_hash": null,
++    "reference_paper": "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging",
++    "expected_data_dir": "/data/raw/mitigating_model_uncertainty_i",
++    "fast_fail_reason": "Reference-faithful execution is blocked until the exact dataset, split, preprocessing, and planner interface are recovered."
++  },
++  "seed": 42,
++  "runtime_seconds": 0.0
++}
+--- /dev/null
++++ b/iteration_count.txt
+@@ -0,0 +1,1 @@
++1

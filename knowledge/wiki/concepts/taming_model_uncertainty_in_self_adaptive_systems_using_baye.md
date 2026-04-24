@@ -1,7 +1,70 @@
 ---
 code_refs:
 - https://github.com/matteocamilli/bma-package
-created: '2026-04-19T17:49:51.302904+00:00'
+created: '2026-04-24T08:36:27.280852+00:00'
+evaluation_protocol:
+  evaluation_setup: ''
+  has_explicit_rqs: true
+  rq_list:
+  - baseline_result: ''
+    id: RQ1
+    metrics:
+    - accuracy
+    question: What is the prediction accuracy obtained through BMA?
+  - baseline_result: ''
+    id: RQ2
+    metrics:
+    - accuracy
+    question: What is the effectiveness of the adaptation decisions taken?
+  - baseline_result: ''
+    id: RQ3
+    metrics:
+    - accuracy
+    question: What is the cost of calculating the BMA estimates in TUNE?
+  - baseline_result: ''
+    id: RQ1
+    metrics:
+    - accuracy
+    question: prediction accuracy). To address RQ1 we executed the?
+  - baseline_result: ''
+    id: RQ1
+    metrics:
+    - accuracy
+    question: 'summary: the prediction accuracy of TUNE is always?'
+  - baseline_result: ''
+    id: RQ2
+    metrics:
+    - accuracy
+    question: effectiveness of the adaptation decisions). To address?
+  - baseline_result: ''
+    id: RQ2
+    metrics:
+    - accuracy
+    question: we conducted additional controlled experiments with the plan?
+  - baseline_result: ''
+    id: RQ2
+    metrics:
+    - accuracy
+    question: 'summary: the effectiveness the adaptation decisions of?'
+  - baseline_result: ''
+    id: RQ3
+    metrics:
+    - accuracy
+    question: cost of BMA estimates). To address the last research?
+  - baseline_result: ''
+    id: RQ3
+    metrics:
+    - accuracy
+    question: 'summary: for low-dimensional model spaces (up to 8 vari-?'
+follow_up_questions:
+- 'The application of our approach to addi-
+
+  tional case studies in other domains is part of our future work.'
+- 'As future work we plan to extend our study by considering
+
+  heterogeneous requirements, such as threshold and optimization
+
+  goals.'
 source: knowledge/raw/Taming model uncertainty in self-adaptive systems using Bayesian
   Model Averaging.pdf
 tags:

@@ -1,1 +1,9 @@
-{"verdict": "SKIP", "reason": "reverify disabled (opt-in via research_config.yaml::reverify.enabled)", "metrics_diff": {}}
+{
+  "entry_script": null,
+  "metrics_diff": {},
+  "reason": "no entry script",
+  "stderr_tail": "",
+  "stdout_hash_match": null,
+  "stdout_tail": "",
+  "verdict": "SKIP"
+}

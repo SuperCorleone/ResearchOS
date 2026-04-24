@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "verifier_guided_dynamic_task_r",
+  "title": "Verifier-Guided Dynamic Task Recomposition for Multi-Agent LLM Workflows",
+  "research_question": "Can a verifier-guided orchestration policy that dynamically recomposes task decomposition during execution reduce error propagation and token cost compared with fixed planner-executor multi-agent workflows on long-horizon AI tasks?",
+  "hypothesis": "Multi-agent workflows fail when early decomposition mistakes propagate unchecked; inserting a lightweight verifier that selectively triggers task recomposition only at high-risk intermediate states will improve end-task success while using less compute than always-on critique or escalation policies.",
+  "motivation": "The knowledge base shows recent rejected ideas clustered around uncertainty averaging and escalation policies for agent orchestration, suggesting those directions are already explored or insufficiently novel. A clearer gap is dynamic correction of decomposition itself: many agentic workflows assume the initial plan is mostly correct, yet long-horizon tasks often fail because subtask boundaries become invalid as new evidence appears. The self-adaptive systems evidence highlights the broader open problem of handling model-selection uncertainty and extending feedback-loop methods to additional domains. Translating that insight to agentic AI suggests a new direction: treat task decomposition as a revisable hypothesis and trigger recomposition only when verifier signals indicate the current decomposition no longer fits the observed execution state. This targets a core failure mode in multi-agent systems while avoiding overlap with previously rejected uncertainty-averaging and escalation proposals.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-22T20:06:36.875684+00:00",
+  "status": "pending"
+}

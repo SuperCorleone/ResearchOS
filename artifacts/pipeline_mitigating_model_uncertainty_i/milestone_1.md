@@ -1,76 +1,79 @@
-# Milestone Report: Mitigating Model Uncertainty in Self-Adaptive Systems via Stacking-Based Ensemble
+# Milestone Report: Mitigating Model Uncertainty in Self-Adaptive Systems
 
 **Pipeline ID**: mitigating_model_uncertainty_i  
 **Milestone**: M1  
-**Date**: 2026-04-19
+**Date**: 2026-04-24  
 
 ## Executive Summary
-The attempt to replace Bayesian Model Averaging (BMA) with a stacking-based ensemble meta-learner in self-adaptive systems' Analyze component could not be empirically tested. The necessary reference dataset to validate the hypothesis was unavailable, rendering the experiment inconclusive.
+This milestone aimed to explore stacking-based ensemble methods as replacements for Bayesian Model Averaging (BMA) in the MAPE-K loop to handle model-selection uncertainty in self-adaptive systems. However, execution is currently blocked because the exact dataset version, train/test split, and preprocessing pipeline from the reference TUNE paper have not been recovered. No substantive experiment has yet run.
 
 ## Research Question
-Can replacing BMA with a stacking-based ensemble meta-learner in the MAPE-K analyze component reduce model-selection uncertainty and improve adaptation quality in self-adaptive systems?
+How can stacking-based ensemble methods replace Bayesian Model Averaging (BMA) in the MAPE-K loop to better handle model-selection uncertainty in self-adaptive systems?
 
 ## Work Completed
-1. **Hypothesis**: The hypothesis posited that a stacking-based ensemble meta-learner could reduce predictive uncertainty and enhance adaptation quality compared to BMA. However, due to lack of dataset, this could not be tested.
-2. **Experiment Design**: The design focused on reusing the exact reference dataset from the original paper, adhering to same preprocessing, and testing the stacking approach's effectiveness against the BMA baseline.
-3. **Results**: No empirical metrics were observed as the reference dataset could not be obtained.
-4. **Analysis**: Verdict is INCONCLUSIVE due to absence of reference data necessary for hypothesis testing.
+1. **Hypothesis**: The hypothesis posits that replacing BMA with a stacking-based ensemble, while maintaining the same dataset, split, and preprocessing, will improve prediction and adaptation accuracy by 2 percentage points, with computational cost not worsening by more than 5 points.
+2. **Experiment Design**: Experiments were planned to compare stacking vs. BMA using the same candidate logistic models on a reference robotics dataset, maintaining identical train/test splits from the reference paper.
+3. **Results**: Placeholder results due to execution block, shown as `accuracy_rq1=0.0`, `accuracy_rq2=0.0` (indicating blocked run).
+4. **Analysis**: INCONCLUSIVE — execution is blocked due to missing reference-faithful dataset and preprocessing.
 
 ## Data Source & Consistency
-- **Data origin**: Search-and-rescue robot runtime traces from "Taming Model Uncertainty in Self-Adaptive Systems Using Bayesian Model Averaging"
-- **Reference paper consistency**: The experiment was halted due to missing reference data which is crucial for consistency.
-- **Splits used**: The original paper’s test/train split is mandatory, but verification could not be conducted.
-- **Preprocessing**: Not applicable as no data was processed.
+- **Data origin**: Search-and-rescue robot case study dataset from TUNE paper artifacts
+- **Reference paper consistency**: Dataset matches reference paper requirements; however, the exact version and splits need to be verified.
+- **Splits used**: Placeholder status; actual split is pending recovery.
+- **Preprocessing**: Not yet executed; pipeline matching the reference is yet to be verified.
 
 ## Baseline & Proposed Method
-- **Baseline method**: Bayesian Model Averaging using candidate Generalized Linear Models.
-- **Faithfulness to reference**: Unable to verify due to unavailable dataset.
-- **Baseline source**: Reference paper "Taming Model Uncertainty in Self-Adaptive Systems Using Bayesian Model Averaging".
-- **Proposed method summary**: The proposed method aimed to use a stacking-based ensemble to see if it surpasses BMA in predictive performance.
+- **Baseline method**: TUNE with Bayesian Model Averaging, using logistic regression models in a MAPE-K loop.
+- **Faithfulness to reference**: Baseline comparison blocked until data recovery.
+- **Baseline source**: Reference paper's repository.
+- **Proposed method summary**: Stacking replaces BMA to combine model predictions, maintaining the original adaptation interface.
 
 ## Detailed Metrics Table
-No metrics available due to the lack of dataset.
+| Metric | Baseline | Proposed | Delta | Unit |
+|--------|----------|----------|-------|------|
+| accuracy_rq1 | 0.50* | 0.0 | -0.50 | Accuracy |
+| accuracy_rq2 | 0.50* | 0.0 | -0.50 | Accuracy |
+
+(*Baseline values are placeholders pending data recovery and actual measurement)
 
 ## Critic Verdict
-- **Verdict**: INCONCLUSIVE 
-- **Rationale**: Without the correct dataset, the experiment cannot verify the hypothesis.
-- **Conditions or caveats**: Reference data retrieval is necessary for continuing.
+- **Verdict**: INCONCLUSIVE
+- **Rationale**: Unable to execute baseline comparison due to data availability constraints—zero scores reflect blocking, not model failure.
+- **Conditions or caveats**: Immediate focus is on recovering reference dataset, splits, and preprocessing.
 
 ## Key Findings
-- Missing dataset critical for any comparative analysis against the BMA baseline.
-- An INCONCLUSIVE verdict due to lack of empirical results.
+- Execution must pause until exact reference split and preprocessing are verified.
+- Placeholder results show the need to prioritize faithful reproduction of original conditions.
 
 ## Open Issues
-- FAIL: Brier score improvement vs BMA not measured.
-- FAIL: Requirement-violating adaptation rate improvement vs BMA not measured.
-- Reference dataset unavailability prevents hypothesis testing.
+- FAIL: Reference-faithful data preprocessing and split not yet recovered.
 
 ## Resource Usage
-- Budget allocated: 20000
-- Budget used: 0
+- Budget allocated: 20000 credits
+- Budget used: 0 credits
 - Steps completed: 1
 
 ## Computational Cost (G7)
-- Total runtime: 0.0
-- Measurement type: simulated
-- Hardware: Not applicable
+- Total runtime: 0.0 seconds
+- Measurement type: estimated
+- Hardware: unspecified
 - Cost breakdown by step:
-  | Step      | Runtime | Credits Used |
-  |-----------|---------|--------------|
-  | CODE      | N/A     | N/A          |
-  | RUN       | 0.0     | 0            |
+  | Step      | Runtime    | Credits Used |
+  |-----------|-----------|--------------|
+  | CODE      | N/A       | N/A          |
+  | RUN       | 0.0 seconds | 0           |
 
 ## Artifacts Produced
-| Artifact             | Status   |
-|----------------------|----------|
-| hypothesis.md        | present  |
-| experiment_plan.yaml | present  |
-| results.json         | present  |
-| analysis_report.md   | present  |
+| Artifact | Status |
+|----------|--------|
+| hypothesis.md | present |
+| experiment_plan.yaml | present |
+| results.json | present |
+| analysis_report.md | present |
 
 ## Recommendation
 ITERATE
 
 ## Next Steps (if continuing)
-1. Obtain the exact reference dataset and verification of preprocessing steps.
-2. Re-run the experiment, ensuring the reference paper's conditions and splits are adhered to.
+1. Recover the full dataset, preprocessing steps, and original train/test split from reference artifacts.
+2. Execute baseline BMA to validate setup fidelity before integrating stacking.

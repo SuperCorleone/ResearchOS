@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "verifier_guided_adaptive_task_",
+  "title": "Verifier-Guided Adaptive Task Decomposition for Multi-Agent LLM Workflows",
+  "research_question": "Can a verifier-guided controller that dynamically revises task decomposition during execution reduce failure cascades and token cost compared with static multi-agent workflows on complex reasoning tasks?",
+  "hypothesis": "Static decompositions cause avoidable downstream errors when early subtasks are underspecified or incorrect; inserting a verifier that monitors intermediate artifacts and triggers selective re-decomposition will improve end-task accuracy and efficiency over fixed-plan orchestration.",
+  "motivation": "The knowledge base shows recent rejected ideas concentrated on uncertainty averaging and escalation policies for agent orchestration, suggesting a saturation point around risk scoring alone but leaving a gap on structural adaptation of the workflow itself. Separately, the self-adaptive systems evidence highlights that overcommitting to a single model or plan can produce poor predictions and unnecessary adaptations, motivating transfer of adaptive feedback-loop ideas to agent workflows. A promising new direction is to treat task decomposition as a revisable object rather than a one-shot plan: a verifier monitors intermediate outputs, detects likely decomposition mismatch, and selectively re-plans only the failing branch. This targets a practical weakness of current multi-agent systems—failure propagation from early bad decompositions—while avoiding overlap with already rejected uncertainty-averaging proposals.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-22T20:06:03.404300+00:00",
+  "status": "pending"
+}

@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "adaptive_communication_gating_",
+  "title": "Adaptive communication gating for multi-agent workflows",
+  "research_question": "Can a MAPE-K-inspired controller that dynamically adjusts inter-agent communication frequency and routing improve task success per token and latency in multi-agent LLM workflows compared with fixed communication patterns?",
+  "hypothesis": "In multi-agent workflows, many failures and inefficiencies come from static communication policies rather than weak individual agents; an adaptive controller that monitors collaboration signals and selectively triggers, suppresses, or reroutes messages will improve efficiency and maintain or increase solution quality.",
+  "motivation": "The knowledge base shows a rejected idea around Bayesian uncertainty-aware scheduling for multi-agent workflows, suggesting scheduling-only uncertainty handling may be too close to existing directions or insufficiently novel. Separately, the self-adaptive systems literature in the KB highlights an open gap: uncertainty handling is commonly added to analyze/plan loops, but future work calls for extension to additional domains and heterogeneous requirements. A promising unexplored angle is to transfer self-adaptive MAPE-K control into agentic workflow optimization, not for task scheduling itself, but for communication management under runtime uncertainty. Multi-agent LLM systems often overspend tokens through unnecessary discussion or fail because useful agents are not consulted at the right time. Adaptive communication gating directly targets this bottleneck and offers a clearer novelty boundary than another scheduler proposal.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T08:43:19.489181+00:00",
+  "status": "pending"
+}

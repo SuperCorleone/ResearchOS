@@ -1,4 +1,11 @@
-"""Tests for DESIGN_REVIEW and CODE_PREFLIGHT checkpoint steps."""
+"""Tests for checkpoint steps.
+
+DESIGN_REVIEW was retired in the 2026-04 refactor — exp_designer now
+runs its own scientific self-review, and design_checks.py handles the
+structural checks (zero-token). The tests here cover the remaining
+checkpoint step (CODE_PREFLIGHT) plus the DESIGN→CODE_RECON→CONCEPT→CODE
+chain.
+"""
 
 from __future__ import annotations
 
@@ -16,9 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ── Pipeline Step enum ───────────────────────────────────────────
 
 class TestPipelineStepEnum:
-    def test_design_review_exists(self):
+    def test_design_review_retired(self):
+        """DESIGN_REVIEW enum was removed in the 2026-04 refactor."""
         from researchos.schemas.pipeline import PipelineStep
-        assert PipelineStep.DESIGN_REVIEW.value == "design_review"
+        assert not hasattr(PipelineStep, "DESIGN_REVIEW")
 
     def test_code_preflight_exists(self):
         from researchos.schemas.pipeline import PipelineStep
@@ -28,8 +36,7 @@ class TestPipelineStepEnum:
         from researchos.schemas.pipeline import PipelineStep
         steps = list(PipelineStep)
         names = [s.value for s in steps]
-        assert names.index("design") < names.index("design_review")
-        assert names.index("design_review") < names.index("code")
+        assert names.index("design") < names.index("code")
         assert names.index("code") < names.index("code_preflight")
         assert names.index("code_preflight") < names.index("run")
 
@@ -37,14 +44,14 @@ class TestPipelineStepEnum:
 # ── Step routing (MAIN vs FAST_FAIL) ─────────────────────────────
 
 class TestStepRouting:
-    def test_main_design_goes_to_review(self):
+    def test_main_design_goes_to_code_recon(self):
+        """MAIN chain post-refactor: DESIGN → CODE_RECON → CONCEPT_EXTRACT → CODE."""
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        # In MAIN, DESIGN is dynamically resolved.
-        # Wave 2 + A20: DESIGN_REVIEW → CODE_RECON → CONCEPT_EXTRACT → CODE
-        key = (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW)
-        assert key in _NEXT_STEP
-        assert _NEXT_STEP[key] == PipelineStep.CODE_RECON
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.DESIGN)]
+            == PipelineStep.CODE_RECON
+        )
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CODE_RECON)]
             == PipelineStep.CONCEPT_EXTRACT
@@ -73,32 +80,26 @@ class TestStepRouting:
         key = (PipelineStage.FAST_FAIL, PipelineStep.CODE)
         assert _NEXT_STEP[key] == PipelineStep.RUN
 
-    def test_fast_fail_no_design_review_key(self):
-        from researchos.runtime.scheduler import _NEXT_STEP
-        from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        key = (PipelineStage.FAST_FAIL, PipelineStep.DESIGN_REVIEW)
-        assert key not in _NEXT_STEP
-
-    def test_step_artifact_includes_new_steps(self):
+    def test_step_artifact_covers_active_steps(self):
         from researchos.runtime.scheduler import STEP_ARTIFACT
         from researchos.schemas.pipeline import PipelineStep
-        assert STEP_ARTIFACT[PipelineStep.DESIGN_REVIEW] == "design_review.md"
+        # DESIGN_REVIEW was retired — no entry expected.
         assert STEP_ARTIFACT[PipelineStep.CODE_PREFLIGHT] == "preflight_report.json"
 
 
 # ── Dispatcher mappings ──────────────────────────────────────────
 
 class TestDispatcherMappings:
-    def test_step_agent_has_new_steps(self):
+    def test_step_agent_covers_active_steps(self):
         from researchos.runtime.dispatcher import STEP_AGENT
         from researchos.schemas.pipeline import PipelineStep
-        assert STEP_AGENT[PipelineStep.DESIGN_REVIEW] == "design_reviewer"
+        # DESIGN_REVIEW was retired — no entry expected.
         assert STEP_AGENT[PipelineStep.CODE_PREFLIGHT] == "code_preflight"
 
-    def test_step_output_has_new_steps(self):
+    def test_step_output_covers_active_steps(self):
         from researchos.runtime.dispatcher import STEP_OUTPUT
         from researchos.schemas.pipeline import PipelineStep
-        assert STEP_OUTPUT[PipelineStep.DESIGN_REVIEW] == "design_review.md"
+        # DESIGN_REVIEW was retired — no entry expected.
         assert STEP_OUTPUT[PipelineStep.CODE_PREFLIGHT] == "preflight_report.json"
 
 
@@ -356,15 +357,16 @@ class TestCodePreflight:
 # ── Agent definitions ────────────────────────────────────────────
 
 class TestAgentDefinitions:
-    def test_design_reviewer_agent_exists(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/design_reviewer.md"
-        assert path.exists()
-        content = path.read_text()
-        assert "design_review.md" in content
-        assert "PASS" in content and "REVISE" in content and "BLOCK" in content
+    def test_design_reviewer_retired(self):
+        """design_reviewer.md was deleted — its scientific review is now
+        a Self-Review section inside exp_designer.md."""
+        path = PROJECT_ROOT / "researchos/agent_defs/design_reviewer.md"
+        assert not path.exists()
+        exp_designer = (PROJECT_ROOT / "researchos/agent_defs/exp_designer.md").read_text()
+        assert "Self-Review" in exp_designer
 
     def test_critic_references_preflight(self):
-        path = PROJECT_ROOT / ".openharness/plugins/researchos/agents/critic.md"
+        path = PROJECT_ROOT / "researchos/agent_defs/critic.md"
         content = path.read_text()
         assert "preflight_report.json" in content
         assert "CODE_PREFLIGHT" in content
@@ -380,18 +382,8 @@ class TestSimulateNewSteps:
     def teardown_method(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_simulate_design_review(self):
-        from researchos.runtime.dispatcher import Dispatcher
-        from researchos.schemas.pipeline import PipelineState, PipelineStage, PipelineStep
-        d = Dispatcher(self.tmpdir, simulate=True)
-        p = PipelineState(
-            pipeline_id="test_sim", title="T", stage=PipelineStage.MAIN,
-            step=PipelineStep.DESIGN,
-        )
-        d._simulate_step(p, PipelineStep.DESIGN_REVIEW)
-        out = self.tmpdir / "artifacts" / "pipeline_test_sim" / "design_review.md"
-        assert out.exists()
-        assert "PASS" in out.read_text()
+    # test_simulate_design_review removed — DESIGN_REVIEW step was retired
+    # in the 2026-04 refactor (simulate path no longer produces design_review.md).
 
     def test_simulate_code_preflight(self):
         from researchos.runtime.dispatcher import Dispatcher

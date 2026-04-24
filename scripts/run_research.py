@@ -481,14 +481,16 @@ def cmd_fix(args: argparse.Namespace) -> None:
     )
     prompt = "\n".join(header_lines)
 
-    print(f"  Dispatching fixer agent...")
+    print(f"  Dispatching coder agent (A16-loop fix mode)...")
 
-    # Run fixer via agent executor
+    # The fixer agent was folded into coder's A16-loop in the 2026-04
+    # refactor. Coder reads advisor_verdict.yaml + correction_report.md
+    # and applies per-concept fixes.
     from researchos.runtime.dispatcher import Dispatcher
     dispatcher = Dispatcher(PROJECT_ROOT, backend="auto")
 
     result = asyncio.run(
-        dispatcher.dispatch_via_executor("fixer", prompt, pipeline_id)
+        dispatcher.dispatch_via_executor("coder", prompt, pipeline_id)
     )
 
     if result["success"]:
@@ -525,47 +527,29 @@ def cmd_fix(args: argparse.Namespace) -> None:
         print(f"  ERROR: Fixer failed: {result.get('output', '')[:300]}")
 
 
-# ── continue (inject-mode user_approve unblock) ────────────────
-
-
-_FEEDBACK_TEMPLATE_MARKERS = (
-    "<!-- user_approve/feedback.md — edit this file",
-    "## What to change\n\n- \n\n## What to keep",
-)
-
-
-def _feedback_is_untouched(body: str) -> bool:
-    """Return True when feedback.md still looks like the scaffold template."""
-    stripped = body.strip()
-    if not stripped:
-        return True
-    has_marker = any(m in body for m in _FEEDBACK_TEMPLATE_MARKERS)
-    non_comment_lines = [
-        ln.strip() for ln in body.splitlines()
-        if ln.strip() and not ln.strip().startswith("<!--")
-        and not ln.strip().startswith("#")
-        and ln.strip() != "-"
-    ]
-    return has_marker and not non_comment_lines
+# ── cmd_continue removed (HITL user_approve mechanism deleted 2026-04) ──
+# Legacy command `continue --pipeline ID` read user_approve/feedback.md and
+# dispatched fixer to unblock an inject-mode pipeline. HITL gates are now
+# removed; pipelines auto-advance after FAST_FAIL. Users who still need to
+# inject feedback should use `tweak --pipeline ID "directive"`.
 
 
 def cmd_continue(args: argparse.Namespace) -> None:
-    """Resume an inject-mode pipeline blocked on user_approve/feedback.md.
+    """DEPRECATED — HITL user_approve mechanism removed in 2026-04 refactor.
 
-    Reads feedback.md, appends it as a high-priority user directive, dispatches
-    the fixer agent with both the Professor suggestion and the user feedback,
-    then writes an ``approve`` decision so the pipeline advances to MAIN.
-
-    NOTE (R1): ``continue`` is now equivalent to
-    ``fix --user-feedback <pipeline>/user_approve/feedback.md``; both
-    paths work. This entry point is preserved for back-compat and for the
-    inject-mode auto-approve flow (which ``fix`` does not perform).
+    Emits a friendly error directing the user to `tweak` (for directives)
+    or `fix` (for coder-led corrections). Exits with non-zero.
     """
     print(
-        "  [hint] `continue` is now equivalent to "
-        "`fix --user-feedback <pipeline>/user_approve/feedback.md`; "
-        "both paths work."
+        "  ERROR: `continue` was retired when HITL gates were removed.\n"
+        "  - To inject a directive, use: tweak --pipeline ID 'directive'\n"
+        "  - To re-run the coder with fixes, use: fix --pipeline ID"
     )
+    raise SystemExit(1)
+
+
+def _cmd_continue_deprecated_body(args: argparse.Namespace) -> None:
+    """Archived original implementation — never called. Delete after Phase 1."""
     pipeline_id = args.pipeline
     sm = StateManager(PROJECT_ROOT)
     pipeline = sm.load_pipeline(pipeline_id)
@@ -1092,7 +1076,23 @@ def _record_topic_feedback(pipeline_id: str, title: str, decision: str, feedback
 
 
 def cmd_review(args: argparse.Namespace) -> None:
-    """Review a pipeline after FAST_FAIL and decide: approve / tweak / kill."""
+    """DEPRECATED — HITL review mechanism removed in 2026-04 refactor.
+
+    Pipelines no longer pause after FAST_FAIL for user review; the
+    scheduler auto-advances based on fast_fail_auto_block + professor
+    autonomous decisions.
+    """
+    print(
+        "  ERROR: `review` was retired when HITL gates were removed.\n"
+        "  Pipelines now auto-advance after FAST_FAIL.\n"
+        "  - To kill, use: kill <pipeline_id>\n"
+        "  - To inject a directive, use: tweak --pipeline ID 'directive'"
+    )
+    raise SystemExit(1)
+
+
+def _cmd_review_deprecated_body(args: argparse.Namespace) -> None:
+    """Archived. Delete after Phase 1."""
     pipeline_id = args.pipeline
     pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
     if not pdir.exists():
@@ -1399,19 +1399,9 @@ def main() -> None:
     p_cand_brief = p_cand_sub.add_parser("brief", help="Generate detailed brief for a candidate")
     p_cand_brief.add_argument("index", type=int, help="Candidate number (from 'list')")
 
-    # review
-    p_review = subparsers.add_parser("review", help="Review pipeline after FAST_FAIL (approve/tweak/kill)")
-    p_review.add_argument("--pipeline", required=True, help="Pipeline ID")
-    p_review.add_argument("--approve", action="store_true", help="Approve → enter MAIN stage")
-    p_review.add_argument("--tweak", metavar="DIRECTIVE", help="Tweak → re-run DESIGN with directive")
-    p_review.add_argument("--kill", nargs="?", const=True, help="Kill pipeline (optional reason)")
-
-    # continue (inject-mode user_approve)
-    p_continue = subparsers.add_parser(
-        "continue",
-        help="Resume inject-mode pipeline after editing user_approve/feedback.md",
-    )
-    p_continue.add_argument("--pipeline", required=True, help="Pipeline ID")
+    # review / continue — deleted in 2026-04 refactor (HITL gates removed).
+    # cmd_review / cmd_continue stubs still exist for friendly error
+    # messages; users are redirected to tweak / fix / kill.
 
     # query
     p_query = subparsers.add_parser("query", help="Ask a question about a pipeline")
@@ -1483,8 +1473,7 @@ def main() -> None:
         "launch": cmd_launch,
         "trial": cmd_trial,
         "candidates": cmd_candidates,
-        "review": cmd_review,
-        "continue": cmd_continue,
+        # review / continue removed — HITL gate mechanism deleted
         "query": cmd_query,
         "tweak": cmd_tweak,
         "explore": cmd_explore,

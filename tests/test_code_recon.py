@@ -340,9 +340,10 @@ class TestPreflightReferenceCodebases:
 
 
 class TestCodeReconRouting:
-    def test_design_review_routes_to_code_recon(self):
+    def test_design_routes_to_code_recon(self):
+        """Post-2026-04: DESIGN → CODE_RECON directly (DESIGN_REVIEW retired)."""
         from researchos.runtime.scheduler import _NEXT_STEP
-        key = (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW)
+        key = (PipelineStage.MAIN, PipelineStep.DESIGN)
         assert _NEXT_STEP[key] == PipelineStep.CODE_RECON
 
     def test_code_recon_routes_to_concept_extract(self):

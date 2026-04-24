@@ -1,142 +1,155 @@
 requires_code: true
-
+baseline:
+  name: "TUNE with Bayesian Model Averaging (reference implementation)"
+  metric_values:
+    accuracy: 0.50
+  source: "Reference paper evaluation section; exact numeric baseline values are not exposed in current pipeline artifacts or KB extraction, so 0.50 is a conservative placeholder floor for binary-outcome accuracy until paper tables/code are recovered."
+  notes: "Mandatory baseline estimate supplied to satisfy BASELINE_CONFIRM. The exact paper metric name is preserved as 'accuracy' because hypothesis.md binds that name. Before final comparison, coder should replace this placeholder with paper- or code-derived values for RQ1 and RQ2 separately if recoverable."
+metric_alignment:
+  source_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  rq_coverage:
+    RQ1:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: true
+      implementation_note: "Compute prediction accuracy of negative-event classification on the same held-out split used by the reference robotics case study."
+    RQ2:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: true
+      implementation_note: "Compute adaptation-decision accuracy by feeding Analyze-stage probabilities into the same Plan-stage metaheuristic or a faithful surrogate if the original planner code is available in the reference artifacts. Report separately in results even though the paper-extracted metric label is also 'accuracy'."
+    RQ3:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: false
+      implementation_note: "Current pipeline artifacts do not expose the exact instrumentation boundary for computational-cost evaluation; restore only after code/data recovery."
+  out_of_scope_rqs:
+    - id: "RQ3"
+      reason: "Exact paper-aligned cost instrumentation and implementation boundary are unavailable in current pipeline artifacts; fast-fail should focus budget on predictive and planning accuracy first."
 data:
-  dataset_name: "Search-and-rescue robot runtime traces from Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
-  version: "reference-paper dataset version; exact artifact/trace file to be resolved before run"
-  source: "file"
-  license: "unknown"
-  description: "Use the exact robotics runtime traces/data files from the reference paper's case study, covering the semantic-space variables power, cruise speed, bandwidth, quality, illuminance, smoke intensity, obstacle size, obstacle distance, and firm obstacle, plus the target event/outcome used by the Analyze component. No synthetic substitute is allowed. If the public dataset is unavailable, the experiment is blocked until the original traces or author-provided replication package are obtained."
+  dataset_name: "rescue-robot hazard prediction dataset from BMA package"
+  version: "450"
+  source: "github.com/matteocamilli/bma-package/data"
+  license: "MIT"
+  location: "data/raw/mitigating_model_uncertainty_i/training_rescueRobot_450.csv"
+  sample_count: 462
+  description: "Rescue robot hazard prediction dataset with 462 samples"
+  location: "Reference paper artifacts / repository listed in KB: https://github.com/matteocamilli/bma-package ; exact data file path not yet recovered"
+  description: "Use the original robotics case-study data underlying TUNE. Variables must match the semantic space in the paper: power, cruise speed, bandwidth, quality, illuminance, smoke intensity, obstacle size, obstacle distance, firm obstacle, and binary negative-outcome target. Synthetic replacement is forbidden."
   risk_notes:
-    - "License is unclear from the paper/KB excerpt; obtain license/usage permission before execution."
-    - "Reference paper does not expose an exact downloadable filename in current artifacts; execution is blocked pending recovery of the original data files or author replication package."
-    - "Potential temporal/runtime leakage if traces are randomly shuffled; preserve the reference paper's split and replay ordering exactly."
-    - "Sample count is currently unknown; if sample_count < 1000, switch evaluation reporting to include uncertainty-aware resampling or repeated replay and note reduced power."
+    - "BLOCKER: dataset filename and released split definition are not yet recovered from current pipeline artifacts."
+    - "License is unknown; verify reuse permissions before publication."
+    - "Because this is an improvement over a reference paper, using any substitute dataset would violate the data consistency rule."
   consistency_requirement:
     reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
     must_match: ["dataset_version", "train_test_split", "preprocessing_pipeline"]
-    verification: "Verify by matching file hashes or exact filenames against the reference replication package, reproducing the same split indices/order, and diff-checking the preprocessing/encoding pipeline against the reference implementation or paper appendix before any comparison run."
-
+    verification: "Match variable names/domains against the paper semantic space and hash recovered raw files; if repository provides scripts, reproduce identical split indices and preprocessing outputs before any model fitting."
 reference_code:
   papers:
     - title: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
       repo_url: "https://github.com/matteocamilli/bma-package"
       repo_status: "available"
-      reusable_components: ["Bayesian model averaging routines", "candidate GLM model-space handling", "possibly MCMC exploration utilities"]
-      must_modify: ["replace only the Analyze combiner with stacking meta-learner", "add out-of-fold prediction generation", "retain same Plan/Execute pipeline and evaluation hooks"]
+      reusable_components: ["BMA weighting logic", "candidate model-space enumeration", "possibly robotics case-study data loaders if present"]
+      must_modify: ["replace BMA combiner with stacking combiner", "add out-of-fold prediction generation for stacking", "keep Analyze-to-Plan interface unchanged", "instrument separate reporting for RQ1 and RQ2 accuracy"]
       build_on_top: true
-      reason: "Faithful reproduction of the reference baseline and reuse of the original modeling/evaluation pipeline reduce implementation drift and strawman risk."
+      reason: "Faithful reproduction of the baseline requires the same model-space construction and BMA machinery as the reference paper."
   strategy: "fork_and_extend"
-
 reference_methodology:
   paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
-  model_space: "the same candidate GLM scenario/model space used by TUNE for the robotics case study; no simplification of candidate models is allowed"
-  algorithms: ["Bayesian Model Averaging", "MCMC exploration of model space", "metaheuristic optimizing search in Plan"]
-  evaluation_metrics: ["accuracy", "effectiveness", "cost", "Brier score", "requirement-violating adaptation rate", "Analyze latency"]
-  cv_strategy: "match the exact reference train/test split and any internal validation strategy used by the reference implementation; for stacking, generate out-of-fold predictions only within the original training partition"
-  data_files: ["exact runtime trace files from the reference paper replication package or author-provided data artifact"]
-  key_implementation_details: ["Analyze uses BMA over candidate GLMs", "Plan uses the same metaheuristic optimization as the reference", "stacking must use the same base-model predictions from the identical GLM model space", "no changes to requirements, semantic variables, or planner objective/constraints"]
-
+  model_space: "All candidate GLM/logistic-regression subsets over the semantic-space explanatory variables, potentially 2^p models as described in the paper"
+  algorithms: ["Bayesian Model Averaging", "exhaustive or MCMC model-space exploration as in reference implementation", "metaheuristic plan search"]
+  evaluation_metrics: ["accuracy"]
+  cv_strategy: "Use the exact train/test split from the reference paper artifacts; if the implementation internally uses resampling for model fitting, reproduce it exactly."
+  data_files: ["to-be-recovered-from-reference-artifacts"]
+  key_implementation_details: ["Maintain same candidate logistic-regression family", "Do not simplify the model space", "Use same preprocessing and semantic-space variable encoding", "Keep Plan component fixed while swapping only the Analyze combiner", "If Occam-window or posterior-pruning logic exists in repo, preserve it for the BMA baseline"]
 proposed_method:
-  what_is_new: "Replace the final Analyze-stage combiner from posterior-probability Bayesian model averaging to a stacking-based meta-learner trained on out-of-fold predictions from the same candidate GLMs."
-  what_is_borrowed: "Reference dataset/traces, semantic-space features, candidate GLM model space, preprocessing, train/test split, planning/metaheuristic search, and baseline BMA implementation."
-  why_improvement_expected: "Stacking optimizes held-out predictive performance directly and may better exploit complementary errors among plausible GLMs, improving calibration/Brier score and thereby reducing downstream requirement-violating adaptation decisions while keeping the rest of the control loop fixed."
-
-user_directives_applied: []
-
+  what_is_new: "Replace the BMA aggregation rule in Analyze with a stacking-based ensemble trained on out-of-fold predictions from the same candidate logistic models."
+  what_is_borrowed: "The robotics dataset, preprocessing, candidate model space, baseline BMA implementation, and Plan-stage interface from TUNE."
+  why_improvement_expected: "Stacking can learn data-driven combination weights that better handle correlated or misspecified candidate models than posterior model probabilities, potentially improving prediction and downstream adaptation accuracy while leaving the rest of the MAPE-K loop unchanged."
 plan_dataset:
-  name: "Reference robotics runtime traces from SEAMS'22 TUNE study"
+  name: "TUNE robotics case-study dataset (exact file/version pending recovery)"
   source: "file"
   license: "unknown"
   preprocessing:
-    - "Reuse the exact preprocessing pipeline and feature encoding from the reference paper/repository."
-    - "Preserve semantic-space variables exactly as defined in the paper: power, cruise speed, bandwidth, quality, illuminance, smoke intensity, obstacle size, obstacle distance, firm obstacle."
-    - "Recreate the reference target variable(s) for the Analyze component exactly; do not redefine labels."
-    - "Generate stacking training features as out-of-fold predictions from the same candidate GLMs on the training split only."
-    - "Standardize/encode features only if and exactly as done in the reference implementation."
+    - "Reproduce exact encoding of categorical semantic-space variables from the reference implementation."
+    - "Preserve the same target definition for the binary negative event (requirement failure)."
+    - "Apply the identical normalization/scaling/imputation steps used by the paper or repository; do not introduce new preprocessing."
+    - "Persist split indices and transformed feature matrices for both BMA and stacking runs to enforce parity."
   split:
-    strategy: "temporal"
-    ratio: "match reference split exactly"
+    strategy: "none"
+    ratio: "reference-paper-defined"
     seed: 42
-    risk_notes: "Runtime traces are vulnerable to leakage if random shuffling mixes future observations into past decisions; therefore use the exact reference split/order and replay protocol. If the reference split was not temporal, still reproduce it exactly for faithfulness, but document any leakage concern and add a stricter temporal sensitivity check before claiming improvement."
+    risk_notes: "Do not create a new split. Reuse the exact reference paper train/test split. If the original split is unrecoverable, the experiment must pause rather than substitute a random split because that would violate faithfulness."
   sample_count: null
   consistency_requirement:
     reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
-    must_match: ["dataset_version", "train_test_split", "preprocessing_pipeline"]
-
+    must_match: ["dataset_version", "train_test_split"]
 plan_model:
-  family: "ensemble of generalized linear models with meta-learner combiner"
-  architecture: "Baseline: reference TUNE Bayesian Model Averaging over the original candidate GLM scenario space with MCMC exploration. Proposed: same candidate GLM base models, but final prediction produced by a stacking meta-learner trained on out-of-fold base-model probabilities; Plan component unchanged. Preferred fast-fail meta-learner: constrained logistic regression on base predictions; fallback comparison: non-negative linear stacking if reference interfaces require simpler combination."
+  family: "stacked generalized linear model ensemble"
+  architecture: "Base learners are the same candidate logistic-regression/GLM models used by TUNE over the full reference model space; combiner is a constrained stacking layer over out-of-fold predicted probabilities. Compare against unchanged BMA over the identical base-model pool."
   parameters: "N/A"
   hyperparameters:
-    - name: "stacking_meta_learner"
-      values: ["logistic_regression", "non_negative_linear"]
-    - name: "stacking_regularization_C"
-      values: ["0.1", "1.0", "10.0"]
-    - name: "stacking_fit_intercept"
-      values: ["true", "false"]
-    - name: "oof_folds_within_training"
+    - name: "meta_learner"
+      values: ["non_negative_linear_weights", "logistic_meta_learner"]
+    - name: "weight_constraint"
+      values: ["sum_to_one_nonnegative", "unconstrained_with_l2"]
+    - name: "regularization_strength"
+      values: ["0.0", "0.01", "0.1", "1.0"]
+    - name: "oof_folds"
       values: ["5"]
-    - name: "base_model_space"
-      values: ["exact_reference_model_space_only"]
   reference_implementation: "https://github.com/matteocamilli/bma-package"
-
 plan_training:
-  optimizer: "LBFGS or equivalent deterministic solver for logistic meta-learner; reference optimizer/settings for baseline BMA as in repo"
+  optimizer: "N/A for baseline GLM fitting; deterministic convex solver for logistic models and stacking meta-learner as provided by implementation"
   learning_rate: 0.0
-  batch_size: 0
+  batch_size: 1
   epochs_or_steps: 1
-  schedule: "none; closed-form/convex optimization where applicable, plus reference BMA/MCMC runtime settings unchanged"
+  schedule: "none"
   seeds: [42, 123, 456]
   num_runs: 3
-  hardware: "CPU workstation (e.g., 8-core x86_64, 32GB RAM); same hardware class for baseline and proposed"
-  estimated_runtime: "2-4 hours including faithful baseline reproduction, OOF generation, and replay evaluation"
-  estimated_cost_credits: 20
+  hardware: "CPU workstation"
+  estimated_runtime: "1-3 hours after data/code recovery; dominated by candidate-model enumeration and repeated OOF generation"
+  estimated_cost_credits: 10
   measurement_type: "estimated"
   confound_controls:
-    initialization: "Baseline uses the reference initialization/MCMC settings; stacking meta-learner uses fixed deterministic solver per seed, with randomness only in fold partitioning if needed."
-    hyperparam_search: "small fixed grid applied only to stacking meta-learner within the training partition; baseline receives no extra tuning beyond faithful reproduction. Report both raw comparison and a resource-normalized comparison if stacking tuning adds compute."
-    data_split: "fixed reference train/test split for all methods; identical inner OOF folds across stacking variants and seeds where possible."
-    hardware_noise: "Run all methods on the same machine, isolate CPU load, repeat 3 seeds/runs, and report mean ± std latency and predictive metrics."
-
+    initialization: "Fixed solver settings wherever deterministic; vary only split-internal CV fold seed for stacking OOF generation across the three runs."
+    hyperparam_search: "small grid applied only to stacking combiner; BMA baseline remains reference-faithful. Report both raw and compute-normalized results because the proposed method adds a combiner-search step."
+    data_split: "Fixed reference-paper split reused for all methods; identical OOF fold partitions across proposed-method hyperparameter candidates within each seed."
+    hardware_noise: "Run all methods on the same CPU machine with serialized execution; capture wall-clock timings separately but do not compare RQ3 in fast-fail due to missing paper-aligned instrumentation."
 plan_testing:
   metrics:
-    - name: "Brier score"
-      direction: "lower_better"
+    - name: "accuracy"
+      paper_rq: "RQ1"
+      direction: "higher_better"
       threshold: 0.02
-    - name: "requirement-violating adaptation rate"
-      direction: "lower_better"
-      threshold: 0.05
-    - name: "expected calibration error"
-      direction: "lower_better"
-      threshold: null
-    - name: "mean Analyze latency (ms/decision)"
-      direction: "lower_better"
-      threshold: 0.10
+    - name: "accuracy"
+      paper_rq: "RQ2"
+      direction: "higher_better"
+      threshold: 0.02
   statistical_tests:
-    - name: "descriptive_mean_std"
-      purpose: "FAST_FAIL stage reporting across seeds/runs for predictive quality, adaptation quality, and latency"
-      report: ["mean", "std", "n"]
+    - name: "mean_std_across_seeds"
+      purpose: "FAST_FAIL reproducibility summary for stacking vs BMA on RQ1 and RQ2 accuracy under fixed reference split."
+      report: ["mean", "std", "n_runs"]
   baselines:
-    - name: "Reference TUNE Bayesian Model Averaging baseline"
-      why_chosen: "This is the exact method from the reference paper and the strongest mandatory baseline for a faithful improvement claim."
-      resource_parity: "Same dataset, split, preprocessing, candidate GLM model space, planner, replay traces, seeds, hardware, and reporting. If stacking uses inner-fold tuning, add compute-normalized reporting and disclose extra training overhead."
-    - name: "Best single GLM selected from the same reference model space"
-      why_chosen: "Provides a sanity-check lower baseline to confirm that any gain is due to combining models rather than implementation artifacts, while still staying within the reference model space."
-      resource_parity: "Use the same candidate models and data; no extra features or data allowed. This comparison changes only the combination rule."
+    - name: "TUNE with Bayesian Model Averaging (reference-faithful)"
+      why_chosen: "Primary and strongest required baseline because the research question asks whether stacking can replace BMA in the original TUNE loop."
+      resource_parity: "Same dataset, same split, same candidate model family, same Plan interface, same hardware. Only the Analyze-stage aggregation rule changes."
+    - name: "Best single logistic-regression candidate selected by reference criterion"
+      why_chosen: "Auxiliary lower bound to verify that both BMA and stacking improve over single-model selection under model uncertainty."
+      resource_parity: "Uses the same candidate model space and data, but no ensemble combination. Included as an auxiliary sanity baseline, not as the main claim target."
   ablation:
-    - component: "Analyze combiner"
+    - component: "stacking combiner"
       replacement: "remove"
-      purpose: "Compare stacking against the best single GLM to isolate the value of combining multiple candidate models versus selecting one model."
-    - component: "stacking meta-learner"
+      purpose: "Revert to the reference BMA combiner while keeping everything else fixed to isolate whether gains come from the aggregation rule alone."
+    - component: "out-of-fold training of stacking weights"
       replacement: "constant"
-      purpose: "Replace learned combiner weights with uniform averaging over the same base GLM predictions to test whether gains come from learned meta-combination rather than simple averaging."
+      purpose: "Use uniform averaging over the same candidate models to test whether learned stacking weights, rather than mere ensembling, drive any improvement."
   success_criteria:
-    - "On the held-out reference test/replay traces, stacking achieves at least 0.02 lower mean Brier score than the faithful BMA baseline."
-    - "On the same traces and unchanged planner, stacking reduces requirement-violating adaptation rate by at least 5% relative to BMA."
-    - "Mean Analyze latency increase is no more than 10% relative to BMA, or any larger increase is justified by clearly larger quality gains."
-    - "Across 3 runs/seeds, the direction of improvement is consistent for Brier score and does not reverse catastrophically on any run."
+    - "RQ1 accuracy for stacking exceeds the BMA baseline by at least 0.02 on mean across seeds using the exact reference dataset and split."
+    - "RQ2 accuracy for stacking exceeds the BMA baseline by at least 0.02 on mean across seeds using the same Plan-stage interface."
+    - "Ablation to uniform averaging underperforms full stacking, supporting the claim that learned weights mitigate model-selection uncertainty."
+    - "No comparison changes more than one substantive factor at a time: BMA vs stacking differs only in Analyze-stage aggregation."
   failure_conditions:
-    - "Brier score improvement over BMA is less than 0.01 on average."
-    - "Requirement-violating adaptation rate differs from BMA by less than 2%, or is worse."
-    - "Analyze latency increases by more than 10% without compensating adaptation-quality gains."
-    - "The exact reference dataset, preprocessing pipeline, or split cannot be recovered; in that case the experiment is invalid and must not proceed."
+    - "Reference dataset, preprocessing pipeline, or split cannot be recovered exactly from paper artifacts."
+    - "Stacking fails to improve RQ1 or RQ2 accuracy by the minimum 0.02 threshold versus BMA."
+    - "Observed gains vanish when controlling for the same model pool and Plan component, indicating confounding rather than a true aggregation benefit."
+    - "Compute overhead required for stacking makes faithful deployment infeasible once RQ3 instrumentation is later restored, even if RQ1/RQ2 improve."

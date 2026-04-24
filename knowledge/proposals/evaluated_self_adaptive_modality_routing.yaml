@@ -1,0 +1,49 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-22T20:34:37.935286+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Static always-multimodal workflow that invokes vision-language reasoning
+    for every eligible subtask.
+  expected_signal: At least 2% absolute accuracy gain at equal budget, or at least
+    15% fewer multimodal calls with no accuracy drop.
+  failure_condition: Disproved if accuracy improvement is < 2% at matched budget,
+    or if multimodal-call reduction is < 15% while accuracy is non-superior on the
+    mixed-difficulty evaluation set.
+  hypothesis: A self-adaptive modality-routing controller achieves a better cost-accuracy
+    trade-off than a static always-multimodal pipeline by reducing multimodal invocations
+    while maintaining or improving task accuracy across mixed-difficulty inputs.
+  metric: 'Primary: accuracy at equal token/API budget; Secondary: multimodal-call
+    reduction rate at equal or better accuracy.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=12 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a self-adaptive MAPE-K-style controller that monitors uncertainty
+    and task context to route each subtask among text-only, vision-language, and hybrid
+    reasoning modes.
+  problem_gap: Existing methods fail because they treat uncertainty-aware orchestration
+    too generically, without explicitly deciding when visual reasoning is actually
+    necessary, leading to unnecessary multimodal calls, higher cost/latency, and brittle
+    failures when a single mode is overconfident.
+  why_it_matters: Which improves end-task accuracy and cost-efficiency under changing
+    input difficulty and heterogeneous multimodal workloads.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: self_adaptive_modality_routing
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a self-adaptive controller that dynamically selects when an
+  agent workflow should invoke visual reasoning, textual reasoning, or both reduce
+  unnecessary multimodal calls while improving end-task accuracy under changing input
+  difficulty?
+retrieval_cache_key: ea8d20cf1a19c31c
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Self-Adaptive Modality Routing for Multimodal Agent Workflows

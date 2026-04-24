@@ -87,12 +87,40 @@ async def run_experiment(
                 except json.JSONDecodeError:
                     pass
 
+        warnings: list[str] = []
+        # Warning 1: suspiciously short runtime (ML experiments should not finish in <5s)
+        if elapsed < 5.0:
+            warnings.append(
+                f"SUSPICIOUS_RUNTIME: experiment completed in {elapsed:.2f}s — "
+                f"this is unusually fast for an ML experiment. "
+                f"Verify the implementation is not a stub or trivial approximation."
+            )
+
+        # Warning 2: no metrics produced
+        if not metrics:
+            warnings.append(
+                "EMPTY_METRICS: experiment script produced no numeric metrics. "
+                "Check that the script prints a JSON dict with metric values to stdout."
+            )
+
+        # Warning 3: perfect 0.0 or 1.0 values (possible mock/stub)
+        suspicious_values = [
+            k for k, v in metrics.items()
+            if isinstance(v, float) and v in (0.0, 1.0)
+        ]
+        if suspicious_values:
+            warnings.append(
+                f"SUSPICIOUS_METRICS: metrics {suspicious_values} have perfect 0.0 or 1.0 values "
+                f"— verify these are real results, not mock values."
+            )
+
         result = {
             "metrics": metrics,
             "config": config,
             "seed": seed,
             "runtime_seconds": round(elapsed, 2),
             "notes": "",
+            "warnings": warnings,
             "exit_code": proc.returncode,
             "stdout_tail": stdout_text[-2000:] if stdout_text else "",
             "stderr_tail": stderr_text[-1000:] if stderr_text else "",

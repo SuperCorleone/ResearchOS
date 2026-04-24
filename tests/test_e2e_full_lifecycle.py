@@ -92,7 +92,7 @@ async def run_test() -> bool:
         p = sm.load_pipeline(PIPELINE_ID)
         print(f"  step={p.step}, stage={p.stage.value}")
 
-    # WAITING_APPROVAL → MILESTONE
+    # REPORT → MILESTONE (WAITING_APPROVAL gate removed 2026-04)
     await scheduler.tick()
     p = sm.load_pipeline(PIPELINE_ID)
     _assert(p.stage == PipelineStage.MILESTONE, f"Expected MILESTONE got {p.stage}")
@@ -111,7 +111,7 @@ async def run_test() -> bool:
         p = sm.load_pipeline(PIPELINE_ID)
         print(f"  step={p.step}, stage={p.stage.value}")
 
-    # WAITING_APPROVAL → MILESTONE
+    # REPORT → MILESTONE (WAITING_APPROVAL gate removed 2026-04)
     await scheduler.tick()
     p = sm.load_pipeline(PIPELINE_ID)
     print(f"  -> stage={p.stage.value}, milestone_count={p.milestone_count}")

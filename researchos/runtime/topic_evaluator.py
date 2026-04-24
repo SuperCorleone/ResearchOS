@@ -434,7 +434,7 @@ def _parse_llm_analysis(raw_output: str) -> dict:
     return {}
 
 
-# ── 5-axis quick gate (A8, DeepScientist-style pre-filter) ──────
+# ── 5-axis quick gate (DeepScientist-style pre-filter) ──────────
 
 
 _FIVE_AXIS_KEYS = (
@@ -682,7 +682,7 @@ class TopicEvaluator:
 
         logger.info("Evaluating proposal: %s", title)
 
-        # Early 5-axis quick gate (pre-filter; A8)
+        # Early 5-axis quick gate (pre-filter)
         quick_total, quick_verdict = await five_axis_quick_gate(
             proposal_data, dispatcher=self.dispatcher
         )
@@ -1070,7 +1070,7 @@ class BacklogManager:
             return None
 
 
-# ── Competitive idea selection (U8) ─────────────────────────────
+# ── Competitive idea selection ───────────────────────────────────
 
 
 async def competitive_select(

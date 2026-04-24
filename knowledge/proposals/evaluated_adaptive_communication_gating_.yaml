@@ -1,0 +1,47 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T08:43:19.483585+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Static communication topology with fixed message frequency and routing
+    (e.g., every agent broadcasts at each coordination step).
+  expected_signal: '>=5% improvement in task success per 1K tokens with no latency
+    regression and no meaningful quality drop.'
+  failure_condition: success per 1K tokens improvement < 5% or median latency increases
+    by > 5% or absolute task success rate drops by > 2 percentage points versus baseline.
+  hypothesis: A MAPE-K-inspired adaptive communication gating controller increases
+    success per token by at least 5% while maintaining or reducing median latency
+    versus a fixed fully-connected communication policy across a diverse benchmark
+    of multi-agent LLM tasks.
+  metric: 'Primary: task success per 1K tokens. Secondary: median end-to-end latency,
+    with non-inferior absolute task success rate.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=14 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a MAPE-K-inspired adaptive communication controller that monitors
+    workflow signals and dynamically triggers, suppresses, delays, or reroutes inter-agent
+    messages instead of relying on static communication patterns.
+  problem_gap: Existing methods fail because fixed inter-agent communication policies
+    either overspend tokens through unnecessary exchanges or miss critical coordination
+    opportunities when runtime uncertainty changes collaboration needs.
+  why_it_matters: Which improves task success per token and end-to-end latency under
+    heterogeneous task difficulty and runtime uncertainty in multi-agent LLM workflows.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: adaptive_communication_gating_
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a MAPE-K-inspired controller that dynamically adjusts inter-agent
+  communication frequency and routing improve task success per token and latency in
+  multi-agent LLM workflows compared with fixed communication patterns?
+retrieval_cache_key: 6128409e52eb9640
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 3
+  significance: 3
+similar_papers: []
+title: Adaptive communication gating for multi-agent workflows

@@ -1,4 +1,4 @@
-"""Briefer — deterministic research-brief renderer (R2).
+"""Briefer — deterministic research-brief renderer.
 
 Replaces the LLM-based ``research_briefer`` agent with a pure Python
 renderer. Reads the ``evaluated_<id>.yaml`` produced by the

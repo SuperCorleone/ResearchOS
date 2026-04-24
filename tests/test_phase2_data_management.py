@@ -250,7 +250,7 @@ class TestDataDirectories:
 
 class TestAgentPromptsPhase2:
 
-    AGENTS_DIR = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents"
+    AGENTS_DIR = PROJECT_ROOT / "researchos" / "agent_defs"
 
     def _read(self, name):
         return (self.AGENTS_DIR / f"{name}.md").read_text()

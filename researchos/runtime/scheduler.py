@@ -46,25 +46,24 @@ from researchos.schemas.evaluation import GateResult
 
 logger = logging.getLogger(__name__)
 
-# Legacy dicts kept as module-level fallbacks for external code that imports them.
-# The scheduler now uses WorkflowConfig internally.
+# Legacy dicts kept as module-level fallbacks for external code that imports
+# them. The scheduler now uses WorkflowConfig internally.
 #
-# Wave 2 edits (A3, A7, A11, A13, A17, A18):
-#   - MAIN: DESIGN_REVIEW -> CODE_RECON -> CONCEPT_EXTRACT -> CODE
-#   - MAIN: RUN -> RESULTS_REVERIFY -> CRITIC (replaces direct CRITIC)
-#   - PROPOSAL approval may go through BASELINE_CONFIRM
-#   - PAPER stage terminates in a PRE_PUBLISH_GATE HITL checkpoint
+# MAIN pipeline: DESIGN -> CODE_RECON -> CONCEPT_EXTRACT -> CODE ->
+#                RUN -> RESULTS_REVERIFY -> JUDGE (or legacy CRITIC chain) ->
+#                REPORT. (DESIGN_REVIEW retired 2026-04 — scientific review
+#                folded into exp_designer self-review; structural checks
+#                still run via design_checks.py.)
+# FAST_FAIL pipeline keeps the lean path: no CODE_RECON, no CONCEPT_EXTRACT,
+# no RESULTS_REVERIFY, no CODE_PREFLIGHT, no INTERROGATION.
 #
-# FAST_FAIL keeps its lean path (no CODE_RECON, no CONCEPT_EXTRACT, no
-# RESULTS_REVERIFY, no DESIGN_REVIEW, no CODE_PREFLIGHT, no INTERROGATION).
-#
-# A20 — CODE_RECON: shallow clones the reference codebases hinted at by
-# the paper wiki pages or by experiment_plan.yaml::reference_codebases
-# and writes a static-scan report consumed by concept_extractor + preflight.
+# After the 2026-04 refactor, REPORT is the terminal step — HITL gates
+# (WAITING_APPROVAL, PRE_PUBLISH_GATE) are removed. Professor auto-decides
+# stage transitions via decisions/*.yaml.
 _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {
     (PipelineStage.MAIN, None): PipelineStep.HYPOTHESIS,
     (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
-    (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW): PipelineStep.CODE_RECON,
+    (PipelineStage.MAIN, PipelineStep.DESIGN): PipelineStep.CODE_RECON,
     (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.CONCEPT_EXTRACT,
     (PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT): PipelineStep.CODE,
     (PipelineStage.MAIN, PipelineStep.CODE): PipelineStep.CODE_PREFLIGHT,
@@ -74,21 +73,24 @@ _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None]
     (PipelineStage.MAIN, PipelineStep.CRITIC): PipelineStep.EXPERIMENT_ANALYSIS,
     (PipelineStage.MAIN, PipelineStep.EXPERIMENT_ANALYSIS): PipelineStep.INTERROGATION,
     (PipelineStage.MAIN, PipelineStep.INTERROGATION): PipelineStep.REPORT,
-    (PipelineStage.MAIN, PipelineStep.REPORT): PipelineStep.WAITING_APPROVAL,
     (PipelineStage.FAST_FAIL, None): PipelineStep.HYPOTHESIS,
     (PipelineStage.FAST_FAIL, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
+    # FAST_FAIL skips CODE_PREFLIGHT / INTERROGATION for speed.
+    (PipelineStage.FAST_FAIL, PipelineStep.DESIGN): PipelineStep.CODE,
     (PipelineStage.FAST_FAIL, PipelineStep.CODE): PipelineStep.RUN,
     (PipelineStage.FAST_FAIL, PipelineStep.RUN): PipelineStep.CRITIC,
     (PipelineStage.FAST_FAIL, PipelineStep.CRITIC): PipelineStep.REPORT,
-    (PipelineStage.FAST_FAIL, PipelineStep.REPORT): PipelineStep.WAITING_APPROVAL,
 }
 
 STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.HYPOTHESIS: "hypothesis.md",
     PipelineStep.DESIGN: "experiment_plan.yaml",
-    PipelineStep.DESIGN_REVIEW: "design_review.md",
+    # DESIGN_REVIEW retired 2026-04 (scientific review is now exp_designer's
+    # own self-review pass; structural checks stay in design_checks.py).
     PipelineStep.CODE_RECON: "code_recon.yaml",
     PipelineStep.CONCEPT_EXTRACT: "concepts.yaml",
+    PipelineStep.CONCEPT_PAPER: "concepts_paper.digest.json",
+    PipelineStep.CONCEPT_CODE: "concepts.digest.json",
     PipelineStep.CODE: "code_patch.diff",
     PipelineStep.CODE_PREFLIGHT: "preflight_report.json",
     PipelineStep.RUN: "results.json",
@@ -96,8 +98,8 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.CRITIC: "analysis_report.md",
     PipelineStep.INTERROGATION: "interrogation_report.md",
     PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analysis.md",
+    PipelineStep.JUDGE: "judge_verdict.json",
     PipelineStep.BASELINE_CONFIRM: "metric_contract.json",
-    PipelineStep.PRE_PUBLISH_GATE: "pre_publish_gate.md",
 }
 
 
@@ -106,31 +108,31 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
 # scheduler update.  Missing modules are tolerated — features that need
 # them degrade to no-ops rather than crashing the scheduler.
 
-try:  # Stream D (A1) — results reverification
+try:  # results reverification
     from researchos.runtime.reverify import reverify_results as _reverify_results  # noqa: F401
 except ImportError:  # pragma: no cover — optional Wave 2 dep
     _reverify_results = None  # type: ignore[assignment]
     logger.warning("reverify module not available; RESULTS_REVERIFY will be a no-op")
 
-try:  # A20 — code-reference reconnaissance
+try:  # code-reference reconnaissance
     from researchos.runtime.code_recon import run_code_recon as _run_code_recon_fn  # noqa: F401
 except ImportError:  # pragma: no cover
     _run_code_recon_fn = None  # type: ignore[assignment]
     logger.info("code_recon module not available; CODE_RECON will SKIP")
 
-try:  # Stream F (A17) — baseline metric contract registry
+try:  # baseline metric contract registry
     from researchos.runtime import baseline_registry as _baseline_registry  # noqa: F401
 except ImportError:  # pragma: no cover
     _baseline_registry = None  # type: ignore[assignment]
     logger.info("baseline_registry module not available; BASELINE_CONFIRM will skip")
 
-try:  # Stream F (A7) — findings memory service
+try:  # findings memory service
     from researchos.runtime import findings_memory as _findings_memory  # noqa: F401
 except ImportError:  # pragma: no cover
     _findings_memory = None  # type: ignore[assignment]
     logger.info("findings_memory module not available; pipeline completion will not persist findings")
 
-try:  # Stream B (A13) — JSON-marker LLM helper
+try:  # JSON-marker LLM helper
     from researchos.runtime.llm_client import (
         extract_json_between_markers as _extract_json_between_markers,
     )  # noqa: F401
@@ -169,7 +171,7 @@ class ResearchScheduler:
             project_root, simulate=simulate, backend=backend
         )
         self.checkpoints = CheckpointManager(project_root)
-        # A14: load retry constants from workflow_config.yaml (not hardcoded).
+        # Load retry constants from workflow_config.yaml (not hardcoded).
         self.retry_policy = RetryPolicy(project_root=project_root)
         self.evaluator = TopicEvaluator(project_root, self.dispatcher)
         self.backlog = BacklogManager(project_root)
@@ -241,8 +243,9 @@ class ResearchScheduler:
         main_stage = PipelineStage.MAIN.value
         fast_fail_stage = PipelineStage.FAST_FAIL.value
         edges_main = {
-            # DESIGN_REVIEW -> CODE_RECON -> CONCEPT_EXTRACT -> CODE (A20)
-            (main_stage, PipelineStep.DESIGN_REVIEW.value): PipelineStep.CODE_RECON.value,
+            # DESIGN -> CODE_RECON -> CONCEPT_EXTRACT -> CODE
+            # (DESIGN_REVIEW step retired 2026-04; exp_designer self-reviews.)
+            (main_stage, PipelineStep.DESIGN.value): PipelineStep.CODE_RECON.value,
             (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
             (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
             # RUN -> RESULTS_REVERIFY -> CRITIC
@@ -373,57 +376,36 @@ class ResearchScheduler:
         # Check if all branches have completed CRITIC
         if runner.all_reached(PipelineStep.CRITIC):
             self.state.append_log(
-                "All branches completed CRITIC, running branch selection",
+                "All branches completed CRITIC, selecting winner via journal metrics",
                 pipeline.pipeline_id,
             )
-            results = runner.collect_results()
-            import json as _json
-            prompt = (
-                f"Select the best experiment branch for pipeline {pipeline.pipeline_id}.\n\n"
-                f"Branch results:\n{_json.dumps(results, indent=2, default=str)}\n\n"
-                f"Write branch_selection.md with your analysis and selected branch number."
-            )
-            success = await self.dispatcher.dispatch_via_executor(
-                "branch_selector", prompt, pipeline.pipeline_id
-            )
-            if success.get("success"):
-                # Prefer the LLM's explicit pick; fall back to the
-                # journal metric selector when nothing is parseable.
-                pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
-                selection_file = pdir / "branch_selection.md"
-                winner_id: int | None = None
-                if selection_file.exists():
-                    content = selection_file.read_text()
-                    import re as _re
-                    match = _re.search(r"Selected Branch:\s*(\d+)", content)
-                    if match:
-                        winner_id = int(match.group(1))
+            # branch_selector agent was removed in 2026-04 refactor; the
+            # journal-based selector (select_winner) is the single source
+            # of truth. Pure Python, no LLM cost.
+            picked = runner.select_winner()
+            winner_id = picked.iter_index if picked else 0
 
-                if winner_id is None:
-                    picked = runner.select_winner()
-                    winner_id = picked.iter_index if picked else 0
-
-                runner.archive(winner_id)
-                pipeline.selected_branch = winner_id
-                pipeline.active_branch_count = 0
-                # Keep a minimal breadcrumb in metadata so external tools
-                # that inspect pipeline state still see the branching
-                # ran (full history lives in journal.json).
-                pipeline.metadata["branches"] = [
-                    {
-                        "branch_id": n.iter_index,
-                        "status": (n.exec_result or {}).get("status", "completed"),
-                        "step": (n.exec_result or {}).get("step"),
-                    }
-                    for n in runner.branch_nodes()
-                ]
-                # Resume normal pipeline after CRITIC of winning branch
-                pipeline.step = PipelineStep.CRITIC
-                self.state.save_pipeline(pipeline)
-                self.state.append_log(
-                    f"Branch {winner_id} selected as winner, resuming pipeline",
-                    pipeline.pipeline_id,
-                )
+            runner.archive(winner_id)
+            pipeline.selected_branch = winner_id
+            pipeline.active_branch_count = 0
+            # Keep a minimal breadcrumb in metadata so external tools
+            # that inspect pipeline state still see the branching
+            # ran (full history lives in journal.json).
+            pipeline.metadata["branches"] = [
+                {
+                    "branch_id": n.iter_index,
+                    "status": (n.exec_result or {}).get("status", "completed"),
+                    "step": (n.exec_result or {}).get("step"),
+                }
+                for n in runner.branch_nodes()
+            ]
+            # Resume normal pipeline after CRITIC of winning branch
+            pipeline.step = PipelineStep.CRITIC
+            self.state.save_pipeline(pipeline)
+            self.state.append_log(
+                f"Branch {winner_id} selected as winner, resuming pipeline",
+                pipeline.pipeline_id,
+            )
             return
 
         # Otherwise, dispatch next step for each active branch
@@ -451,13 +433,12 @@ class ResearchScheduler:
                     except ValueError:
                         next_step = None
 
-            if next_step and next_step != PipelineStep.WAITING_APPROVAL:
+            if next_step is not None:
                 bdir = runner.branch_dir(node.iter_index)
                 # Stop branches at CRITIC (don't go past it).
                 if next_step in (
                     PipelineStep.INTERROGATION,
                     PipelineStep.REPORT,
-                    PipelineStep.WAITING_APPROVAL,
                 ):
                     runner.set_status(node.iter_index, "completed")
                     continue
@@ -482,7 +463,12 @@ class ResearchScheduler:
         branch_dir: Path,
     ) -> None:
         """Dispatch a single step for a single branch."""
-        agent_name = self.workflow.get_step_agent(step.value) or "pipeline_manager"
+        agent_name = self.workflow.get_step_agent(step.value)
+        if not agent_name:
+            raise RuntimeError(
+                f"_dispatch_branch_step: no agent registered for step "
+                f"{step.value!r}. workflow_config.yaml is missing an entry."
+            )
         prompt = (
             f"Pipeline: {pipeline.pipeline_id} (Branch {branch_id})\n"
             f"Research question: {pipeline.research_question}\n"
@@ -603,7 +589,7 @@ class ResearchScheduler:
             pipeline.metadata["kill_reason"] = decision.comment
             # Trigger knowledge compilation for killed pipelines too
             self._trigger_knowledge_compilation(pipeline)
-            # A7: persist findings card if critic already produced a verdict.
+            # Persist findings card if critic already produced a verdict.
             self._maybe_save_findings(pipeline)
 
         elif decision.decision == DecisionType.PIVOT:
@@ -643,7 +629,7 @@ class ResearchScheduler:
                 )
 
             # Remove stale artifacts so DESIGN re-runs from scratch
-            for stale in ("experiment_plan.yaml", "design_review.md",
+            for stale in ("experiment_plan.yaml",
                           "code_patch.diff", "preflight_report.json",
                           "results.json", "analysis_report.md",
                           "interrogation_report.md"):
@@ -652,7 +638,7 @@ class ResearchScheduler:
                     stale_path.unlink()
 
             # Clean artifact registry for removed files
-            for key in ("design", "design_review", "code", "code_preflight",
+            for key in ("design", "code", "code_preflight",
                         "run", "critic", "interrogation"):
                 pipeline.artifacts.pop(key, None)
 
@@ -763,129 +749,34 @@ class ResearchScheduler:
     async def _generate_pre_main_review(
         self, pipeline: PipelineState, pdir: Path
     ) -> None:
-        """Generate pre_main_review.md summarising FAST_FAIL results.
+        """DEPRECATED — kept as a no-op stub.
 
-        Hybrid (post-β rollback): the scientific-judgement content
-        (evidence gaps, GO/TWEAK/KILL, scientific quality) is produced by
-        the ``pre_main_reviewer`` LLM agent — Gate-1 science authority.
-        The existing ``_stage_user_approve`` caller (inject-mode only,
-        see :meth:`_schedule_next` FAST_FAIL branch) handles the
-        ``user_approve/`` filesystem layout.
+        Pre-main HITL gate was removed in the 2026-04 refactor. The
+        judge agent handles verdict after RUN; professor auto-decides
+        stage transitions through decisions/*.yaml.
 
-        A pure-Python scaffolder ``stage_user_approve_scaffold`` is
-        exported from :mod:`researchos.runtime.hitl_synthesizers` for
-        debugging / CLI use. The WAITING_APPROVAL per-step no-op and
-        milestone / pre-publish template synthesizers remain in place
-        and together still block the ~107K-token pipeline_manager
-        fallback.
+        Callers that still invoke this (legacy FAST_FAIL hooks) get a
+        silent no-op — they will be removed alongside this stub once
+        all references are migrated.
         """
-        if self.simulate:
-            self._simulate_pre_main_review(pipeline, pdir)
-            return
+        return
 
-        # Build a prompt for the pre_main_reviewer agent
-        artifacts = [f.name for f in pdir.iterdir() if f.is_file() and f.name != "state.json"]
-        refs_info = ""
-        if pipeline.evidence_refs:
-            refs_list = "\n".join(f"  - {r}" for r in pipeline.evidence_refs)
-            refs_info = f"\n## Reference Papers\n{refs_list}\n"
+    def _simulate_pre_main_review(self, *_args, **_kwargs) -> None:
+        """DEPRECATED no-op. See _generate_pre_main_review docstring."""
+        return
 
-        prompt = (
-            f"Generate a pre-MAIN review for pipeline: {pipeline.pipeline_id}\n\n"
-            f"## Pipeline Info\n"
-            f"- Title: {pipeline.title}\n"
-            f"- Research Question: {pipeline.research_question}\n"
-            f"{refs_info}"
-            f"\n## Available Artifacts (use file_read with relative names)\n"
-            + "\n".join(f"- {a}" for a in artifacts)
-            + "\n\n## Instructions\n"
-            f"Read all artifacts, then write pre_main_review.md following "
-            f"the pre_main_reviewer agent protocol.\n"
-        )
+    def _stage_user_approve(self, *_args, **_kwargs) -> None:
+        """DEPRECATED no-op. user_approve/ HITL mechanism was removed in the
+        2026-04 refactor. Professor auto-decisions now write directly to
+        decisions/*.yaml without staging user-facing review artifacts.
+        """
+        return
 
-        try:
-            result = await self.dispatcher.dispatch_via_executor(
-                "pre_main_reviewer", prompt, pipeline.pipeline_id
-            )
-            if not result["success"]:
-                logger.error("Pre-main reviewer failed: %s", result.get("output", ""))
-                # Write a minimal fallback review
-                self._simulate_pre_main_review(pipeline, pdir)
-        except Exception:
-            logger.exception("Pre-main review generation error")
-            self._simulate_pre_main_review(pipeline, pdir)
-
-    def _simulate_pre_main_review(
+    def _deprecated_stage_user_approve_impl(
         self, pipeline: PipelineState, pdir: Path
     ) -> None:
-        """Write a mock pre_main_review.md for simulation / fallback."""
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-
-        # Try to read results.json for metrics
-        metrics_table = "| (no results available) | - | - | - |"
-        results_path = pdir / "results.json"
-        if results_path.exists():
-            import json as _json
-            try:
-                results = _json.loads(results_path.read_text())
-                rows = []
-                for k, v in results.get("metrics", {}).items():
-                    if isinstance(v, (int, float)):
-                        rows.append(f"| {k} | - | {v} | - |")
-                if rows:
-                    metrics_table = "\n".join(rows)
-            except Exception:
-                pass
-
-        refs_note = ""
-        if pipeline.evidence_refs:
-            refs_note = (
-                f"Reference papers: {', '.join(pipeline.evidence_refs)}\n"
-                f"Data consistency check: **pending user confirmation**\n\n"
-            )
-
-        (pdir / "pre_main_review.md").write_text(
-            f"# Pre-MAIN Review: {pipeline.title}\n\n"
-            f"## 1. Executive Summary\n"
-            f"FAST_FAIL completed for pipeline {pipeline.pipeline_id}. "
-            f"Preliminary results are available for review.\n\n"
-            f"## 2. Data Source\n"
-            f"{refs_note}"
-            f"See experiment_plan.yaml for data configuration.\n\n"
-            f"## 3. Baseline & Method\n"
-            f"See hypothesis.md and experiment_plan.yaml for details.\n\n"
-            f"## 4. Preliminary Results\n"
-            f"| Metric | Baseline | Proposed | Δ |\n"
-            f"|--------|----------|----------|---|\n"
-            f"{metrics_table}\n\n"
-            f"## 5. Professor Assessment\n"
-            f"Automated review — see analysis_report.md for critic assessment.\n\n"
-            f"## 6. MAIN Stage Plan\n"
-            f"Full-scale experiments with additional seeds, ablations, "
-            f"and comprehensive evaluation.\n\n"
-            f"## 7. Key Decisions for User\n"
-            f"- [ ] Approve data source and splits?\n"
-            f"- [ ] Approve baseline method?\n"
-            f"- [ ] Approve evaluation metrics?\n"
-            f"- [ ] Any methodology changes requested?\n\n"
-            f"## Recommendation\n"
-            f"Review the artifacts and decide: `approve` / `tweak` / `kill`\n\n"
-            f"_Generated at {ts} (simulation mode)_\n"
-        )
-
-    def _stage_user_approve(
-        self, pipeline: PipelineState, pdir: Path
-    ) -> None:
-        """Materialise artifacts/pipeline_<id>/user_approve/ for inject-mode review.
-
-        Copies the reference papers, proposal, FAST_FAIL analysis, and the
-        pre-MAIN review into a user-facing folder and seeds a `feedback.md`
-        template. Called after ``_generate_pre_main_review`` when the pipeline
-        was created via ``inject --title --question`` (source == "user_inject").
-        The ``/research continue --pipeline ID`` command reads ``feedback.md``
-        and dispatches the fixer agent honouring the user's directives.
-        """
+        """Archived original implementation — never called. Delete after
+        Phase 1 when all call sites have been migrated."""
         import shutil
 
         if pipeline.metadata.get("source") != "user_inject":
@@ -1137,20 +1028,16 @@ class ResearchScheduler:
     # ── Step scheduling ──────────────────────────────────────────
 
     def _next_after_design(self, pipeline: PipelineState) -> PipelineStep:
-        """Decide what comes after DESIGN (or DESIGN_REVIEW in MAIN).
+        """Decide what comes after DESIGN.
 
-        In MAIN stage: DESIGN → DESIGN_REVIEW always.
-        After DESIGN_REVIEW: reads requires_code to decide CODE vs RUN.
-        In FAST_FAIL: DESIGN → CODE or RUN directly (no review).
+        MAIN: DESIGN → CODE_RECON (happens via _NEXT_STEP, not this helper).
+        Caller hits this helper after CODE_RECON/CONCEPT_EXTRACT when it
+        needs to branch on ``requires_code``. In FAST_FAIL: DESIGN → CODE or
+        RUN directly (no code_recon / concept_extract chain).
         """
         import yaml as _yaml
 
-        # MAIN stage: DESIGN always goes to DESIGN_REVIEW first
-        if pipeline.stage == PipelineStage.MAIN and pipeline.step == PipelineStep.DESIGN:
-            return PipelineStep.DESIGN_REVIEW
-
-        # After DESIGN_REVIEW (MAIN) or after DESIGN (FAST_FAIL):
-        # decide CODE vs RUN based on requires_code
+        # Branch on requires_code flag
         pdir = (
             self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         )
@@ -1207,8 +1094,12 @@ class ResearchScheduler:
             self.state.append_log("Knowledge compilation done, pipeline COMPLETED", pipeline.pipeline_id)
             return
 
-        # Waiting for professor? Dispatch professor agent or auto-decide.
-        if pipeline.step == PipelineStep.WAITING_APPROVAL:
+        # REPORT completed — transition to MILESTONE stage and dispatch
+        # professor (autonomous decision flow; HITL gate removed in the
+        # 2026-04 refactor).
+        if pipeline.step == PipelineStep.REPORT and pipeline.stage in (
+            PipelineStage.FAST_FAIL, PipelineStage.MAIN,
+        ):
             was_fast_fail = pipeline.stage == PipelineStage.FAST_FAIL
             pipeline.stage = PipelineStage.MILESTONE
             pipeline.milestone_count += 1
@@ -1251,60 +1142,19 @@ class ResearchScheduler:
                     )
                     return
 
-                # After FAST_FAIL: generate pre_main_review.md, then block
-                # for user approval (approve / tweak / kill)
-                await self._generate_pre_main_review(pipeline, pdir)
-
-                # Inject-mode pipelines additionally stage a user_approve/
-                # folder so the user can write feedback.md and unblock via
-                # `/research continue --pipeline ID` (fixer honours user
-                # directives verbatim).
-                is_inject = pipeline.metadata.get("source") == "user_inject"
-                if is_inject:
-                    self._stage_user_approve(pipeline, pdir)
-
-                pause_comment = (
-                    "FAST_FAIL complete. Pre-MAIN review generated. "
-                    "Awaiting user decision: approve / tweak / kill. "
-                    "See artifacts/pipeline_"
-                    f"{pipeline.pipeline_id}/pre_main_review.md"
-                )
-                if is_inject:
-                    pause_comment += (
-                        " | Inject mode: edit user_approve/feedback.md and "
-                        "run `python scripts/run_research.py continue "
-                        f"--pipeline {pipeline.pipeline_id}` to dispatch the fixer."
-                    )
+                # After FAST_FAIL (HITL gate removed): auto-approve and
+                # proceed to MAIN. Professor agent can still write a
+                # kill/tweak decision asynchronously if needed.
                 self._write_default_decision(
-                    pipeline.pipeline_id,
-                    "pause",
-                    comment=pause_comment,
+                    pipeline.pipeline_id, "approve",
+                    comment="FAST_FAIL complete → auto-advance to MAIN (HITL gate removed).",
                 )
                 self.state.append_log(
-                    "FAST_FAIL complete → pre_main_review.md generated, awaiting user decision"
-                    + (" (inject mode: user_approve/ staged)" if is_inject else ""),
+                    "FAST_FAIL complete → auto-approved for MAIN",
                     pipeline.pipeline_id,
                 )
             else:
-                # After MAIN milestone: professor review (existing flow).
-                # A11 milestone-N gate: when we've accumulated >=2 milestones,
-                # stage a user_approve/ review folder with gate=milestone_N
-                # so the frontend can distinguish it from pre_main.  Existing
-                # HITL flow takes over from there.
-                if pipeline.milestone_count >= 2:
-                    pipeline.metadata["user_approve_gate"] = (
-                        f"milestone_{pipeline.milestone_count}"
-                    )
-                    try:
-                        self._stage_user_approve(pipeline, pdir)
-                    except Exception:
-                        logger.exception("Milestone-N gate staging failed")
-                    self.state.append_log(
-                        f"Milestone-{pipeline.milestone_count} gate staged "
-                        f"(user_approve/ gate=milestone_{pipeline.milestone_count})",
-                        pipeline.pipeline_id,
-                    )
-
+                # After MAIN milestone: dispatch professor (autonomous).
                 milestones = sorted(pdir.glob("milestone_*.md"))
                 context = [str(m) for m in milestones[-3:]]
                 state_file = str(pdir / "state.json")
@@ -1313,9 +1163,11 @@ class ResearchScheduler:
                 if self.auto_professor:
                     await self._auto_professor_decision(pipeline, context)
                 else:
-                    await self.dispatcher.dispatch_professor(pipeline.pipeline_id, context)
+                    await self.dispatcher.dispatch_professor(
+                        pipeline.pipeline_id, context
+                    )
                 self.state.append_log(
-                    f"Professor dispatched for milestone review",
+                    "Professor dispatched for milestone review",
                     pipeline.pipeline_id,
                 )
             return
@@ -1510,7 +1362,7 @@ class ResearchScheduler:
             self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         )
 
-        # CODE_RECON — A20 pure-Python shallow clone + static scan.
+        # CODE_RECON — pure-Python shallow clone + static scan.
         if step == PipelineStep.CODE_RECON:
             return self._run_code_recon(pipeline, pdir)
 
@@ -1527,31 +1379,46 @@ class ResearchScheduler:
         if step == PipelineStep.BASELINE_CONFIRM:
             return self._run_baseline_confirm(pipeline, pdir)
 
-        # PRE_PUBLISH_GATE — HITL staging; reuses _stage_user_approve helper.
-        if step == PipelineStep.PRE_PUBLISH_GATE:
-            return self._run_pre_publish_gate(pipeline, pdir)
-
-        # WAITING_APPROVAL — no-op dispatch. The scheduler's WAITING_APPROVAL
-        # handler (see :meth:`_schedule_next`) synthesizes the HITL gate
-        # documents (pre_main_review.md / milestone_N staging /
-        # pre_publish_gate.md) on the NEXT tick via pure-Python helpers.
-        # Without this short-circuit the step falls through to the generic
-        # LLM dispatcher and burns ~107K tokens/run on the `pipeline_manager`
-        # fallback agent.
-        if step == PipelineStep.WAITING_APPROVAL:
-            self.state.append_log(
-                "WAITING_APPROVAL step — pure-Python no-op "
-                "(HITL gate synthesis deferred to next tick)",
-                pipeline.pipeline_id,
-            )
-            return True
+        # REPORT — deterministic milestone renderer (replaced reporter LLM).
+        if step == PipelineStep.REPORT:
+            return self._run_report(pipeline, pdir)
 
         return None
+
+    def _run_report(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Render milestone_N.md from typed digests via pure Python.
+
+        Supersedes the former reporter agent LLM call. Pulls hypothesis /
+        plan / run / judge digests (each Pydantic-validated on load) and
+        composes the markdown deterministically. Zero token cost.
+        """
+        from researchos.core.publisher import render_milestone
+        try:
+            path = render_milestone(
+                pipeline_id=pipeline.pipeline_id,
+                pdir=pdir,
+                title=pipeline.title,
+                research_question=pipeline.research_question,
+                milestone_index=pipeline.milestone_count + 1,
+                budget_allocated=pipeline.budget_allocated,
+                budget_used=pipeline.budget_used,
+            )
+            logger.info(
+                "REPORT: rendered %s (deterministic, no LLM)", path.name
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "REPORT: publisher failed for pipeline %s", pipeline.pipeline_id
+            )
+            return False
 
     def _run_code_recon(
         self, pipeline: PipelineState, pdir: Path
     ) -> bool:
-        """A20 — shallow-clone reference codebases and write code_recon.yaml.
+        """Shallow-clone reference codebases and write code_recon.yaml.
 
         Pure Python, no LLM. Never raises: on any error we still produce
         a report so the pipeline can advance. The concept_extractor step
@@ -1639,7 +1506,7 @@ class ResearchScheduler:
     ) -> bool:
         """Run the Stream-D reverification hook and write reverify_report.json.
 
-        A1 opt-in: reverify is disabled by default.  Enable via
+        Opt-in: reverify is disabled by default.  Enable via
         ``research_config.yaml::reverify.enabled: true`` (or env var
         ``RESEARCHOS_REVERIFY=1``).  When disabled, writes a SKIP stub and
         advances without running the second subprocess.
@@ -1668,7 +1535,7 @@ class ResearchScheduler:
                 '"metrics_diff": {}}\n'
             )
             self.state.append_log(
-                "RESULTS_REVERIFY skipped (A1 opt-in; enable via research_config.yaml)",
+                "RESULTS_REVERIFY skipped (opt-in; enable via research_config.yaml)",
                 pipeline.pipeline_id,
             )
             return True
@@ -1730,7 +1597,12 @@ class ResearchScheduler:
             )
             return True
 
-        baseline_block = plan.get("baseline") or plan.get("baselines")
+        baseline_block = (
+            plan.get("baseline")
+            or plan.get("baselines")
+            or plan.get("plan_testing", {}).get("baselines")
+            or plan.get("plan_testing", {}).get("baseline")
+        )
         if not baseline_block:
             contract_path.write_text(
                 '{"status": "SKIP", "reason": "no baseline block in experiment_plan.yaml"}\n'
@@ -1809,7 +1681,7 @@ class ResearchScheduler:
         return True
 
     def _maybe_save_findings(self, pipeline: PipelineState) -> None:
-        """A7: persist a FindingCard when critic verdict is fully_correct.
+        """Persist a FindingCard when critic verdict is fully_correct.
 
         Gracefully no-ops when findings_memory is unavailable or when there
         is no advisor_verdict.json / verdict is not fully_correct.
@@ -1818,7 +1690,7 @@ class ResearchScheduler:
             return
         pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
 
-        # B1 fix: critic.md emits advisor_verdict.yaml; earlier draft assumed .json.
+        # critic.md emits advisor_verdict.yaml; earlier draft assumed .json.
         # Try YAML first (authoritative), then JSON (legacy/alternate).
         fully_correct = False
         verdict_payload: dict = {}
@@ -2011,46 +1883,14 @@ class ResearchScheduler:
             logger.exception("Journal save failed")
 
     def _pre_publish_gate_needed(self, pipeline_id: str) -> bool:
-        """True when PRE_PUBLISH_GATE hasn't been approved yet.
-
-        The gate is considered unresolved when the marker file exists
-        (``pre_publish_gate.md``) and the approval sentinel
-        (``pre_publish_approved``) does not.  Missing marker also means we
-        still need the gate — it's staged on first entry.
+        """DEPRECATED — always returns False. Pre-publish HITL gate was
+        removed in the 2026-04 refactor; papers now auto-publish after
+        paper_auditor passes.
         """
-        art_dir = self.project_root / "artifacts" / f"pipeline_{pipeline_id}"
-        if (art_dir / "pre_publish_approved").exists():
-            return False
-        return True
+        return False
 
-    def _run_pre_publish_gate(
-        self, pipeline: PipelineState, pdir: Path
-    ) -> bool:
-        """Stage the HITL pre-publish review folder and write gate marker.
-
-        Delegates the gate-marker synthesis to
-        :func:`researchos.runtime.hitl_synthesizers.synthesize_pre_publish_gate`
-        (pure Python, no LLM) and then re-uses ``_stage_user_approve`` for
-        the inject-mode user_approve/ packaging.
-        """
-        from researchos.runtime.hitl_synthesizers import synthesize_pre_publish_gate
-
-        synthesize_pre_publish_gate(
-            pdir,
-            pipeline_id=pipeline.pipeline_id,
-            project_root=self.project_root,
-        )
-
-        # Stage user_approve/ folder via existing helper when source is
-        # user_inject; re-uses feedback.md pattern with a pre_publish flag.
-        pipeline.metadata["user_approve_pending"] = True
-        pipeline.metadata["user_approve_gate"] = "pre_publish"
-        self._stage_user_approve(pipeline, pdir)
-
-        self.state.append_log(
-            "PRE_PUBLISH_GATE staged — awaiting user approval",
-            pipeline.pipeline_id,
-        )
+    def _run_pre_publish_gate(self, *_args, **_kwargs) -> bool:
+        """DEPRECATED no-op. See _pre_publish_gate_needed."""
         return True
 
     # ── Knowledge Miner & Proposal intake ─────────────────────────
@@ -2194,7 +2034,7 @@ class ResearchScheduler:
         out = candidates_dir / f"candidate_{pipeline_id}.json"
         out.write_text(_json.dumps(candidate, indent=2, ensure_ascii=False))
 
-        # R2: generate research brief deterministically via briefer.render_brief
+        # Generate research brief deterministically via briefer.render_brief
         # when the topic_evaluator's evaluated_<id>.yaml exists (richer output
         # with 5D scores + innovation claim + falsification). Fall back to
         # the legacy template generator when the evaluator artifact is absent.
@@ -2203,7 +2043,7 @@ class ResearchScheduler:
     def _emit_research_brief(
         self, candidate: dict, pipeline_id: str, candidates_dir: Path
     ) -> None:
-        """Prefer briefer.render_brief (R2) over the legacy template."""
+        """Prefer briefer.render_brief over the legacy template."""
         evaluated_path = (
             self.project_root / "knowledge" / "proposals"
             / f"evaluated_{pipeline_id}.yaml"
@@ -2456,29 +2296,6 @@ class ResearchScheduler:
                 if not result["success"]:
                     logger.error("Reviewer failed: %s", result.get("output", ""))
             self.state.append_log("Paper review generated", pid)
-
-        elif self._pre_publish_gate_needed(pid):
-            # A11 PRE_PUBLISH_GATE: stage an HITL checkpoint between review
-            # and LaTeX compile.  When running in simulate/auto modes the
-            # gate auto-approves so the pipeline still reaches PDF.  For
-            # live runs, the user must write ``pre_publish_approved`` into
-            # ``user_approve/feedback.md`` or supply an approval decision.
-            art_dir = self.project_root / "artifacts" / f"pipeline_{pid}"
-            art_dir.mkdir(parents=True, exist_ok=True)
-            gate_marker = art_dir / "pre_publish_gate.md"
-            approved_marker = art_dir / "pre_publish_approved"
-            if not gate_marker.exists():
-                self._run_pre_publish_gate(pipeline, art_dir)
-            if self.simulate or self.auto_professor:
-                # Auto-approve in non-interactive modes so tests pass.
-                approved_marker.write_text("auto-approved\n")
-                self.state.append_log(
-                    "PRE_PUBLISH_GATE auto-approved (simulate/auto mode)",
-                    pid,
-                )
-            else:
-                # Wait for user approval; don't advance.
-                return
 
         elif not tex_path.exists():
             # Convert markdown draft to LaTeX
@@ -2782,9 +2599,9 @@ class ResearchScheduler:
         rebuttal_path.write_text(
             f"# Rebuttal Draft: {pipeline.title}\n\n"
             f"## Response to Reviewer\n\n"
-            f"### R1: Limited experimental scale\n"
+            f"### Limited experimental scale\n"
             f"We acknowledge this limitation. In revision, we will add 5 additional seeds.\n\n"
-            f"### R2: Related work\n"
+            f"### Related work\n"
             f"We will expand the related work section with recent findings from the knowledge base.\n\n"
             f"_(simulation mode)_\n"
         )

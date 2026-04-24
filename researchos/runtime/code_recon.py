@@ -1,4 +1,4 @@
-"""Code-reference reconnaissance (A20).
+"""Code-reference reconnaissance.
 
 Pure Python, no LLM. Clones the reference codebases hinted at by a paper
 (via ``knowledge_compiler.extract_code_refs``) or by an explicit

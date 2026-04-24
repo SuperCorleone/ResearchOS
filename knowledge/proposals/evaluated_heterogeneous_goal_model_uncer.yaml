@@ -1,0 +1,52 @@
+direction: self-adaptive-systems
+evaluated_at: '2026-04-24T08:45:04.644960+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Single best-model MAPE-K controller using one fixed environment/threat
+    model and a conventional weighted-sum utility function for protection, latency,
+    and cost.
+  expected_signal: At least 5% higher normalized utility and 10% fewer unnecessary
+    reconfigurations under shifting conditions.
+  failure_condition: Normalized utility improvement is < 2% and unnecessary reconfiguration
+    reduction is < 5%, or either metric is worse than baseline under distribution
+    shift scenarios.
+  hypothesis: In a security self-adaptive MAPE-K system facing non-stationary workload
+    and threat conditions, Bayesian model averaging over multiple candidate environment/threat
+    models with heterogeneous-goal decision logic yields higher utility and fewer
+    unnecessary reconfigurations than a single-model expected-utility baseline.
+  metric: 'Primary: average normalized multi-objective utility across protection,
+    latency, and cost over time; Secondary: rate of unnecessary reconfigurations per
+    100 decision intervals.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=14 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a Bayesian model-averaging adaptation mechanism for security-oriented
+    MAPE-K loops that explicitly evaluates multiple candidate environment and threat
+    models against heterogeneous threshold and optimization goals.
+  problem_gap: Existing methods fail because they handle model uncertainty in self-adaptive
+    systems only in limited domains and do not jointly reason over heterogeneous goals
+    such as security protection, latency, and cost when choosing adaptations.
+  why_it_matters: Which improves adaptation decision quality and reduces unnecessary
+    or maladaptive security reconfigurations under shifting operating conditions and
+    uncertain threat dynamics.
+kb_duplicates:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+kb_related: []
+proposal_id: heterogeneous_goal_model_uncer
+re_eval_count: 0
+repeat_degree: low
+research_question: Can Bayesian model averaging over multiple candidate environment
+  and threat models improve adaptation decisions in self-adaptive security systems
+  when the MAPE-K loop must optimize heterogeneous goals such as protection, latency,
+  and cost?
+retrieval_cache_key: 5fb3fe86ffeedf60
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 3
+  significance: 3
+similar_papers: []
+title: Heterogeneous-Goal Model Uncertainty for Self-Adaptive MAPE-K Security Loops

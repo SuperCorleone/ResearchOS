@@ -20,6 +20,7 @@ from typing import Any
 
 import yaml
 
+from researchos.schemas.digest import DIGEST_FILENAMES
 from researchos.schemas.pipeline import PipelineState, PipelineStep
 from researchos.runtime.workflow_loader import WorkflowConfig
 from researchos.runtime.llm_client import (
@@ -66,44 +67,81 @@ def _maybe_compress_artifact(content: str, artifact_name: str, step: str) -> str
     return f"{head}\n\n...[truncated {dropped} chars]...\n\n{tail}"
 
 
+def _load_upstream_digests(
+    filtered: dict[str, Any], pdir: Path
+) -> tuple[dict[str, Any], list[str]]:
+    """Return (digests, missing) for every upstream artifact that owns a digest.
+
+    For each key in ``filtered`` that has a ``DIGEST_FILENAMES`` entry, try to
+    load the digest JSON payload from ``pdir``. Returns a dict keyed by the
+    artifact key (e.g. ``"hypothesis"``) and a list of keys whose digest was
+    declared but not yet on disk (usually fine — step hasn't run).
+
+    The caller injects ``digests`` verbatim into the prompt so the downstream
+    agent sees typed ~2KB payloads instead of re-parsing a 15KB markdown.
+    """
+    digests: dict[str, Any] = {}
+    missing: list[str] = []
+    for key in filtered:
+        digest_filename = DIGEST_FILENAMES.get(key)
+        if digest_filename is None:
+            continue
+        digest_path = pdir / digest_filename
+        if not digest_path.exists():
+            missing.append(key)
+            continue
+        try:
+            digests[key] = json.loads(digest_path.read_text())
+        except Exception:
+            logger.debug(
+                "Failed to load digest %s for dispatcher injection",
+                digest_path,
+                exc_info=True,
+            )
+            missing.append(key)
+    return digests, missing
+
+
 # Agent definition files corresponding to each step.
 # Steps whose value is ``None`` are handled by pure-Python hooks in the
-# scheduler's ``_maybe_dispatch_specialised_step`` and MUST never reach the
-# generic LLM dispatch path — listing them here as sentinels guards against
-# accidental regressions that would otherwise fall through to the
-# ``pipeline_manager`` fallback agent (~35K tokens/call).
+# scheduler's ``_maybe_dispatch_specialised_step``. Listing them explicitly
+# ensures the dispatcher raises RuntimeError if anyone tries to dispatch
+# them through the LLM path — we no longer keep a pipeline_manager fallback.
 STEP_AGENT: dict[PipelineStep, str | None] = {
     PipelineStep.HYPOTHESIS: "hypothesis_gen",
     PipelineStep.DESIGN: "exp_designer",
-    PipelineStep.DESIGN_REVIEW: "design_reviewer",
+    # DESIGN_REVIEW retired 2026-04 — exp_designer self-reviews in its own turn.
     PipelineStep.CODE: "coder",
     PipelineStep.CODE_PREFLIGHT: "code_preflight",  # Python function, not LLM
     PipelineStep.RUN: "experiment_runner",
     PipelineStep.CRITIC: "critic",
     PipelineStep.INTERROGATION: "interrogator",
     PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analyser",
-    PipelineStep.REPORT: "reporter",
-    # Pure-Python / HITL gates — handled in scheduler, never dispatched.
-    PipelineStep.WAITING_APPROVAL: None,
-    PipelineStep.PRE_PUBLISH_GATE: None,
+    PipelineStep.JUDGE: "judge",
+    # REPORT is deterministic — rendered by researchos.core.publisher.
+    PipelineStep.REPORT: None,
+    # Pure-Python hooks handled in the scheduler.
     PipelineStep.BASELINE_CONFIRM: None,
     PipelineStep.RESULTS_REVERIFY: None,
     PipelineStep.CODE_RECON: None,
+    # Concept extraction (legacy single-pass + new 2-pass split).
     PipelineStep.CONCEPT_EXTRACT: "concept_extractor",
-    PipelineStep.BRANCH_SELECT: "branch_selector",
+    PipelineStep.CONCEPT_PAPER: "concept_extract_paper",
+    PipelineStep.CONCEPT_CODE: "concept_extract_code",
 }
 
 # Expected output artifact for each step
 STEP_OUTPUT: dict[PipelineStep, str] = {
     PipelineStep.HYPOTHESIS: "hypothesis.md",
     PipelineStep.DESIGN: "experiment_plan.yaml",
-    PipelineStep.DESIGN_REVIEW: "design_review.md",
+    # DESIGN_REVIEW retired — no separate artifact.
     PipelineStep.CODE: "code_patch.diff",
     PipelineStep.CODE_PREFLIGHT: "preflight_report.json",
     PipelineStep.RUN: "results.json",
     PipelineStep.CRITIC: "analysis_report.md",
     PipelineStep.INTERROGATION: "interrogation_report.md",
     PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analysis.md",
+    PipelineStep.JUDGE: "judge_verdict.json",
     PipelineStep.REPORT: "milestone_{n}.md",
 }
 
@@ -183,44 +221,51 @@ class Dispatcher:
         # Pipeline-scoped KB query cache: (pipeline_id, normalized_query) -> result.
         self._kb_cache: dict[tuple[str, str], str] = {}
 
+    def _agent_def_search_paths(self) -> list[Path]:
+        """Resolution order for agent ``.md`` files.
+
+        Primary home (post-2026-04 refactor): ``researchos/agent_defs/`` —
+        platform-neutral; every adapter reads from here. The legacy
+        ``.openharness/plugins/researchos/agents/`` path is still scanned as
+        a fallback so external clones that haven't migrated keep working.
+        """
+        return [
+            self.project_root / "researchos" / "agent_defs",
+            self.project_root / ".openharness" / "plugins" / "researchos" / "agents",
+        ]
+
     def _preload_agent_definitions(self) -> None:
-        """Scan the plugin agents dir at startup so per-step prompts don't hit disk."""
-        agents_dir = (
-            self.project_root
-            / ".openharness"
-            / "plugins"
-            / "researchos"
-            / "agents"
-        )
-        if not agents_dir.exists():
-            return
-        for md_path in agents_dir.glob("*.md"):
-            try:
-                self._agent_def_cache[md_path.stem] = md_path.read_text()
-            except Exception:
-                # Leave this entry uncached; _get_agent_definition will retry.
-                logger.debug("Failed to preload agent definition %s", md_path, exc_info=True)
+        """Scan every known agent_defs location so per-step prompts don't hit disk."""
+        for agents_dir in self._agent_def_search_paths():
+            if not agents_dir.exists():
+                continue
+            for md_path in agents_dir.glob("*.md"):
+                # First-match-wins: primary location takes precedence.
+                if md_path.stem in self._agent_def_cache:
+                    continue
+                try:
+                    self._agent_def_cache[md_path.stem] = md_path.read_text()
+                except Exception:
+                    logger.debug(
+                        "Failed to preload agent definition %s", md_path, exc_info=True
+                    )
 
     def _get_agent_definition(self, agent_name: str) -> str:
         """Return cached agent definition text; fall back to disk read + cache on miss."""
         cached = self._agent_def_cache.get(agent_name)
         if cached is not None:
             return cached
-        md_path = (
-            self.project_root
-            / ".openharness"
-            / "plugins"
-            / "researchos"
-            / "agents"
-            / f"{agent_name}.md"
-        )
-        if md_path.exists():
-            try:
-                text = md_path.read_text()
-                self._agent_def_cache[agent_name] = text
-                return text
-            except Exception:
-                logger.debug("Failed to read agent definition %s", md_path, exc_info=True)
+        for agents_dir in self._agent_def_search_paths():
+            md_path = agents_dir / f"{agent_name}.md"
+            if md_path.exists():
+                try:
+                    text = md_path.read_text()
+                    self._agent_def_cache[agent_name] = text
+                    return text
+                except Exception:
+                    logger.debug(
+                        "Failed to read agent definition %s", md_path, exc_info=True
+                    )
         return ""
 
     @staticmethod
@@ -358,7 +403,7 @@ class Dispatcher:
             self._simulate_step(pipeline, step)
             return True
 
-        # ── Step cache: skip already-completed steps (U5) ────────
+        # ── Step cache: skip already-completed steps ─────────────
         pdir = self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         cache = StepCache(pdir)
         if cache.has_completed(step.value, pipeline.stage.value):
@@ -376,17 +421,15 @@ class Dispatcher:
         agent_name = (
             self.workflow.get_step_agent(step.value)
             or STEP_AGENT.get(step)
-            or "pipeline_manager"
         )
-        if agent_name == "pipeline_manager":
-            # Any step reaching this branch escaped the scheduler's
-            # specialised dispatch and the workflow YAML. Before spending
-            # ~35K tokens on the generic fallback, log loudly so the cause
-            # is obvious in cost_report.json.
-            logger.warning(
-                "Step %s dispatched via pipeline_manager fallback — check "
-                "workflow_config.yaml and scheduler._maybe_dispatch_specialised_step",
-                step.value,
+        if agent_name is None:
+            raise RuntimeError(
+                f"Step {step.value!r} has no registered agent. "
+                f"Either the scheduler should have handled it as a "
+                f"specialised pure-Python hook (BASELINE_CONFIRM, "
+                f"RESULTS_REVERIFY, CODE_RECON, CODE_PREFLIGHT) or the "
+                f"workflow_config.yaml is missing an entry. "
+                f"Refusing to fall back to a generic agent."
             )
         logger.info(
             "Dispatching step=%s for pipeline=%s", step.value, pipeline.pipeline_id
@@ -402,7 +445,7 @@ class Dispatcher:
                     "Agent %s failed: %s", agent_name, result.get("output", "unknown error")
                 )
                 return False
-            # Save successful step to cache (U5)
+            # Save successful step to cache
             cache.save_completed(step.value, pipeline.stage.value, {
                 "agent": agent_name,
                 "tokens_used": result.get("tokens_used", 0),
@@ -573,22 +616,6 @@ class Dispatcher:
                 f"| f1_score | > 0.65 | 0.71 | PASS |\n\n"
                 f"## Recommendation\n"
                 f"ADVANCE - results are promising, proceed to milestone report.\n\n"
-                f"_Generated at {ts} (simulation mode)_\n"
-            )
-
-        elif step == PipelineStep.DESIGN_REVIEW:
-            (pdir / "design_review.md").write_text(
-                f"# Design Review\n\n"
-                f"## Structural Checks\n"
-                f"| Check | Status |\n"
-                f"|-------|--------|\n"
-                f"| baselines defined | PASS |\n"
-                f"| statistical tests defined | PASS |\n"
-                f"| success criteria defined | PASS |\n"
-                f"| data section present | PASS |\n\n"
-                f"## Scientific Review\n"
-                f"Design is adequate for the research question.\n\n"
-                f"## Verdict: PASS\n\n"
                 f"_Generated at {ts} (simulation mode)_\n"
             )
 
@@ -769,8 +796,12 @@ class Dispatcher:
         agent_name = (
             self.workflow.get_step_agent(step.value)
             or STEP_AGENT.get(step)
-            or "pipeline_manager"
         )
+        if agent_name is None:
+            raise RuntimeError(
+                f"_build_step_prompt: step {step.value!r} has no registered "
+                f"agent. workflow_config.yaml or STEP_AGENT is missing an entry."
+            )
 
         # Load agent definition from pre-built cache (falls back to disk on miss).
         agent_def_text = self._get_agent_definition(agent_name)
@@ -787,22 +818,23 @@ class Dispatcher:
         if step == PipelineStep.REPORT:
             expected_output = f"milestone_{pipeline.milestone_count + 1}.md"
 
-        # Build structural design check for DESIGN_REVIEW step.
-        # Lazy injection: if everything passes, collapse the full table into a
-        # single-line sentinel; on failure, only surface the failed checks.
+        # Automated structural checks — fed to exp_designer during its
+        # self-review pass (the separate design_reviewer agent was retired
+        # 2026-04; structural checks still live in design_checks.py, the
+        # scientific-validity pass is integrated into exp_designer.md).
+        # On DESIGN re-runs the previous draft sits at experiment_plan.yaml
+        # and validate_design() can therefore surface its gaps inline.
         design_check_notice = ""
-        if step == PipelineStep.DESIGN_REVIEW:
+        if step == PipelineStep.DESIGN and (pdir / "experiment_plan.yaml").exists():
             from researchos.runtime.design_checks import validate_design
             design_report = validate_design(pdir)
             checks = design_report["checks"]
             fail_count = design_report["fail_count"]
             if fail_count == 0:
                 design_check_notice = (
-                    "\n## Automated Structural Checks (pre-computed)\n"
-                    "[ALL_STRUCTURAL_CHECKS_PASS — structural detail list omitted]\n"
-                    "\nFocus your analysis on scientific validity, baseline adequacy, "
-                    "and success criteria realism — the structural checks above "
-                    "already cover completeness.\n"
+                    "\n## Automated Structural Checks (previous draft)\n"
+                    "[ALL_STRUCTURAL_CHECKS_PASS — focus this revision on the "
+                    "Self-Review items in your agent definition.]\n"
                 )
             else:
                 failed_lines = [
@@ -815,9 +847,9 @@ class Dispatcher:
                     for i in design_report["issues"]
                 )
                 design_check_notice = (
-                    f"\n## Automated Structural Checks (pre-computed)\n"
-                    f"Only FAILed checks listed below ({fail_count} fail, "
-                    f"{design_report['pass_count']} pass — PASS items omitted).\n"
+                    f"\n## Automated Structural Checks (previous draft)\n"
+                    f"{fail_count} FAIL / {design_report['pass_count']} PASS "
+                    f"(PASS omitted).\n"
                     f"| Check | Status |\n|-------|--------|\n"
                     + "\n".join(failed_lines)
                     + "\n"
@@ -825,10 +857,9 @@ class Dispatcher:
                 if issues_text:
                     design_check_notice += f"\n### Issues Found\n{issues_text}\n"
                 design_check_notice += (
-                    "\nAddress the failed structural checks in your review. "
-                    "Focus your analysis on scientific validity, baseline adequacy, "
-                    "and success criteria realism — passing structural checks "
-                    "already cover completeness.\n"
+                    "\nAddress the failed structural checks in the revised "
+                    "experiment_plan.yaml. Scientific validity items are "
+                    "covered by your Self-Review section.\n"
                 )
 
         # Build data compliance notice for RUN step
@@ -939,16 +970,63 @@ class Dispatcher:
                 except Exception:
                     logger.debug("Failed to read code_recon.yaml for prompt injection", exc_info=True)
 
+        # For CODE step: inject concepts.yaml and code_recon.yaml content directly
+        # so the coder agent has full context without extra file_read round-trips.
+        code_step_context_notice = ""
+        if step == PipelineStep.CODE:
+            concepts_path = pdir / "concepts.yaml"
+            if concepts_path.exists():
+                try:
+                    concepts_text = concepts_path.read_text()
+                    code_step_context_notice += (
+                        "\n## === ATOMIC CONCEPTS (concepts.yaml) ===\n"
+                        "The following atomic concepts were extracted by the CONCEPT_EXTRACT step. "
+                        "Use them to guide your implementation decisions.\n\n"
+                        f"```yaml\n{concepts_text}\n```\n"
+                    )
+                except Exception:
+                    logger.debug("Failed to read concepts.yaml for CODE prompt injection", exc_info=True)
+            recon_path_code = pdir / "code_recon.yaml"
+            if recon_path_code.exists():
+                try:
+                    recon_text_code = recon_path_code.read_text()
+                    # Check if all repos failed
+                    try:
+                        import yaml as _yaml_recon
+                        recon_data = _yaml_recon.safe_load(recon_text_code) or {}
+                        repos = recon_data.get("repos", []) if isinstance(recon_data, dict) else []
+                        all_error = repos and all(
+                            r.get("status") == "error" for r in repos if isinstance(r, dict)
+                        )
+                    except Exception:
+                        all_error = False
+                    recon_warning = (
+                        "\nNOTE: All reference code repos failed to clone. "
+                        "Implement based on paper description only.\n"
+                        if all_error else ""
+                    )
+                    code_step_context_notice += (
+                        "\n## === REFERENCE CODE RECON (code_recon.yaml) ===\n"
+                        "The following code_recon.yaml was produced by the CODE_RECON step. "
+                        "Use it to ground your implementation in real reference codebases.\n"
+                        f"{recon_warning}\n"
+                        f"```yaml\n{recon_text_code}\n```\n"
+                    )
+                except Exception:
+                    logger.debug("Failed to read code_recon.yaml for CODE prompt injection", exc_info=True)
+
         # Only inject artifacts relevant to this step to save tokens
         _relevant_artifacts = {
             PipelineStep.HYPOTHESIS: set(),  # reads from KB only
             PipelineStep.DESIGN: {"hypothesis"},
-            PipelineStep.DESIGN_REVIEW: {"hypothesis", "design"},
-            PipelineStep.CODE: {"hypothesis", "design"},
+            PipelineStep.CONCEPT_PAPER: {"hypothesis", "design"},
+            PipelineStep.CONCEPT_CODE: {"concept_paper", "code_recon"},
+            PipelineStep.CODE: {"hypothesis", "design", "concept_extract", "concept_code", "code_recon"},
             PipelineStep.RUN: {"design", "code"},
             PipelineStep.CRITIC: {"hypothesis", "design", "run", "code_preflight"},
             PipelineStep.INTERROGATION: {"run", "critic"},
-            PipelineStep.REPORT: {"hypothesis", "design", "run", "critic", "interrogation"},
+            PipelineStep.JUDGE: {"hypothesis", "design", "concept_code", "run", "code_preflight"},
+            PipelineStep.REPORT: {"hypothesis", "design", "run", "critic", "interrogation", "judge"},
         }
         relevant_keys = _relevant_artifacts.get(step)
         if relevant_keys is not None:
@@ -972,6 +1050,31 @@ class Dispatcher:
             for k, v in filtered.items()
         }
 
+        # Typed-digest injection: for every upstream artifact that owns a
+        # ``<step>.digest.json`` (see researchos.schemas.digest.DIGEST_FILENAMES),
+        # embed the digest payload inline so the downstream agent consumes a
+        # ~2KB typed JSON blob instead of re-parsing the original 15KB markdown.
+        # Full markdown remains on disk for archival and can still be read via
+        # ``file_read`` when the agent needs a specific excerpt.
+        upstream_digests, digests_missing = _load_upstream_digests(filtered, pdir)
+        digests_notice = ""
+        if upstream_digests:
+            digests_notice = (
+                "\n## Upstream Typed Digests (Pydantic-validated, authoritative)\n"
+                "These are the machine-consumable summaries of prior steps. "
+                "Prefer them over re-reading the original markdown — every field "
+                "is contract-enforced. Original files remain available via "
+                "`file_read` if you need a specific excerpt.\n\n"
+                f"```json\n{json.dumps(upstream_digests, indent=2)}\n```\n"
+            )
+            if digests_missing:
+                digests_notice += (
+                    "\nDigests pending for: "
+                    + ", ".join(sorted(digests_missing))
+                    + " (step not yet run — fall back to file_read on the "
+                    "filename listed under Existing Artifacts).\n"
+                )
+
         prompt = f"""You are executing an atomic research step as the **{agent_name}** agent.
 
 ## Task
@@ -981,13 +1084,13 @@ Execute step: **{step.value}** for pipeline: **{pipeline.pipeline_id}**
 - Title: {pipeline.title}
 - Research Question: {pipeline.research_question}
 - Current Stage: {pipeline.stage.value}
-{design_check_notice}{data_notice}{ref_notice}{consistency_notice}{directives_notice}{code_recon_notice}
+{design_check_notice}{data_notice}{ref_notice}{consistency_notice}{directives_notice}{code_recon_notice}{code_step_context_notice}{digests_notice}
 ## CRITICAL: Required Output
 You MUST write exactly this file using file_write: **{expected_output}**
 Use the filename as-is (relative path). Do NOT use absolute paths.
 
 ## Instructions
-1. Read relevant existing artifacts from the pipeline using file_read (relative paths only)
+1. Prefer Upstream Typed Digests (above) to re-reading raw markdown. Use `file_read` only for excerpts the digest omits.
 2. Use `kb_retrieve` to gather relevant knowledge before producing output
 3. For the RUN step: use `execute_python` to run actual experiments, then write results to results.json
 4. Write the output artifact using file_write with path: {expected_output}
@@ -997,7 +1100,7 @@ Use the filename as-is (relative path). Do NOT use absolute paths.
 {json.dumps(filtered, indent=2)}
 {agent_instructions}"""
 
-        # B5: proactive token budget — reserve 15% for output
+        # Proactive token budget — reserve 15% for output
         budget = int(get_context_size(self._resolve_agent_model(agent_name, None) or "") * 0.85)
         if estimate_tokens(prompt) > budget:
             logger.warning(

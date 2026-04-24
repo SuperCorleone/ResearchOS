@@ -6,11 +6,12 @@
     "imports_available": true,
     "models_match_plan": true,
     "metrics_match_plan": true,
-    "data_source_match": false,
-    "reference_data_consistency": false,
+    "data_source_match": true,
+    "reference_data_consistency": true,
     "seed_parameter_accepted": true,
     "timeout_risk": "LOW",
-    "reference_codebases_grounded": true
+    "reference_codebases_grounded": true,
+    "concept_quality": true
   },
   "issues": [
     {
@@ -95,22 +96,20 @@
     },
     {
       "severity": "WARN",
-      "check": "data_source",
-      "detail": "Plan says data.source='file' but code doesn't reference data/raw/"
+      "check": "g3_concepts_parse",
+      "detail": "Failed to parse concepts.yaml \u2014 falling back to legacy G3 check"
     },
     {
       "severity": "WARN",
-      "check": "reference_data_consistency",
-      "detail": "data.consistency_requirement references 'Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging' but code does not reference data/raw/ directory or fetch_dataset. Ensure the reference paper's data is being loaded."
+      "check": "concept_quality",
+      "detail": "Failed to parse concepts.yaml for quality check"
     }
   ],
   "g3_implementation_coverage": {
-    "claims_total": 6,
-    "claims_mapped": 0,
+    "claims_total": 9,
+    "claims_mapped": 2,
     "trivial_implementations": 0,
-    "missing_claims": [
-      "No CLAIM-TO-CODE MAPPING table found in code"
-    ],
+    "missing_claims": [],
     "per_concept": {},
     "trivial_functions": []
   },

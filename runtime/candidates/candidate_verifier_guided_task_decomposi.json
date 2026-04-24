@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "verifier_guided_task_decomposi",
+  "title": "Verifier-Guided Task Decomposition for Multi-Agent LLM Workflows",
+  "research_question": "Can integrating a lightweight verifier that scores decomposition soundness and inter-agent dependency consistency improve task success and reduce wasted agent calls in multi-agent LLM workflows compared with standard planner-only orchestration?",
+  "hypothesis": "A verifier-guided orchestration loop that checks decomposition quality before execution and triggers selective re-planning when dependencies are inconsistent will yield higher end-to-end success rates and lower orchestration cost than planner-only or escalation-only multi-agent workflows.",
+  "motivation": "The knowledge base shows recent rejected ideas clustered around uncertainty averaging and escalation policies for agentic workflows, suggesting saturation in those directions. At the same time, the self-adaptive systems literature in the KB highlights an underexplored issue: systems fail when they commit too early to a single model or plan and need explicit analysis-time mechanisms to detect poor choices before costly execution. Translating that gap to multi-agent LLM workflows suggests a more novel direction: not averaging agents or escalating after failure, but verifying task decomposition quality and dependency consistency before and during execution. This could address a practical bottleneck in agent orchestration—expensive downstream errors caused by flawed decomposition—while staying distinct from already rejected ideas.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-22T20:04:55.604237+00:00",
+  "status": "pending"
+}

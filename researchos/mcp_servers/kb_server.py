@@ -150,6 +150,22 @@ def _score_page_bm25(
     return score
 
 
+def _parse_frontmatter(content: str) -> dict | None:
+    """Parse YAML frontmatter from a wiki page string.
+
+    Returns the parsed dict, or None if no valid frontmatter block is found.
+    """
+    if not content.startswith("---"):
+        return None
+    end = content.find("\n---", 3)
+    if end < 0:
+        return None
+    try:
+        return yaml.safe_load(content[3:end]) or {}
+    except Exception:
+        return None
+
+
 def _truncate_to_tokens(text: str, max_tokens: int) -> str:
     """Rough truncation assuming 1 token ~ 4 chars."""
     max_chars = max_tokens * 4
@@ -335,13 +351,32 @@ def search_wiki(query: str, max_results: int = 5, max_tokens: int = 4000) -> str
     if not top:
         return f"No relevant pages found for query: {query}"
 
+    _EVAL_QUERY_KWS = {"rq", "research question", "evaluation", "metric",
+                       "precision", "recall", "success rate"}
+    is_eval_query = any(kw in query.lower() for kw in _EVAL_QUERY_KWS)
+
     parts: list[str] = []
     budget = max_tokens
     for score, path, content in top:
         rel = path.relative_to(WIKI_DIR)
         header = f"## [{rel}] (score: {score:.4f})\n"
+
+        # Inject structured evaluation protocol block for relevant queries
+        eval_prefix = ""
+        if is_eval_query:
+            fm = _parse_frontmatter(content)
+            ep = fm.get("evaluation_protocol") if fm else None
+            if ep and ep.get("has_explicit_rqs") and ep.get("rq_list"):
+                lines = ["=== STRUCTURED EVALUATION PROTOCOL ==="]
+                for rq in ep["rq_list"]:
+                    metrics_str = ", ".join(rq.get("metrics", [])) or "see full text"
+                    lines.append(f"{rq['id']}: {rq['question'][:150]}")
+                    lines.append(f"  Metrics: {metrics_str}")
+                lines.append("=" * 40)
+                eval_prefix = "\n".join(lines) + "\n\n"
+
         snippet = _truncate_to_tokens(content, budget // max(len(top), 1))
-        entry = header + snippet + "\n"
+        entry = header + eval_prefix + snippet + "\n"
         parts.append(entry)
         budget -= len(entry) // 4
 

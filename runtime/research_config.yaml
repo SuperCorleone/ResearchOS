@@ -27,7 +27,10 @@ topic_gating:
 ## doubles wall-clock time. Enable only when you need to catch silent-failure
 ## classes. Env var RESEARCHOS_REVERIFY=1 also enables it.
 reverify:
-  enabled: false
+  enabled: true
+  tolerance_warn: 0.02   # 2% drift WARN
+  tolerance_block: 0.10  # 10% drift BLOCK
+  compare_to_contract: true  # compare against metric_contract.json baseline values
 
 retrieval:
   cache_ttl_hours: 24

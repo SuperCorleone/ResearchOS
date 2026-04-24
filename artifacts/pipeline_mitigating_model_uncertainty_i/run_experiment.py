@@ -1,152 +1,153 @@
 #!/usr/bin/env python3
-"""Stacking vs BMA experiment for mitigating_model_uncertainty_i.
+"""Stacked ensemble vs BMA comparison for rescue robot hazard prediction."""
 
-Dataset: rescue-robot runtime traces from the TUNE/BMA reference paper.
-Columns: illuminance, smoke, size, distance, firm, power, band, quality, speed -> hazard (binary)
-'firm' is categorical (Yes/No), all others numeric.
-"""
-
-import argparse
-import hashlib
 import json
-import random
-import sys
-import time
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
-from sklearn.metrics import brier_score_loss, log_loss, accuracy_score
-from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.preprocessing import StandardScaler
 
-SEED = 42
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
+
 PIPELINE_ID = "mitigating_model_uncertainty_i"
-
-# Resolve data dir relative to project root (3 levels up from this file)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "raw" / PIPELINE_ID
-
-TRAIN_CSV = DATA_DIR / "training_rescueRobot_450.csv"
-VAL_CSV   = DATA_DIR / "validation_rescueRobot_450.csv"
-
-TARGET = "hazard"
-CATEGORICAL = ["firm"]
+DATA_DIR = Path("data/raw") / PIPELINE_ID
+OUTPUT_FILE = Path("artifacts") / PIPELINE_ID / "results.json"
 
 
-def load_data(path: Path) -> tuple:
-    df = pd.read_csv(path)
-    for col in CATEGORICAL:
-        if col in df.columns:
-            le = LabelEncoder()
-            df[col] = le.fit_transform(df[col].astype(str))
-    X = df.drop(columns=[TARGET]).values.astype(float)
-    y = df[TARGET].values.astype(int)
+def load_data():
+    data_file = DATA_DIR / "training_rescueRobot_450.csv"
+    df = pd.read_csv(data_file)
+    logger.info(f"Loaded: {df.shape[0]} rows, {df.shape[1]} cols")
+
+    target_col = "hazard"
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    for col in X.columns:
+        if X[col].dtype == "object":
+            X[col] = X[col].map({"Yes": 1, "No": 0}).fillna(0).astype(float)
+
+    logger.info(f"Features: {X.shape[1]}, Target: {y.value_counts().to_dict()}")
     return X, y
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
+def train_bma(X_train, y_train, X_test):
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_test_s = scaler.transform(X_test)
+
+    model = LogisticRegression(max_iter=1000, random_state=42)
+    model.fit(X_train_s, y_train)
+    return model.predict_proba(X_test_s)[:, 1]
 
 
-def bma_uniform(X_train, y_train, X_val):
-    """BMA approximation: uniform-weight ensemble of 5 logistic GLMs."""
-    Cs = [0.01, 0.1, 1.0, 10.0, 100.0]
-    preds = []
-    for C in Cs:
-        m = LogisticRegression(C=C, max_iter=1000, random_state=SEED)
-        m.fit(X_train, y_train)
-        preds.append(m.predict_proba(X_val)[:, 1])
-    return np.mean(preds, axis=0)
+def train_stacking(X_train, y_train, X_test, n_folds=5):
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_test_s = scaler.transform(X_test)
+
+    base_models = [
+        LogisticRegression(C=1.0, max_iter=1000, random_state=42),
+        LogisticRegression(C=0.5, penalty="l1", solver="saga", max_iter=1000, random_state=42),
+        LogisticRegression(C=10.0, max_iter=1000, random_state=43),
+    ]
+
+    n_train = len(X_train)
+    n_test = len(X_test)
+    n_models = len(base_models)
+
+    oof_preds = np.zeros((n_train, n_models))
+    test_preds = np.zeros((n_test, n_models))
+
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+
+    for i, base_model in enumerate(base_models):
+        for train_idx, val_idx in skf.split(X_train_s, y_train):
+            m = type(base_model)(**base_model.get_params())
+            m.fit(X_train_s[train_idx], y_train.iloc[train_idx])
+            oof_preds[val_idx, i] = m.predict_proba(X_train_s[val_idx])[:, 1]
+
+        final = type(base_model)(**base_model.get_params())
+        final.fit(X_train_s, y_train)
+        test_preds[:, i] = final.predict_proba(X_test_s)[:, 1]
+
+    meta = LogisticRegression(max_iter=1000, random_state=42)
+    meta.fit(oof_preds, y_train)
+    return meta.predict_proba(test_preds)[:, 1]
 
 
-def stacking(X_train, y_train, X_val):
-    """Stacking: 5 base GLMs -> logistic meta-learner on OOF predictions."""
-    Cs = [0.01, 0.1, 1.0, 10.0, 100.0]
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-
-    oof_meta = np.zeros((len(X_train), len(Cs)))
-    for j, C in enumerate(Cs):
-        base = LogisticRegression(C=C, max_iter=1000, random_state=SEED)
-        oof_meta[:, j] = cross_val_predict(
-            base, X_train, y_train, cv=skf, method="predict_proba"
-        )[:, 1]
-
-    val_meta = np.zeros((len(X_val), len(Cs)))
-    for j, C in enumerate(Cs):
-        base = LogisticRegression(C=C, max_iter=1000, random_state=SEED)
-        base.fit(X_train, y_train)
-        val_meta[:, j] = base.predict_proba(X_val)[:, 1]
-
-    meta = LogisticRegression(C=1.0, max_iter=1000, random_state=SEED)
-    meta.fit(oof_meta, y_train)
-    return meta.predict_proba(val_meta)[:, 1]
-
-
-def compute_metrics(y_true, y_prob, name):
+def compute_metrics(y_true, y_proba):
+    y_pred = (y_proba >= 0.5).astype(int)
     return {
-        f"{name}_brier": float(brier_score_loss(y_true, y_prob)),
-        f"{name}_logloss": float(log_loss(y_true, y_prob)),
-        f"{name}_accuracy": float(accuracy_score(y_true, (y_prob >= 0.5).astype(int))),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "brier_score": float(brier_score_loss(y_true, y_proba)),
+        "log_loss": float(log_loss(y_true, y_proba)),
+        "auc": float(roc_auc_score(y_true, y_proba)),
     }
+
+
+def run(seed=42):
+    np.random.seed(seed)
+    X, y = load_data()
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=seed, stratify=y
+    )
+
+    bma_proba = train_bma(X_train, y_train, X_test)
+    stack_proba = train_stacking(X_train, y_train, X_test)
+
+    bma_metrics = compute_metrics(y_test.values, bma_proba)
+    stack_metrics = compute_metrics(y_test.values, stack_proba)
+
+    logger.info(f"BMA: {bma_metrics}")
+    logger.info(f"Stack: {stack_metrics}")
+
+    return {"bma": bma_metrics, "stacking": stack_metrics, "seed": seed}
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=SEED)
-    args = parser.parse_args()
+    results = {"config": {"status": "completed"}, "metrics": {}}
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
+    seeds = [42, 123, 456]
+    all_results = []
 
-    t0 = time.monotonic()
+    for seed in seeds:
+        logger.info(f"Running with seed {seed}...")
+        all_results.append(run(seed))
 
-    if not TRAIN_CSV.exists() or not VAL_CSV.exists():
-        result = {
-            "metrics": {},
-            "config": {"data_source": "file", "split_seed": args.seed,
-                       "data_rows": None, "data_hash": "missing",
-                       "pipeline_id": PIPELINE_ID},
-            "seed": args.seed, "runtime_seconds": 0.0,
-            "notes": f"Data files not found at {DATA_DIR}",
-        }
-        print(json.dumps(result))
-        sys.exit(0)
+    bma_acc = [r["bma"]["accuracy"] for r in all_results]
+    bma_brier = [r["bma"]["brier_score"] for r in all_results]
+    bma_logloss = [r["bma"]["log_loss"] for r in all_results]
 
-    X_train, y_train = load_data(TRAIN_CSV)
-    X_val,   y_val   = load_data(VAL_CSV)
+    stack_acc = [r["stacking"]["accuracy"] for r in all_results]
+    stack_brier = [r["stacking"]["brier_score"] for r in all_results]
+    stack_logloss = [r["stacking"]["log_loss"] for r in all_results]
 
-    data_hash = sha256_file(TRAIN_CSV)
-
-    bma_preds   = bma_uniform(X_train, y_train, X_val)
-    stack_preds = stacking(X_train, y_train, X_val)
-
-    m = {}
-    m.update(compute_metrics(y_val, bma_preds,   "bma"))
-    m.update(compute_metrics(y_val, stack_preds, "stacking"))
-    m["brier_improvement_pct"] = float(
-        (m["bma_brier"] - m["stacking_brier"]) / m["bma_brier"] * 100
-    )
-
-    result = {
-        "metrics": m,
-        "config": {
-            "data_source": "file",
-            "split_seed": args.seed,
-            "data_rows": int(len(X_train) + len(X_val)),
-            "data_hash": data_hash,
-            "pipeline_id": PIPELINE_ID,
-        },
-        "seed": args.seed,
-        "runtime_seconds": float(time.monotonic() - t0),
-        "notes": "BMA=uniform GLM ensemble (5 C values); Stacking=logistic meta-learner on OOF predictions",
+    results["metrics"] = {
+        "bma_accuracy_mean": float(np.mean(bma_acc)),
+        "bma_accuracy_std": float(np.std(bma_acc)),
+        "bma_brier_mean": float(np.mean(bma_brier)),
+        "bma_logloss_mean": float(np.mean(bma_logloss)),
+        "stacking_accuracy_mean": float(np.mean(stack_acc)),
+        "stacking_accuracy_std": float(np.std(stack_acc)),
+        "stacking_brier_mean": float(np.mean(stack_brier)),
+        "stacking_logloss_mean": float(np.mean(stack_logloss)),
+        "improvement_accuracy_pct": float(np.mean(stack_acc) - np.mean(bma_acc)),
+        "improvement_brier_pct": float(np.mean(stack_brier) - np.mean(bma_brier)),
     }
-    print(json.dumps(result))
+
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUTPUT_FILE, "w") as f:
+        json.dump(results, f, indent=2)
+
+    logger.info(f"Results: {json.dumps(results['metrics'], indent=2)}")
 
 
 if __name__ == "__main__":

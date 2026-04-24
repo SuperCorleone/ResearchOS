@@ -235,12 +235,16 @@ async def test_parallel_pipelines() -> None:
     for _ in range(5):
         await scheduler.tick()
 
-    # All should be at WAITING_APPROVAL
+    # After 2026-04 refactor: WAITING_APPROVAL gate removed. Pipelines
+    # transition straight from REPORT to MILESTONE stage after the
+    # professor auto-decides. Accept either step=REPORT (not yet transitioned)
+    # or stage=MILESTONE/COMPLETED (already transitioned).
     for pid in pids:
         p = sm.load_pipeline(pid)
         check(
-            p.step == PipelineStep.WAITING_APPROVAL,
-            f"{pid}: at WAITING_APPROVAL (step={p.step})",
+            p.step == PipelineStep.REPORT
+            or p.stage in (PipelineStage.MILESTONE, PipelineStage.COMPLETED),
+            f"{pid}: reached terminal step or milestone (step={p.step}, stage={p.stage})",
         )
 
     # Cleanup

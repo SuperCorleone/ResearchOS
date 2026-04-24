@@ -1,0 +1,13 @@
+{
+  "step": "design",
+  "stage": "fast_fail",
+  "status": "completed",
+  "result": {
+    "agent": "exp_designer",
+    "tokens_used": 44959,
+    "artifacts_written": [
+      "experiment_plan.yaml"
+    ]
+  },
+  "cached_at": 1777019911.100076
+}

@@ -1,4 +1,4 @@
-"""Baseline / metric-contract registry (A17).
+"""Baseline / metric-contract registry.
 
 Records what a pipeline *must* report against, and provides a simple
 comparability check between claimed results and the declared contract.

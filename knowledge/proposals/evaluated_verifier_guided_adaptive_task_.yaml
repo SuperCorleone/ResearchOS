@@ -1,0 +1,35 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T08:44:22.539060+00:00'
+evaluator_model: ''
+falsification:
+  baseline: ''
+  expected_signal: ''
+  failure_condition: ''
+  hypothesis: ''
+  metric: ''
+  min_budget_ratio: 0.1
+gate_reasons:
+- 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+gate_result: reject
+innovation:
+  our_delta: ''
+  problem_gap: ''
+  why_it_matters: ''
+kb_duplicates: []
+kb_related: []
+proposal_id: verifier_guided_adaptive_task_
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a verifier-guided controller that dynamically revises task
+  decomposition and agent routing based on intermediate failure signals improve end-to-end
+  success and reduce redundant agent calls in multi-agent LLM workflows compared with
+  static decomposition pipelines?
+retrieval_cache_key: ''
+scores:
+  differentiation: 0
+  falsifiability: 0
+  feasibility: 0
+  novelty: 0
+  significance: 0
+similar_papers: []
+title: Verifier-guided adaptive task decomposition for multi-agent workflows

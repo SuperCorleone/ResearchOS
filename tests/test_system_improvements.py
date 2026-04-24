@@ -215,17 +215,17 @@ class TestExperimentRunnerAgent:
     """
 
     def test_agent_file_exists(self):
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "experiment_runner.md"
+        path = PROJECT_ROOT / "researchos" / "agent_defs" / "experiment_runner.md"
         assert path.exists(), "experiment_runner.md should exist"
 
     def test_agent_has_frontmatter(self):
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "experiment_runner.md"
+        path = PROJECT_ROOT / "researchos" / "agent_defs" / "experiment_runner.md"
         content = path.read_text()
         assert "name: experiment_runner" in content
 
     def test_agent_defines_schema(self):
         """Must mention the required results.json schema fields."""
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "experiment_runner.md"
+        path = PROJECT_ROOT / "researchos" / "agent_defs" / "experiment_runner.md"
         content = path.read_text()
         assert "metrics" in content
         assert "config" in content
@@ -233,7 +233,7 @@ class TestExperimentRunnerAgent:
 
     def test_agent_warns_about_hook_enforcement(self):
         """Must tell agent that schema is enforced by hooks."""
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "experiment_runner.md"
+        path = PROJECT_ROOT / "researchos" / "agent_defs" / "experiment_runner.md"
         content = path.read_text()
         assert "REJECTED" in content or "enforced" in content.lower()
 
@@ -374,23 +374,22 @@ class TestPaperAuditG5:
 # ═══════════════════════════════════════════════════════════════════
 
 
-class TestPipelineManagerFallback:
-    """Success: pipeline_manager is the fallback when STEP_AGENT has no entry.
-    Failure: fallback mechanism broken or agent file missing.
+class TestDispatcherNoFallback:
+    """2026-04 refactor: pipeline_manager fallback was removed. Every
+    step MUST have a registered agent or the dispatcher raises RuntimeError.
     """
 
-    def test_fallback_agent_file_exists(self):
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "pipeline_manager.md"
-        assert path.exists(), "pipeline_manager.md must exist as fallback"
-
-    def test_description_marks_as_fallback(self):
-        path = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents" / "pipeline_manager.md"
-        content = path.read_text()
-        assert "fallback" in content.lower() or "Fallback" in content
+    def test_no_pipeline_manager_value(self):
+        """pipeline_manager must NOT appear in STEP_AGENT values."""
+        from researchos.runtime.dispatcher import STEP_AGENT
+        assert "pipeline_manager" not in STEP_AGENT.values()
 
     def test_all_steps_have_dedicated_agents(self):
-        """All pipeline steps should have dedicated agents in STEP_AGENT.
-        If this passes, pipeline_manager is truly only a safety net."""
+        """All LLM-driven pipeline steps have dedicated agents.
+
+        REPORT is intentionally excluded — it's rendered deterministically by
+        ``researchos.core.publisher.render_milestone`` (no LLM, no agent).
+        """
         from researchos.runtime.dispatcher import STEP_AGENT
         from researchos.schemas.pipeline import PipelineStep
         critical_steps = [
@@ -399,19 +398,17 @@ class TestPipelineManagerFallback:
             PipelineStep.CODE,
             PipelineStep.RUN,
             PipelineStep.CRITIC,
-            PipelineStep.REPORT,
         ]
         for step in critical_steps:
             agent = STEP_AGENT.get(step)
-            assert agent is not None, f"Step {step.value} should have a dedicated agent, not fallback"
-            assert agent != "pipeline_manager", f"Step {step.value} should not use fallback"
+            assert agent is not None, f"Step {step.value} missing agent"
+            assert agent != "pipeline_manager", f"Step {step.value} must not use fallback"
 
-    def test_fallback_triggered_for_unknown_step(self):
-        """Verify the fallback mechanism itself works."""
+    def test_unknown_step_returns_none(self):
+        """Unknown step returns None (dispatcher will raise RuntimeError)."""
         from researchos.runtime.dispatcher import STEP_AGENT
-        # A hypothetical step not in the mapping
-        result = STEP_AGENT.get("nonexistent_step", "pipeline_manager")
-        assert result == "pipeline_manager"
+        result = STEP_AGENT.get("nonexistent_step")
+        assert result is None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -422,7 +419,7 @@ class TestPipelineManagerFallback:
 class TestAgentPromptGates:
     """Verify that each agent's prompt contains the assigned G-gate checks."""
 
-    AGENTS_DIR = PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents"
+    AGENTS_DIR = PROJECT_ROOT / "researchos" / "agent_defs"
 
     def _read_agent(self, name: str) -> str:
         return (self.AGENTS_DIR / f"{name}.md").read_text()
@@ -431,7 +428,8 @@ class TestAgentPromptGates:
         content = self._read_agent("hypothesis_gen")
         assert "G1" in content
         assert "operationalization" in content.lower() or "operationali" in content.lower()
-        assert "experiment necessity" in content.lower() or "Experiment necessity" in content
+        # "experiment necessity" phrase was renamed to "requires empirical evidence"
+        assert "empirical evidence" in content.lower() or "experiment necessity" in content.lower()
 
     def test_exp_designer_has_g2_g5_g7(self):
         content = self._read_agent("exp_designer")
@@ -475,10 +473,10 @@ class TestAgentPromptGates:
         assert "G5" in content
         assert "results.json" in content
 
-    def test_reporter_has_g7(self):
-        content = self._read_agent("reporter")
-        assert "G7" in content
-        assert "measured" in content.lower()
+    # test_reporter_has_g7 removed: the reporter LLM agent was retired in
+    # the 2026-04 refactor. REPORT is now a deterministic renderer in
+    # researchos.core.publisher (G7 resource accounting lives in the
+    # typed RunDigest + publisher template, not in an agent prompt).
 
 
 # ═══════════════════════════════════════════════════════════════════

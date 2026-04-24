@@ -1,0 +1,50 @@
+direction: multimodal-reasoning
+evaluated_at: '2026-04-24T09:08:52.541625+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Best static multimodal agent workflow with fixed orchestration policy
+    and confidence-threshold abstention tuned on validation data.
+  expected_signal: At least 5% relative improvement in selective risk-coverage AUC
+    and at least 3% absolute accuracy gain at equal latency budget on at least one
+    meaningful distribution-shift benchmark.
+  failure_condition: If selective risk-coverage AUC improves by less than 2% relative,
+    or if accuracy does not improve at matched latency budget, or if gains require
+    >10% additional latency versus baseline.
+  hypothesis: A MAPE-K multimodal controller with Bayesian uncertainty and heterogeneous
+    requirement optimization achieves better reliability than a static multimodal
+    workflow under distribution shift, while maintaining equal or better accuracy-latency
+    trade-offs.
+  metric: 'Primary: selective risk-coverage AUC under shifted test sets; Secondary:
+    accuracy at matched latency budget and abstention-calibrated expected utility.'
+  min_budget_ratio: 0.35
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a MAPE-K controller for multimodal reasoning agents that combines
+    TUNE-style Bayesian model uncertainty estimation with explicit heterogeneous requirement
+    optimization to decide when to answer, abstain, re-route, or acquire additional
+    evidence.
+  problem_gap: Existing methods fail because static multimodal workflows typically
+    optimize a single objective and lack principled uncertainty-aware control for
+    balancing accuracy, latency, and abstention under distribution shift.
+  why_it_matters: Which improves reliability and accuracy-latency-risk trade-offs
+    under multimodal ambiguity and distribution shift.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: heterogeneous_requirement_mape
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a MAPE-K-style controller that optimizes heterogeneous requirements
+  (accuracy, latency, and abstention risk) improve reliability of multimodal reasoning
+  pipelines under distribution shift compared with static multimodal agent workflows?
+retrieval_cache_key: 04d4b0e11d7e145a
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Heterogeneous-Requirement MAPE-K for Multimodal Reasoning Agents

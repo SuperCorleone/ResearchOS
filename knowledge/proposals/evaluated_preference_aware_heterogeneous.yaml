@@ -1,0 +1,56 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T09:06:45.864552+00:00'
+evaluator_model: ''
+falsification:
+  baseline: A standard MAPE-K or heuristic adaptive workflow controller that selects
+    a single best workflow model (no Bayesian model averaging) and applies replanning
+    when predicted utility drops below a threshold.
+  expected_signal: At least +3% absolute improvement in constraint-satisfying task
+    success and at least 15% relative reduction in unnecessary replanning.
+  failure_condition: Constraint-satisfying task success improves by less than 2% absolute
+    over baseline or unnecessary replanning is not reduced by at least 10% relative,
+    across held-out tasks and uncertainty conditions.
+  hypothesis: A preference-aware MAPE-K controller with Bayesian model averaging will
+    achieve higher constraint-satisfying task success and lower unnecessary replanning
+    than a non-BMA adaptive workflow baseline on multi-agent LLM tasks with mixed
+    threshold and optimization goals.
+  metric: 'Primary: constraint-satisfying task success rate (tasks completed while
+    meeting latency/cost thresholds). Secondary: unnecessary replanning rate, defined
+    as replans that do not improve final utility or constraint satisfaction; also
+    track composite utility over quality, cost, and latency.'
+  min_budget_ratio: 0.25
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a preference-aware MAPE-K adaptation controller that represents
+    threshold and optimization goals explicitly and uses Bayesian model averaging
+    over candidate workflow models to choose whether and how to adapt multi-agent
+    LLM workflows.
+  problem_gap: Existing methods fail because they adapt multi-agent LLM workflows
+    with generic routing or replanning heuristics that do not explicitly model heterogeneous
+    user requirements combining hard thresholds (e.g., cost/latency ceilings) and
+    optimization goals, and therefore make weaker decisions under uncertainty.
+  why_it_matters: Which improves task success and reduces unnecessary re-planning
+    under uncertain workflow performance and mixed user preference constraints.
+kb_duplicates:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+kb_related:
+- failures/duplicate_ideas.md
+- failures/duplicate_ideas.md
+proposal_id: preference_aware_heterogeneous
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a MAPE-K-style controller with Bayesian model averaging over
+  candidate workflow models improve task success and reduce unnecessary re-planning
+  in multi-agent LLM workflows when user preferences combine threshold and optimization
+  goals?
+retrieval_cache_key: e125e49cf14a0e69
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Preference-Aware Heterogeneous Goal Adaptation for LLM Agent Workflows
