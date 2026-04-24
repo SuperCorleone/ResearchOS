@@ -1,0 +1,12 @@
+{
+  "pipeline_id": "stacking_based_uncertainty_han",
+  "fully_correct": false,
+  "recommendation": "ITERATE",
+  "confidence": "HIGH",
+  "summary": "FAST_FAIL verdict: required typed digests hypothesis.digest.json, plan.digest.json, and run.digest.json are missing, so the run cannot be accepted under the judge protocol. The available results.json reports accuracy__RQ1=0.0 and accuracy__RQ2=0.0 with status blocked_fast_fail, explicitly citing missing exact reference dataset files, train/test split metadata, and preprocessing pipeline. data_manifest.yaml confirms reference repository contents were downloaded (total_rows=39420; directory_hash=sha256:e231cac0020e75dbc0732f915cdb60ac42d8452ccc23b427165350d85e9ed03e), but this alone does not establish that the experiment used the same official dataset version, split, or preprocessing as the SEAMS'22 paper. Because current evidence indicates a blocked run rather than a supported implementation, iteration is required before any claim about stacking replacing BMA is credible.",
+  "per_concept": {},
+  "suggestions": {
+    "implementation": "Produce the required typed digests (hypothesis.digest.json, plan.digest.json, run.digest.json), extract and record the exact reference dataset filenames, train/test split indices or protocol, preprocessing steps, and exact baseline values from the paper/repository, then rerun the experiment so results.json reflects executed comparisons rather than blocked_fast_fail placeholders."
+  },
+  "code_evidence": {}
+}

@@ -68,6 +68,67 @@ Read `iteration_count.txt` (if present), increment, and write back before produc
 
 When `fully_correct: true`, apply only enhancement suggestions — do NOT change core logic.
 
+## FORBIDDEN PATTERNS (preflight scan; any match BLOCKS)
+
+The CODE_PREFLIGHT step will scan your generated code with the following
+regular expressions. Any match BLOCKS the pipeline. Do not write code that
+matches any of these:
+
+1. The literal string `NotImplementedError` anywhere in code.
+2. A function body that is exactly `pass` (regex: `^\s+pass\s*$` inside any
+   `def` block). Empty placeholder functions are forbidden.
+3. A line that is exactly `...` (regex: `^\s*\.\.\.\s*$`).
+4. The literal string `NOT_IMPLEMENTED` anywhere in code or in any string
+   value written to `results.json`.
+5. A `results.json` whose `metrics` field is empty (`{}`) or whose values
+   are non-numeric strings such as `"NOT_IMPLEMENTED: ..."`. `metrics`
+   values MUST be `int` or `float`.
+
+If a section of the experiment legitimately cannot be implemented in the
+available time, surface this as a structured `last_error` on the pipeline
+state, NOT as a placeholder in `results.json`.
+
+## REQUIRED PATTERNS when alignment_contract is present
+
+If `alignment_contract.yaml` exists in the pipeline directory, you MUST
+read it before writing any code, and your generated `code_patch.diff` MUST
+satisfy the following:
+
+1. **Direct import of the baseline.** Find the dimension entry where
+   `dim == "baseline_algorithm"` and `lock == "LOCKED_TO_PAPER_VIA_REF_CODE"`.
+   Its `code_handle` block specifies `import_path` and `symbol`. Your
+   `baseline_wiring.py` MUST contain at least one statement of the form
+   `from <import_path> import <symbol>` (or `import <import_path>` followed
+   by `<import_path>.<symbol>` access). Re-implementing the baseline
+   algorithm from scratch is FORBIDDEN — preflight will diff your code
+   against the ref_code repo and BLOCK if you duplicate symbols.
+
+2. **All arms in `executive_summary.arms_to_run` exist.** For each entry in
+   that list, `run_experiment.py` MUST contain a function whose name is the
+   arm's `name` (snake_case is fine: `baseline_arm`, `proposal_arm`,
+   `ablation_arm_pool_isolation`, etc.). Each function returns a metrics
+   dict and is called from `main()` with the same seed schedule.
+
+3. **Real dataset load.** `data_loader.py` MUST `Path(...).exists()`-check
+   the file path at `dimensions[dim=dataset].code_handle.access_path` and
+   actually read it (e.g., `pandas.read_csv` for csv, etc.). Substituting
+   synthetic / random data is FORBIDDEN.
+
+4. **Forbidden list from contract.** `executive_summary.forbidden` is the
+   binding list of things you must NOT do for this pipeline. Do not just
+   read it — comply with every entry. Examples include forbidding
+   "synthetic / proxy datasets" and "BMA reimplementation".
+
+5. **Concept coverage.** For each concept in `dimensions[dim=
+   code_implementation_strategy].proposal.concepts`, there MUST be a
+   corresponding file in `proposal_impl/<concept_id>.py` containing a
+   class or function that implements that concept. Empty stub files are
+   FORBIDDEN.
+
+If `alignment_contract.yaml` is absent (legacy pipeline), these REQUIRED
+patterns are skipped, but the FORBIDDEN PATTERNS section above always
+applies.
+
 ## Quality Gates (this agent owns: G3, G6, G9)
 
 Definitions: see `shared/quality_gates.md`.

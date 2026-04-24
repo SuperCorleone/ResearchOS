@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PipelineStage(str, Enum):
@@ -23,6 +23,15 @@ class PipelineStage(str, Enum):
 
 
 class PipelineStep(str, Enum):
+    # Alignment workflow (2026-04): runs before HYPOTHESIS for user_inject
+    # pipelines that provide a base_paper. Legacy pipelines transition
+    # straight to HYPOTHESIS — the scheduler picks the entry step based on
+    # whether typed evidence_refs include role='base_paper'.
+    PAPER_SPEC = "paper_spec"           # extract paper_spec.yaml from base_paper.md
+    PROPOSAL_SPEC = "proposal_spec"     # extract proposal_spec.yaml from proposal.md
+    ALIGNMENT = "alignment"             # synthesize alignment_contract.yaml
+    ALIGNMENT_VALIDATOR = "alignment_validator"  # pure-Python preflight gate
+
     HYPOTHESIS = "hypothesis"
     DESIGN = "design"
     # DESIGN_REVIEW retired (2026-04): exp_designer now runs its own
@@ -79,14 +88,45 @@ class PipelineState(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    evidence_refs: list[str] = Field(
+    evidence_refs: list["TypedEvidenceRef | str"] = Field(
         default_factory=list,
-        description="Reference paper filenames from knowledge/raw/ that motivated this pipeline."
+        description="Typed references backing this pipeline. Bare strings from "
+        "older state.json files are auto-normalised to role='unknown'."
     )
 
     # Parallel branching support
     active_branch_count: int = 0
     selected_branch: int | None = None
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _normalize_evidence_refs(cls, v):
+        """Backward compat: bare-string entries → TypedEvidenceRef(role='unknown')."""
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, str):
+                out.append({"role": "unknown", "path_or_url": item})
+            else:
+                out.append(item)
+        return out
+
+
+class TypedEvidenceRef(BaseModel):
+    """A typed reference to a piece of evidence backing a pipeline.
+
+    Roles:
+      base_paper   — the paper this pipeline builds on or improves
+      proposal     — the user's research proposal text
+      ref_code     — git URL for the reference paper's open-source code
+      related_work — supplementary literature (read by HYPOTHESIS only when in scope)
+      unknown      — legacy entries from before typed refs (migration sentinel)
+    """
+
+    role: Literal["base_paper", "proposal", "ref_code", "related_work", "unknown"]
+    path_or_url: str
+    sha256: str | None = None
 
 
 class PipelineDefinition(BaseModel):
@@ -99,4 +139,18 @@ class PipelineDefinition(BaseModel):
     estimated_effort: str = "medium"
     budget_request: int = 10000
     source: str = "professor"
-    evidence_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[TypedEvidenceRef | str] = Field(default_factory=list)
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _normalize_evidence_refs(cls, v):
+        """Backward compat: a bare string becomes role='unknown'."""
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, str):
+                out.append({"role": "unknown", "path_or_url": item})
+            else:
+                out.append(item)
+        return out

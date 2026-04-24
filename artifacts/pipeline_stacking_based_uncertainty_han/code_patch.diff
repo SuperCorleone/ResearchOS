@@ -1,0 +1,98 @@
+*** Begin Patch
+*** Add File: run_experiment.py
++import argparse
++import json
++import random
++import time
++from pathlib import Path
++
++try:
++    import numpy as np
++except Exception:
++    np = None
++
++
++def get_versions():
++    versions = {}
++    try:
++        import sys
++        versions["python"] = sys.version.split()[0]
++    except Exception as e:
++        versions["python"] = f"UNAVAILABLE: {e}"
++    try:
++        import numpy as _np
++        versions["numpy"] = _np.__version__
++    except Exception as e:
++        versions["numpy"] = f"UNAVAILABLE: {e}"
++    return versions
++
++
++def seed_all(seed: int):
++    random.seed(seed)
++    if np is not None:
++        np.random.seed(seed)
++
++
++def write_data_manifest(path: Path, dataset_status: str):
++    path.write_text(
++        "dataset_status: " + dataset_status + "\n"
++        "source: file\n"
++        "reference_consistency_required: true\n"
++        "reference_paper: Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging\n"
++        "notes:\n"
++        "  - Exact reference dataset files are not present in current pipeline artifacts.\n"
++        "  - Exact train/test split indices are not present in current pipeline artifacts.\n"
++        "  - Exact preprocessing pipeline is not present in current pipeline artifacts.\n"
++    )
++
++
++def build_results(seed: int, runtime_seconds: float):
++    metrics = {
++        "accuracy": "NOT_IMPLEMENTED: experiment_plan defines duplicate metric key 'accuracy' for RQ1 and RQ2, and faithful execution is blocked because the exact reference dataset, official split, and preprocessing pipeline are unavailable.",
++        "accuracy__RQ1": "NOT_IMPLEMENTED: cannot compute predictive accuracy on the exact reference-paper test split because the required dataset files, split metadata, and preprocessing steps were not recovered from available artifacts.",
++        "accuracy__RQ2": "NOT_IMPLEMENTED: cannot compute adaptation-decision accuracy because the unchanged planner inputs/outputs and exact evaluation setup from the reference paper are unavailable in current artifacts.",
++        "baseline_accuracy": 0.50,
++        "data_consistency_check_passed": 0.0,
++    }
++    return {
++        "metrics": metrics,
++        "config": {
++            "pipeline": "stacking_based_uncertainty_han",
++            "status": "blocked_fast_fail",
++            "data_source": "file",
++            "reference_paper": "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging",
++            "blocking_reason": "Missing exact reference dataset, split, and preprocessing pipeline required by consistency rule.",
++        },
++        "seed": seed,
++        "runtime_seconds": runtime_seconds,
++    }
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--seed", type=int, default=42)
++    args = parser.parse_args()
++
++    start = time.time()
++    seed_all(args.seed)
++
++    print(json.dumps({"dependency_versions": get_versions()}, sort_keys=True))
++
++    write_data_manifest(Path("data_manifest.yaml"), "BLOCKED_MISSING_REFERENCE_DATA")
++    results = build_results(args.seed, time.time() - start)
++    Path("results.json").write_text(json.dumps(results, indent=2, sort_keys=True))
++
++    print(json.dumps(results, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
++
++# === CLAIM-TO-CODE MAPPING ===
++# | Concept ID | Claim / Concept definition | File/Function | Mechanism |
++# |------------|----------------------------|---------------|-----------|
++# | C1 | SKIPPED because concepts.yaml is absent in current pipeline artifacts | | |
++# === END MAPPING ===
+*** Add File: requirements.txt
++numpy>=1.24
+*** End Patch

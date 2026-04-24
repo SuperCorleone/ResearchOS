@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "uncertainty_triggered_communic",
+  "title": "Uncertainty-Triggered Communication Gating for Multi-Agent Workflows",
+  "research_question": "Can uncertainty-triggered communication gating reduce token cost and latency in multi-agent workflows without degrading task success compared with always-on agent communication?",
+  "hypothesis": "A multi-agent workflow that invokes inter-agent communication only when local uncertainty exceeds a calibrated threshold will preserve or improve task success while substantially lowering communication overhead and end-to-end latency.",
+  "motivation": "The knowledge base shows repeated rejected ideas around scheduling, decomposition, escalation, and reflection-based communication for multi-agent workflows, suggesting a crowded design space with insufficient novelty. At the same time, the self-adaptive systems literature explicitly highlights model-selection uncertainty and heterogeneous goals as underexplored. This creates a gap: agentic workflow research appears to optimize orchestration heuristics, but not communication as an adaptive control problem driven by calibrated uncertainty under multiple objectives such as quality, latency, and cost. Framing communication gating as an uncertainty-aware control mechanism could open a more principled and testable direction than prior rejected workflow proposals.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T18:52:05.499635+00:00",
+  "status": "pending"
+}

@@ -1,16 +1,13 @@
 {
   "total_credits": 100000,
   "allocations": {
-    "stack_sas_vs_bma": 50000,
-    "bayesian_model_averaging_for_s": 20000,
-    "mitigating_model_uncertainty_i": 20000
+    "stacking_based_uncertainty_han": 20000
   },
   "usage": {
-    "stack_sas_vs_bma": 679,
-    "mitigating_model_uncertainty_i": 3380,
-    "_system_miner": 4880,
-    "_system_evaluator": 146,
-    "_system_quick_gate": 159
+    "stacking_based_uncertainty_han": 352,
+    "_system_miner": 594,
+    "_system_quick_gate": 21,
+    "_system_evaluator": 21
   },
   "reserve": 50000
 }

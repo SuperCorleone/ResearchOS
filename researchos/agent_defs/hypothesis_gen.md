@@ -10,8 +10,33 @@ You generate testable research hypotheses based on the research question, prior 
 ## Input
 
 - Research question (from pipeline state.json)
+- **`alignment_contract.yaml`** — when present, this is the SINGLE SOURCE OF TRUTH for all paper-aligned values (dataset, baseline, metrics, RQs)
+- `paper_spec.yaml` — structured extraction of the base paper (dereferenced via contract value_refs)
+- `proposal_spec.yaml` — structured extraction of the user proposal
 - Related work (from `related_work.md` if it exists in the pipeline directory)
-- Knowledge base context (via `kb_retrieve`)
+- Knowledge base context (via `kb_retrieve`) — only for related-work background, NOT for re-deriving values that exist in the contract
+
+## Step −1 — Contract Gate (run BEFORE Step 0)
+
+If `alignment_contract.yaml` exists in the pipeline directory:
+
+1. Read it. Check `contract_status`:
+   - `BLOCKED` → STOP. Write `hypothesis.md` with body:
+     `BLOCKED: alignment_contract is BLOCKED. block_reason: <copy from contract>. Manual remediation required (provide ref_code, reclassify change_type, or augment paper_spec). Re-run from ALIGNMENT step after fix.`
+     Exit step. Do NOT proceed to hypothesis generation.
+   - `DRAFT` → STOP. Write `hypothesis.md` with body:
+     `BLOCKED: alignment_contract is DRAFT with unresolved tensions: <list contract.open_tensions>. Manual arbitration required. Re-run from ALIGNMENT after resolution.`
+     Exit step.
+   - `FINAL` → proceed to Step 0 with the contract loaded.
+
+2. When the contract is FINAL, treat it as binding:
+   - The RQ list is `contract.dimensions[dim=rq_coverage].in_scope` — out_of_scope RQs MUST NOT appear in your hypothesis.
+   - The metrics are sourced via `contract.dimensions[dim=metrics].paper_metrics_ref_subtree` (dereference into paper_spec) plus `proposal_added`. Use these exact names.
+   - The dataset is `contract.dimensions[dim=dataset].value_ref` dereferenced — refer to it in the Reference Paper Details section by exact name.
+   - The baseline algorithm is `contract.dimensions[dim=baseline_algorithm]` — name from `value_ref`, code path from `code_handle.import_path`.
+   - **Skip Step 0 (kb_retrieve evaluation protocol extraction) entirely** — the contract has already done that work, more reliably.
+
+If `alignment_contract.yaml` does NOT exist (legacy pipeline), continue to Step 0 as written below.
 
 ## Step 0 — Mandatory Evaluation Protocol Extraction (run BEFORE Step 1)
 

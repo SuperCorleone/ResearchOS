@@ -243,14 +243,48 @@ def _load_code(pipeline_dir: Path) -> str:
             parts.append("\n")
         return "\n".join(parts)
 
-    # Fall back to code_patch.diff — extract added lines
+    # Fall back to code_patch.diff — extract added lines only from .py files.
+    # The diff uses `*** Add File: <path>` / `*** Update File: <path>` headers;
+    # non-.py files (requirements.txt, results.json, *.yaml, etc.) must be
+    # skipped so their content isn't fed to the Python compiler.
     diff_file = pipeline_dir / "code_patch.diff"
     if diff_file.exists():
-        lines = []
+        header_re = re.compile(
+            r"^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*$"
+        )
+        sections: list[tuple[str, list[str]]] = []
+        current_name: str | None = None
+        current_lines: list[str] = []
         for line in diff_file.read_text(errors="replace").splitlines():
+            m = header_re.match(line)
+            if m:
+                if current_name is not None:
+                    sections.append((current_name, current_lines))
+                current_name = m.group(1).strip()
+                current_lines = []
+                continue
+            if line.startswith("*** End Patch") or line.startswith("*** Begin Patch"):
+                if current_name is not None:
+                    sections.append((current_name, current_lines))
+                    current_name = None
+                    current_lines = []
+                continue
+            if current_name is None:
+                continue
             if line.startswith("+") and not line.startswith("+++"):
-                lines.append(line[1:])  # Strip the leading +
-        return "\n".join(lines)
+                current_lines.append(line[1:])  # Strip the leading +
+        if current_name is not None:
+            sections.append((current_name, current_lines))
+
+        entry_names = {"run_experiment.py", "experiment.py", "main.py"}
+        py_sections = [(n, ls) for n, ls in sections if n.endswith(".py")]
+        py_sections.sort(key=lambda nl: (nl[0] not in entry_names, nl[0]))
+        parts: list[str] = []
+        for name, ls in py_sections:
+            parts.append(f"# --- {name} ---")
+            parts.extend(ls)
+            parts.append("")
+        return "\n".join(parts)
 
     return ""
 

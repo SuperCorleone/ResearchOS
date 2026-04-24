@@ -1,0 +1,15 @@
+{
+  "step": "run",
+  "stage": "fast_fail",
+  "status": "completed",
+  "result": {
+    "agent": "experiment_runner",
+    "tokens_used": 53609,
+    "artifacts_written": [
+      "data_manifest.yaml",
+      "data_manifest.yaml",
+      "results.json"
+    ]
+  },
+  "cached_at": 1777056439.848352
+}

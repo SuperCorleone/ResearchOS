@@ -35,13 +35,16 @@ logger = logging.getLogger(__name__)
 
 ESTIMATED_COST_PER_CALL = 500
 
-_AGENTS_DIR = (
-    Path(__file__).resolve().parent.parent.parent
-    / ".openharness"
-    / "plugins"
-    / "researchos"
-    / "agents"
+# Agent definition search paths, in resolution order.
+# Primary home (post-2026-04 refactor): researchos/agent_defs/
+# Legacy fallback: .openharness/plugins/researchos/agents/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_AGENTS_SEARCH_PATHS = (
+    _PROJECT_ROOT / "researchos" / "agent_defs",
+    _PROJECT_ROOT / ".openharness" / "plugins" / "researchos" / "agents",
 )
+# Kept as a back-compat alias for any external importer.
+_AGENTS_DIR = _AGENTS_SEARCH_PATHS[0]
 
 # Tool schemas in OpenAI function-calling format
 _TOOLS = [
@@ -271,9 +274,10 @@ class AgentExecutor:
     # ── Agent definition loading ─────────────────────────────────
 
     def _load_agent_definition(self, agent_name: str) -> str:
-        md_path = _AGENTS_DIR / f"{agent_name}.md"
-        if md_path.exists():
-            return md_path.read_text(encoding="utf-8")
+        for agents_dir in _AGENTS_SEARCH_PATHS:
+            md_path = agents_dir / f"{agent_name}.md"
+            if md_path.exists():
+                return md_path.read_text(encoding="utf-8")
         logger.warning("Agent definition not found: %s, using generic prompt", agent_name)
         return (
             f"You are the **{agent_name}** research agent. "

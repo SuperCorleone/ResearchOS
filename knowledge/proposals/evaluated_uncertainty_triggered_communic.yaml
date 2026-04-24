@@ -1,0 +1,240 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T18:52:05.490023+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Always-on agent communication with the same agents, prompts, and workflow
+    topology but mandatory inter-agent messaging at every coordination step.
+  expected_signal: '>=25% fewer communication tokens and >=15% lower latency with
+    <=2 percentage point success degradation.'
+  failure_condition: Communication-token reduction < 25%, or latency reduction < 15%,
+    or task success drops by more than 2 percentage points versus always-on baseline.
+  hypothesis: Across representative multi-agent LLM workflow tasks, uncertainty-triggered
+    communication gating can reduce inter-agent communication tokens by at least 25%
+    and end-to-end latency by at least 15% while keeping task success within 2 percentage
+    points of always-on communication.
+  metric: 'Primary: task success rate, total communication tokens, and end-to-end
+    latency; Secondary: calibrated uncertainty quality (e.g., ECE/Brier) and cost-success
+    Pareto efficiency.'
+  min_budget_ratio: 0.35
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose an uncertainty-triggered communication gate for multi-agent
+    workflows that invokes inter-agent communication only when an agent's local uncertainty
+    exceeds a calibrated threshold, with threshold selection explicitly optimized
+    against task success, latency, and token budget.
+  problem_gap: Existing methods fail because they treat communication adaptation mainly
+    as control/coordination in physical or networked multi-agent systems, or they
+    optimize workflow orchestration heuristics without framing inter-agent messaging
+    in LLM workflows as a calibrated uncertainty-triggered decision under joint quality,
+    latency, and token-cost objectives.
+  why_it_matters: Which improves communication efficiency and end-to-end responsiveness
+    under constrained token budgets and latency-sensitive multi-agent LLM tasks without
+    materially reducing task success.
+kb_duplicates: []
+kb_related:
+- failures/duplicate_ideas.md
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+- failures/duplicate_ideas.md
+proposal_id: uncertainty_triggered_communic
+re_eval_count: 0
+repeat_degree: low
+research_question: Can uncertainty-triggered communication gating reduce token cost
+  and latency in multi-agent workflows without degrading task success compared with
+  always-on agent communication?
+retrieval_cache_key: a1d9a36f4cb8f5f3
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 3
+  novelty: 2
+  significance: 3
+similar_papers:
+- arxiv_id: ''
+  authors:
+  - Jiayi Cai
+  - Jingyi Wang
+  - Jianwen Feng
+  - Guanrong Chen
+  - Yi Zhao
+  axes:
+    method: similar
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 25
+  doi: 10.1109/TNSE.2023.3234168
+  source: semantic_scholar
+  title: Observer-Based Consensus for Multi-Agent Systems With Semi-Markovian Jumping
+    Via Adaptive Event-Triggered SMC
+  venue: IEEE Transactions on Network Science and Engineering
+  weighted_similarity: 0.72
+  year: 2023
+- arxiv_id: ''
+  authors:
+  - Kangyue Chen
+  - Fei Yan
+  axes:
+    method: similar
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 2
+  doi: 10.1007/s12190-025-02486-0
+  source: semantic_scholar
+  title: H∞ consensus control for multi-agent switched systems based on novel adaptive
+    double event-triggered scheme
+  venue: Journal of Applied Mathematics and Computation
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - P. Patra
+  - Santosh Kumar Maharana
+  axes:
+    method: similar
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.1007/s42452-025-08136-1
+  source: semantic_scholar
+  title: Semantic-aware, graph-based, event-triggered federated transfer-learning
+    multi-agent reinforcement learning (SAGE-Fed TL-MARL) for congestion control in
+    VANETs
+  venue: Discover Applied Sciences
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - Jingli Huang
+  - Junjian Xie
+  - Jie Huang
+  - Shangkun Liu
+  axes:
+    method: similar
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 1
+  doi: 10.3390/act14120575
+  source: semantic_scholar
+  title: Prescribed-Time, Event-Triggered, Adaptive, Fault-Tolerant Formation Control
+    of Heterogeneous Air–Ground Multi-Agent Systems Under Deception Attacks and Actuator
+    Faults
+  venue: Actuators
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - Bangyin Xiang
+  - Jinchun Liu
+  - Yi Wang
+  axes:
+    method: similar
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.22399/ijcesen.4021
+  source: semantic_scholar
+  title: Communication Structure Adaptive Control and Collaborative Optimization for
+    Multi-Agent Systems
+  venue: International Journal of Computational and Experimental Science and Engineering
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - Hui Cai
+  - Yandong Li
+  - Dan Yang
+  - Yuyi Huang
+  - Yuan Guo
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.3390/act14120574
+  source: semantic_scholar
+  title: Practical Prescribed-Time Trajectory Tracking Consensus for Nonlinear Heterogeneous
+    Multi-Agent Systems via an Event-Triggered Mechanism
+  venue: Actuators
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: ''
+  authors:
+  - Yanhua Yang
+  - Jie Mei
+  - Guangfu Ma
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 1
+  doi: 10.23919/ACC60939.2024.10644747
+  source: semantic_scholar
+  title: Distributed Event-Triggered Consensus of Uncertain Multi-Agent Systems Under
+    a Directed Graph
+  venue: American Control Conference
+  weighted_similarity: 0.63
+  year: 2024
+- arxiv_id: ''
+  authors:
+  - Sayyed Alireza Malek
+  - Mohammad Shahrokhi
+  - Aboozar Pishro
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 2
+  doi: 10.1002/rnc.7584
+  source: semantic_scholar
+  title: Quantized output‐feedback event‐triggered distributed control of switched
+    fractional multi‐agent systems subject to input nonlinearities and consensus error
+    constraints
+  venue: International Journal of Robust and Nonlinear Control
+  weighted_similarity: 0.63
+  year: 2024
+- arxiv_id: '2412.07471'
+  authors:
+  - S. Kong
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: 10.48550/arXiv.2412.07471
+  source: semantic_scholar
+  title: Event-Triggered Memory Control for Interval Type-2 Fuzzy Heterogeneous Multi-Agent
+    Systems
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2024
+- arxiv_id: ''
+  authors:
+  - Zhiyang Zheng
+  - Ci Chen
+  - Kan Xie
+  - Zhenni Li
+  - Shengli Xie
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 2
+  doi: 10.1007/s00521-023-09215-3
+  source: semantic_scholar
+  title: Event-triggered synchronization adaptive learning control of nonlinear multi-agent
+    systems with resilience to communication link faults
+  venue: Neural computing & applications (Print)
+  weighted_similarity: 0.504
+  year: 2023
+title: Uncertainty-Triggered Communication Gating for Multi-Agent Workflows

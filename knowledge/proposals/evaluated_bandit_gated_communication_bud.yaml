@@ -1,0 +1,65 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T18:51:30.696895+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Fixed communication topology (always communicate at predefined stages),
+    plus a heuristic uncertainty-triggered communication policy.
+  expected_signal: At least 20% lower token cost and 15% lower latency with no more
+    than 2 percentage point loss in success rate, or improved success-per-1k-tokens
+    by at least 10%.
+  failure_condition: Token or latency reduction is < 20% at matched success, or success
+    drops by > 2 percentage points relative to the best fixed/heuristic baseline.
+  hypothesis: A contextual-bandit communication gate can reduce total tokens and end-to-end
+    latency by at least 20% versus fixed always-communicate or heuristic-threshold
+    communication policies while maintaining task success within 2 percentage points
+    on representative multi-agent workflow benchmarks.
+  metric: 'Primary: success rate under a fixed token budget; Secondary: total tokens
+    consumed, end-to-end latency, and success-per-1k-tokens Pareto frontier.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a contextual bandit that decides at each workflow step whether
+    an agent should communicate, query peers, or act independently based on predicted
+    coordination value relative to budget cost.
+  problem_gap: Existing methods fail because they optimize generic coordination or
+    communication policies without directly learning the marginal value of each communication
+    action under explicit token and latency budgets in LLM-style multi-agent workflows.
+  why_it_matters: Which improves cost-efficiency and responsiveness while preserving
+    task success under constrained token and latency budgets.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: bandit_gated_communication_bud
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a contextual bandit that adaptively decides when agents should
+  communicate, query peers, or act independently reduce token cost and latency while
+  preserving or improving task success in multi-agent AI workflows?
+retrieval_cache_key: ae11ef897864dd77
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 3
+  novelty: 2
+  significance: 3
+similar_papers:
+- arxiv_id: '2103.04972'
+  authors:
+  - Abhimanyu Dubey
+  - A. Pentland
+  axes:
+    method: different
+    metric: different
+    problem: similar
+    setting: different
+  citation_count: 29
+  doi: ''
+  source: semantic_scholar
+  title: Provably Efficient Cooperative Multi-Agent Reinforcement Learning with Function
+    Approximation
+  venue: arXiv.org
+  weighted_similarity: 0.72
+  year: 2021
+title: Bandit-Gated Communication Budgets for Multi-Agent Workflows

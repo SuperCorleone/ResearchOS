@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "researchos": {
+      "type": "local",
+      "command": ["researchos-mcp"],
+      "environment": {
+        "RESEARCHOS_PROJECT_ROOT": "${workspaceFolder}"
+      }
+    }
+  },
+  "instructions": [
+    "CLAUDE.md"
+  ]
+}

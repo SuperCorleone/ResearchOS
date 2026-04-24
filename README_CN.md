@@ -42,11 +42,116 @@
 │  PROPOSAL → BASELINE_CONFIRM → FAST_FAIL → [AUTO-GATE] → MAIN        │
 │            → MILESTONE → PAPER → COMPLETED                           │
 │                                                                       │
+│  MAIN 阶段（2026-04-25 新增）：                                        │
+│    PAPER_SPEC → PROPOSAL_SPEC → ALIGNMENT → ALIGNMENT_VALIDATOR       │
+│      → HYPOTHESIS → DESIGN → CODE_RECON → CONCEPT_PAPER               │
+│      → CONCEPT_CODE → CODE → CODE_PREFLIGHT → RUN → ...               │
+│                                                                       │
 │  Professor 仍是决策边界的 LLM；但所有 HITL gate（pre-MAIN /           │
 │  milestone-N / pre-publish）在 2026-04 refactor 中移除，改由 typed     │
 │  JudgeVerdict + contract_guard 自动决策。保留 kill/tweak 作紧急制动。   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+## 对齐契约工作流（2026-04-25 新增）
+
+**问题**：用户提供基线论文 + 自己的 proposal 时，pipeline 必须严格在用户输入范围内工作 —— baseline / dataset / metric / RQ 由结构化抽取直接获得，不应经过 wiki + BM25 稀释（容易把 proposal 当背景 paper 用、把别的 paper 的 dataset 当 baseline 用）。
+
+**方案**：MAIN 阶段头部插 4 个新 step，把"用户输入 → 实验设计"拆成"抽取 → 对齐契约 → 验证 → 下游消费"四层。
+
+### Typed inject 模式
+
+```bash
+researchos inject \
+  --base-paper paper.pdf \
+  --proposal proposal.md \
+  --ref-code https://github.com/owner/repo \
+  --title "..." --question "..." --budget 20000
+```
+
+每个文件按 role 分类：`base_paper` / `proposal` / `ref_code` / `related_work`。
+- `base_paper` 进 wiki + 转 markdown 写 `artifacts/pipeline_<id>/base_paper.md`
+- `proposal` **不**入 wiki（避免被 BM25 当背景污染），写 `artifacts/pipeline_<id>/proposal.md`
+- `ref_code` 仅记 git URL，由 CODE_RECON 实际 clone + import 测试
+
+### 4 个新 pipeline step
+
+| Step | 实现 | 产物 |
+|---|---|---|
+| `PAPER_SPEC` | LLM agent (`paper_spec_extractor.md`) | `paper_spec.yaml` |
+| `PROPOSAL_SPEC` | LLM agent (`proposal_spec_extractor.md`) | `proposal_spec.yaml` |
+| `ALIGNMENT` | LLM agent (`alignment_synthesizer.md`) + Python orchestrator | `alignment_contract.yaml` |
+| `ALIGNMENT_VALIDATOR` | 纯 Python (`alignment_validator.py`) | `alignment_validation_report.json` |
+
+### 三份强 schema
+
+- **`paper_spec.yaml`**（`schemas/paper_spec.py`）— 从单一 paper 逐字抽取：`research_questions[]`、`baseline_method.method_steps[]`（结构化方法步骤，proposal 通过 step ID 引用）、`dataset.name`（原样字符串）、`evaluation_metrics[]`、`reference_code.url`。每个非空字段必须有 `evidence[]` 中的 verbatim quote，validator 对原文做 substring match（容忍 PDF hyphenation / ligature）。
+- **`proposal_spec.yaml`**（`schemas/proposal_spec.py`）— 抽取 `change_type`（5 枚举强制：replacement / extension / cross_method / cross_domain / new_task）、`new_components.replaces|adds_to`（指向 paper `method_steps[].id`，互斥）、`borrowed_from_paper[]`、`divergences[].arbitration_hint`（强制 `binding=false`）。
+- **`alignment_contract.yaml`**（`schemas/alignment_contract.py`）— 9 维契约 + `executive_summary` 自动浓缩 + `preconditions[]` 硬门禁。
+
+### Lock 词汇表（10 值）
+
+```
+LOCKED_TO_PAPER                LOCKED_TO_PAPER_VIA_REF_CODE
+LOCKED_TO_PAPER_VIA_REIMPL     LOCKED_TO_PAPER_PLUS_PROPOSAL
+AUGMENTED_BY_PROPOSAL          ARM_DEPENDENT
+NEGOTIATED                     DOMAIN_SUBSTITUTED
+FREE                           NOT_APPLICABLE
+```
+
+`LOCKED_*` 字段强制 `value_ref` 指向 `paper_spec.*` 的 leaf 路径，**禁止 inline 复制**——下游 agent 通过 dereference 读，单一真实源。`ARM_DEPENDENT` 在 baseline 与 proposal arm 设计冲突时启用，强制额外的 ablation arm 隔离机制 vs 数据扩张的影响归因。
+
+### change_type → 默认锁表（synthesizer prior）
+
+| 维度 \ change_type | replacement | extension | cross_method | cross_domain | new_task |
+|---|---|---|---|---|---|
+| dataset | LOCKED | LOCKED | NEGOTIATED | DOMAIN_SUB | FREE |
+| split / preprocessing | LOCKED | LOCKED / AUGMENTED | NEGOTIATED | NEGOTIATED | FREE |
+| baseline_algorithm | LOCKED_VIA_REF | LOCKED_VIA_REF | LOCKED (each) | LOCKED_VIA_REF | NOT_APPLIC |
+| candidate_model_pool | LOCKED | LOCKED | NEGOTIATED | NEGOTIATED | FREE |
+| metrics | LOCKED | LOCKED+PROP | NEGOTIATED | NEGOTIATED | FREE |
+| rq_coverage | LOCKED | LOCKED+ADD | NEGOTIATED | LOCKED+ADD | FREE |
+
+LLM 可以 override，每次 override 必须填 `reason` 引用 `paper_spec` / `proposal_spec` 字段路径。
+
+### 18 项 validator 检查
+
+`alignment_validator.run_validator()` 跑过的硬检查（任一 ERROR → BLOCK 整条 pipeline）：
+
+- 三份 yaml 各自 round-trip 通过 pydantic
+- `paper_spec.evidence` 覆盖率 ≥ 0.90（除 7 项豁免字段外）
+- 每条 quote 在 `base_paper.md` 中可 substring 匹配（≥95% PASS / 80–95% WARN / <80% ERROR）
+- 每个 `RQ.question_verbatim` 在原文找得到
+- `proposal_spec.new_components.replaces|adds_to` 解析到合法 `method_step.id`
+- 所有 `value_ref` / `value_ref_subtree` 路径 dereferenceable
+- `LOCKED_TO_PAPER` 引用不得解析到 `NOT_STATED`
+- `LOCKED_TO_PAPER_VIA_REF_CODE.code_handle.symbol` 在 `code_recon.yaml` 存在
+- `reference_code.available=False` 且 `change_type ∈ {replacement, extension}` → BLOCK
+- 每个 `in_scope_rq` 在 metrics 维度有覆盖
+- 每个 `ARM_DEPENDENT` 的 ablation arm 在 `executive_summary.arms_to_run` 存在
+
+### Contract Gate（HYPOTHESIS / DESIGN 强制）
+
+`hypothesis_gen.md` 和 `exp_designer.md` 头部增加 Contract Gate：
+- `contract_status == BLOCKED` 或 `DRAFT` → 立即 EXIT BLOCKED，要求人工干预
+- `contract_status == FINAL` → LOCKED 字段从 contract `value_ref` dereference，禁止 inline 重抄
+- DESIGN 写 `experiment_plan.yaml::baseline / metric_alignment / reference_code` 时强制 1:1 复制 contract 内容
+
+### Coder 硬规则
+
+`coder.md` 新增 FORBIDDEN PATTERNS（preflight 扫描即 BLOCK）：
+- 字面 `NotImplementedError` / `NOT_IMPLEMENTED`
+- 函数体仅 `pass` / 行仅 `...`
+- `results.json::metrics` 为空或非数值
+
+REQUIRED PATTERNS（contract 存在时）：
+- `baseline_wiring.py` 必须 `from <import_path> import <symbol>`，**禁止重实现** baseline
+- `executive_summary.arms_to_run` 每个 arm 在 `run_experiment.py` 必须有同名函数
+- `data_loader.py` 必须 `Path(...).exists()` 校验 + 真读 `dimensions[dim=dataset].code_handle.access_path`
+
+### 兼容旧 pipeline
+
+不带 typed `base_paper` 角色的 pipeline（legacy / miner-driven）在 4 个新 step 自动写 SKIP 标记直通 HYPOTHESIS。`scheduler._has_alignment_inputs()` 同时检查 `metadata['source']=='user_inject'` 与 `evidence_refs` 的 typed role；行为完全向后兼容。
 
 ## 完整科研生命周期
 
@@ -95,8 +200,9 @@ oh  # 启动 OpenHarness 交互会话
 | 默认 | `launch` | 心跳 → 矿工 → 候选列表 → **用户选择** → Pipeline → 论文 |
 | 全自主 | `launch --auto-select` | 心跳 → 矿工 → 自动创建 Pipeline → 论文 |
 | 试运行 | `trial` | 心跳一次 → 矿工一次 → 跑一个 Pipeline → 停止 |
-| 注入论文 | `inject paper1.pdf paper2.pdf` | PDF → wiki → 矿工 → 候选+简报 → 用户选择 |
-| 注入 + 提案 | `inject paper.pdf --title "..." --question "..."` | PDF → wiki + 直接创建 Pipeline |
+| 注入论文 | `inject paper1.pdf paper2.pdf` | PDF → wiki → 矿工 → 候选+简报 → 用户选择（**deprecated**，会有 stderr 警告）|
+| **Typed inject**（推荐） | `inject --base-paper paper.pdf --proposal proposal.md --ref-code <git-url> --title "..." --question "..."` | 启用对齐契约工作流（PAPER_SPEC → ALIGNMENT → ...）；proposal 不入 wiki |
+| 注入 + 提案（旧） | `inject paper.pdf --title "..." --question "..."` | 旧 PDF → wiki + 直接创建 Pipeline 路径，将在下一 milestone 移除 |
 | 手动提案 | `create --title "..." --question "..." --refs ref1.pdf` | 直接创建 Pipeline |
 
 ## 运行时保障：StepDigest + ContractGuard
@@ -127,22 +233,27 @@ Dispatcher 注入 digest JSON 到下游 prompt，而非原 markdown。Digests �
 `state_manager.save_pipeline()` 每次 save 后自动运行 `enforce_all`；违反 →
 pipeline stage=BLOCKED + `ContractViolation` 异常向上冒泡。
 
-## 智能体（重构后 10 核心 + 2 条件）
+## 智能体（重构后 10 核心 + 3 对齐 + 2 条件）
 
 | # | Agent | 层 | 职责 |
 |---|---|---|---|
 | 1 | knowledge_miner | T1 | wiki 扫描 → 候选提案（含 research_goal）|
-| 2 | hypothesis_gen | T1 | 原子可证伪假设 |
-| 3 | exp_designer | T1 | 实验 plan + Self-Review（吸收 design_reviewer）|
+| **A** | **paper_spec_extractor** | T2 | **从 base_paper.md 单文档抽取强 schema paper_spec.yaml；禁 kb_retrieve；NOT_STATED 合法**|
+| **B** | **proposal_spec_extractor** | T2 | **从 proposal.md 抽取 proposal_spec.yaml；强制 5 枚举 change_type；禁读 paper**|
+| **C** | **alignment_synthesizer** | T2 | **合成 alignment_contract.yaml（9 维 lock + executive_summary）；纯结构化推理无外部工具**|
+| 2 | hypothesis_gen | T1 | 原子可证伪假设；contract FINAL 时禁 kb_retrieve 重做 RQ/metric |
+| 3 | exp_designer | T1 | 实验 plan + Self-Review；contract LOCKED 字段强制 dereference 不重抄 |
 | 4 | concept_extract_paper | T2 | 概念定义 + math + refs |
 | 5 | concept_extract_code | T2 | 概念 ↔ 代码 locator 绑定（`<file>::<sym>` 或 `<slug>::<path>::L<a>-L<b>`）|
-| 6 | coder | T1 | 按 concept.id 实现；吸收 fixer 的 A16-loop |
+| 6 | coder | T1 | 按 concept.id 实现；FORBIDDEN PATTERNS（禁 placeholder）+ REQUIRED PATTERNS（强制 direct import baseline）|
 | 7 | experiment_runner | T3 | 执行；产 results.json + data_manifest.yaml |
 | 8 | **judge** | T1 | **合并 critic + experiment_analyser + interrogator**；产 JudgeVerdict |
 | 9 | paper_writer | T1 | 分节写作；章节根据 JudgeVerdict optional 字段条件化 |
 | 10 | paper_auditor | T2 | G4/G10/G11/G12 + chktex |
 
 条件触发：`vlm_reviewer`（有 PNG/JPG 时）、`figure_composer`（有 visualization_plan 时）。
+
+**纯 Python step**（无 LLM）：`alignment_validator`（18 项检查）、`code_recon`、`baseline_confirm`、`results_reverify`、`report`（publisher 渲染）。
 
 REPORT 步骤不再有 agent — `researchos/core/publisher.py::render_milestone` 从
 digests 确定性渲染 milestone_N.md（零 LLM）。
@@ -206,7 +317,10 @@ Professor 在以下位置被触发：
 ```
 researchos/
 ├── schemas/           # Pydantic 模型（digest, pipeline, decision, ...）
-│   └── digest.py      # StepDigest 契约
+│   ├── digest.py            # StepDigest 契约
+│   ├── paper_spec.py        # 2026-04 PaperSpec 强 schema
+│   ├── proposal_spec.py     # 2026-04 ProposalSpec 强 schema
+│   └── alignment_contract.py # 2026-04 AlignmentContract 强 schema
 ├── core/              # 平台无关逻辑（contract_guard, publisher, ...）
 │   ├── contract_guard.py
 │   └── publisher.py   # 纯 Python milestone 渲染
@@ -214,11 +328,17 @@ researchos/
 │   ├── base.py        # AgentRuntime Protocol
 │   └── tools.py       # gen_code_tree_structure, grep_code, list_file_symbols
 ├── agent_defs/        # Agent prompt 定义（唯一来源；平台中立）
+│   ├── paper_spec_extractor.md      # 2026-04 单文档强抽取
+│   ├── proposal_spec_extractor.md   # 2026-04 单文档强抽取
+│   ├── alignment_synthesizer.md     # 2026-04 9 维契约合成
 │   ├── judge.md       # 替代 critic + experiment_analyser + interrogator
 │   ├── concept_extract_paper.md / concept_extract_code.md
-│   ├── coder.md / exp_designer.md / ...
+│   ├── coder.md / exp_designer.md / hypothesis_gen.md / ...
 │   └── shared/quality_gates.md
 ├── runtime/           # 调度器、dispatcher、state_manager
+│   ├── alignment_validator.py    # 2026-04 18 项纯 Python 检查
+│   ├── alignment_synthesizer.py  # 2026-04 LLM 编排 + 哈希守卫
+│   └── ...
 └── mcp_servers/       # MCP kb_retrieve
 
 adapters/
@@ -227,15 +347,21 @@ adapters/
 └── skill/             # Claude Skill 适配
 
 artifacts/pipeline_<id>/    # Pipeline 产物（state.json, digests, markdown）
+│  ├── base_paper.md           # typed inject 模式：base paper 转 markdown
+│  ├── proposal.md             # typed inject 模式：用户 proposal（不入 wiki）
+│  ├── paper_spec.yaml         # 2026-04 PAPER_SPEC 产物
+│  ├── proposal_spec.yaml      # 2026-04 PROPOSAL_SPEC 产物
+│  ├── alignment_contract.yaml # 2026-04 ALIGNMENT 产物
+│  └── alignment_validation_report.json  # 2026-04 ALIGNMENT_VALIDATOR 报告
 knowledge/
-├── raw/              # 原始 PDF
+├── raw/              # 原始 PDF（注意 typed inject 时 proposal 不会复制到这里）
 ├── wiki/             # 结构化知识（concepts/methods/experiments/failures/datasets）
 ├── findings/         # Critic SUPPORTED 落库
 └── failures/         # UNSUPPORTED 落库，30 天衰减
 runtime/               # 调度器状态、预算、workflow_config.yaml
 decisions/             # Professor 决策文件
 paper/                 # 论文草稿 + PDF
-tests/                 # 228 passing / 4 skipped
+tests/                 # 279 passing / 4 skipped（2026-04-25 基线）
 ```
 
 ## 配置
@@ -332,7 +458,9 @@ python scripts/run_research.py trial --mode simulate   # 不调用 LLM
 
 ```bash
 python -m pytest tests/ -q
-# 228 passed, 4 skipped（2026-04 refactor 基线）
+# 279 passed, 4 skipped（2026-04-25 对齐契约工作流基线）
+# 较 2026-04 增加 53 项：alignment_validator helpers (25)
+# + alignment_synthesizer orchestrator (15) + typed evidence_refs (13)
 ```
 
 ## 核心设计原则
@@ -369,6 +497,9 @@ python -m pytest tests/ -q
     裁决驱动 coder 精准修复；pass 保留；iteration_count.txt 防止无限循环
 18. **HITL 不是默认** — 2026-04 refactor 移除 3 个 HITL gate；保留
     `kill` / `tweak` 决策作紧急制动
+19. **用户输入即对齐源**（2026-04-25）— typed inject 模式下 base_paper / proposal 各自单文档抽取强 schema，禁止 kb_retrieve 跨文档稀释；alignment_contract 是 pipeline 后续所有 paper-aligned 决策的单一真实源
+20. **value_ref 而非 inline 复制**（2026-04-25）— LOCKED 维度只存 dotted path 引用 paper_spec leaf，下游 dereference；inline 复制 contract 字段值的代码会被 validator BLOCK
+21. **Baseline 直接 import 而非重实现**（2026-04-25）— 当 ref_code 可用时，coder 必须 `from <pkg> import <symbol>`；preflight 扫描重实现并 BLOCK；目的是数值保真而非代码风格一致
 
 ## 许可证
 

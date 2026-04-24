@@ -8,3 +8,5 @@ Auto-generated index of wiki pages.
 - [results_mitigating_model_uncertainty_i](wiki/experiments/results_mitigating_model_uncertainty_i.md)
 - [failure_mitigating_model_uncertainty_i](wiki/failures/failure_mitigating_model_uncertainty_i.md)
 - [data_mitigating_model_uncertainty_i](wiki/datasets/data_mitigating_model_uncertainty_i.md)
+- [research_proposal](wiki/concepts/research_proposal.md)
+- [paper](wiki/concepts/paper.md)

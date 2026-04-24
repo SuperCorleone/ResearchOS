@@ -1,0 +1,14 @@
+{
+  "step": "critic",
+  "stage": "main",
+  "status": "completed",
+  "result": {
+    "agent": "critic",
+    "tokens_used": 39382,
+    "artifacts_written": [
+      "analysis_report.md",
+      "advisor_verdict.yaml"
+    ]
+  },
+  "cached_at": 1777056578.712011
+}

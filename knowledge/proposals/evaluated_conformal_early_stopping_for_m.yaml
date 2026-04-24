@@ -1,0 +1,116 @@
+direction: multimodal-reasoning
+evaluated_at: '2026-04-24T17:25:12.425272+00:00'
+evaluator_model: ''
+falsification:
+  baseline: LYNX-style confidence-controlled dynamic exit for multimodal reasoning
+    without conformal calibration or evidence reacquisition.
+  expected_signal: At least 5% relative reduction in ungrounded reasoning with <=
+    1 percentage point accuracy change and measurable calibration gain.
+  failure_condition: Hallucinated chain rate improvement < 5% relative or final answer
+    accuracy drops by > 1 percentage point versus baseline.
+  hypothesis: Compared with a strong dynamic-exit multimodal reasoning baseline, conformal
+    early-stopping with evidence reacquisition reduces ungrounded reasoning while
+    maintaining final answer accuracy within 1 percentage point.
+  metric: 'Primary: hallucinated/ungrounded chain rate; Secondary: final answer accuracy,
+    expected calibration error, and average reasoning steps or visual-tool calls.'
+  min_budget_ratio: 0.35
+gate_reasons:
+- repeat_degree == medium (3/4 axes similar)
+gate_result: professor_review
+innovation:
+  our_delta: We propose conformal confidence sets over intermediate multimodal reasoning
+    states that trigger early stopping, chain revision, or visual evidence reacquisition
+    at runtime in vision-language reasoning.
+  problem_gap: Existing methods fail because they either use fixed-length or confidence-triggered
+    exits without calibrated guarantees over intermediate multimodal reasoning states,
+    or they provide conformal certification for tool outputs without using those signals
+    to adaptively stop, revise, or reacquire evidence during the reasoning chain.
+  why_it_matters: Which improves hallucination control, calibration, and inference
+    efficiency under long-horizon multimodal reasoning where intermediate steps can
+    drift from grounded visual evidence.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: conformal_early_stopping_for_m
+re_eval_count: 0
+repeat_degree: medium
+research_question: Can conformal confidence sets over intermediate multimodal reasoning
+  steps trigger reliable early stopping or evidence reacquisition in vision-language
+  reasoning, reducing hallucinated chains without hurting final answer accuracy?
+retrieval_cache_key: 19ba0ab7b8880619
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers:
+- arxiv_id: '2512.05325'
+  authors:
+  - Omer Faruk Akgul
+  - Y. Kalayci
+  - Rajgopal Kannan
+  - Willie Neiswanger
+  - Viktor K. Prasanna
+  axes:
+    method: different
+    metric: similar
+    problem: similar
+    setting: similar
+  citation_count: 0
+  doi: 10.48550/arXiv.2512.05325
+  source: semantic_scholar
+  title: 'LYNX: Learning Dynamic Exits for Confidence-Controlled Reasoning'
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2025
+- arxiv_id: '2603.00324'
+  authors:
+  - Arya Fayyazi
+  - H. Akrami
+  axes:
+    method: similar
+    metric: different
+    problem: similar
+    setting: similar
+  citation_count: 0
+  doi: 10.48550/arXiv.2603.00324
+  source: semantic_scholar
+  title: 'Proof-of-Perception: Certified Tool-Using Multimodal Reasoning with Compositional
+    Conformal Guarantees'
+  venue: arXiv.org
+  weighted_similarity: 0.63
+  year: 2026
+- arxiv_id: ''
+  authors:
+  - T. Jebelean
+  - A. Medve
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 2
+  doi: ''
+  source: semantic_scholar
+  title: Formalization of Workflows Using Fork-Join Automata
+  venue: ''
+  weighted_similarity: 0.56
+  year: 2013
+- arxiv_id: ''
+  authors:
+  - T. Jebelean
+  - A. Medve
+  axes:
+    method: different
+    metric: different
+    problem: different
+    setting: different
+  citation_count: 0
+  doi: ''
+  source: semantic_scholar
+  title: Formalization of Workflows Using Fork-Join Automata extended abstract
+  venue: ''
+  weighted_similarity: 0.56
+  year: 2011
+title: Conformal Early-Stopping for Multimodal Reasoning Chains

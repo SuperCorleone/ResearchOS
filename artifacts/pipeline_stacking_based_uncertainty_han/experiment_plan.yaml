@@ -1,0 +1,156 @@
+requires_code: true
+baseline:
+  name: "TUNE + Bayesian Model Averaging (BMA)"
+  metric_values:
+    accuracy: 0.50
+  source: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging, Evaluation Protocol/RQ summaries; exact numeric baseline not exposed in current digest"
+  notes: "Best-estimate placeholder required for BASELINE_CONFIRM. The hypothesis states baseline values were not found in the available digest; 0.50 is a neutral provisional estimate to be replaced after extracting the exact paper table/figure or reproducing the reference code. Comparison validity depends on updating this before final claims."
+metric_alignment:
+  source_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  rq_coverage:
+    RQ1:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: true
+      implementation_note: "Compute prediction accuracy of stacked Analyze output versus BMA Analyze output on the exact reference-paper test split."
+    RQ2:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: true
+      implementation_note: "Compute adaptation-decision accuracy by feeding each Analyze module's predictions into the unchanged planner and comparing selected adaptations against reference outcome labels on the exact paper setup."
+    RQ3:
+      paper_metric: "accuracy"
+      plan_metric: "accuracy"
+      in_scope: false
+      implementation_note: "Paper studies cost of calculating BMA estimates, but exact cost-measurement procedure and full TUNE execution infrastructure are unavailable in current artifacts."
+  out_of_scope_rqs:
+    - id: "RQ3"
+      reason: "Requires the full TUNE runtime cost-measurement setup, which is not yet available in the current fast-fail pipeline artifacts."
+data:
+  dataset_name: "Robotics-domain exemplar dataset used by TUNE paper (exact file name pending extraction from paper/code)"
+  version: "unknown"
+  source: "file"
+  license: "unknown"
+  description: "Use the same reference-paper dataset files, same preprocessing pipeline, same planner inputs, and same train/test split as the SEAMS'22 TUNE+BMA study. No synthetic substitute is allowed."
+  risk_notes: "Current artifacts do not expose the exact dataset filename, official split, preprocessing script, or license. This blocks faithful execution until recovered from the paper appendix or reference repository. Because sample count is unknown, variance may be high if the dataset is small; use repeated seeds only after exact reference split is recovered."
+  consistency_requirement:
+    reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+    must_match: ["dataset_version", "train_test_split", "preprocessing_pipeline"]
+    verification: "Cross-check dataset hashes/file names, split indices, and preprocessing steps against the reference repository or paper supplementary material before any run is accepted."
+reference_code:
+  papers:
+    - title: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+      repo_url: "https://github.com/matteocamilli/bma-package"
+      repo_status: "available"
+      reusable_components: ["BMA weighting implementation", "candidate model handling", "evaluation scripts if exposed"]
+      must_modify: ["add stacking meta-learner", "preserve original candidate model space and planner interface", "export exact dataset split metadata if not already explicit"]
+      build_on_top: true
+      reason: "Faithful baseline reproduction is mandatory; extending the available BMA code minimizes strawman risk and preserves the paper's methodology."
+  strategy: "fork_and_extend"
+reference_methodology:
+  paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  model_space: "Original TUNE candidate model space from the paper/code; proposal suggests GLMs with different variable subsets, to be kept unchanged for the baseline and reused as level-0 inputs for stacking."
+  algorithms: ["Bayesian Model Averaging", "metaheuristic planner in TUNE", "stacking meta-learner using out-of-fold predictions"]
+  evaluation_metrics: ["accuracy"]
+  cv_strategy: "Use the exact reference-paper split/protocol for the main comparison; within-training k-fold CV is used only to generate out-of-fold meta-features for stacking."
+  data_files: ["Exact robotics-domain dataset files from the reference paper/repository; filenames pending extraction"]
+  key_implementation_details: ["Do not alter planner inputs or planner algorithm", "Keep candidate base models identical across BMA and stacking", "Generate meta-learner training data strictly from out-of-fold predictions to avoid leakage", "Do not replace the reference evaluation metric name 'accuracy'"]
+proposed_method:
+  what_is_new: "Replace the BMA combiner in Analyze with a stacking combiner trained on out-of-fold predictive performance while keeping the same base model outputs, dataset, split, preprocessing, and planner."
+  what_is_borrowed: "Reference paper's dataset, candidate model space, BMA baseline, planner, and evaluation protocol."
+  why_improvement_expected: "Stacking learns empirical combination weights from held-out predictive behavior rather than relying on posterior model probabilities alone, which may better handle model-selection uncertainty when candidate models are misspecified or heterogeneous in local performance."
+plan_dataset:
+  name: "Reference TUNE robotics-domain dataset from SEAMS'22 paper (exact version/file names pending extraction)"
+  source: "file"
+  license: "unknown"
+  preprocessing:
+    - "Replicate the paper's preprocessing pipeline exactly once dataset files are recovered from the reference repository/paper."
+    - "Use the same target variable and same candidate model input features as the baseline paper."
+    - "Preserve planner input formatting so only the Analyze combiner changes."
+    - "Generate out-of-fold level-0 predictions on the training partition only for stacking meta-feature construction."
+  split:
+    strategy: "none"
+    ratio: "reference-paper official split"
+    seed: 42
+    risk_notes: "No new split may be invented; exact split indices must match the paper/code to satisfy data-consistency rules. Leakage risk is high if meta-learner is trained on in-fold predictions, so only out-of-fold training predictions are allowed."
+  sample_count: null
+  consistency_requirement:
+    reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+    must_match: ["dataset_version", "train_test_split"]
+plan_model:
+  family: "ensemble"
+  architecture: "Analyze-phase comparator with identical level-0 candidate models for both methods; baseline uses BMA combiner, proposed uses level-1 stacking meta-learner over out-of-fold base predictions; planner remains unchanged."
+  parameters: "N/A"
+  hyperparameters:
+    - name: "meta_learner"
+      values: ["logistic_regression", "ridge_regression"]
+    - name: "stacking_cv_folds"
+      values: ["5"]
+    - name: "base_model_space"
+      values: ["exact_reference_paper_model_space_only"]
+    - name: "regularization_strength"
+      values: ["0.1", "1.0", "10.0"]
+  reference_implementation: "https://github.com/matteocamilli/bma-package"
+plan_training:
+  optimizer: "LBFGS or closed-form solver depending on recovered reference/base-model implementation; same fitting procedure per model family as in reference code"
+  learning_rate: 0.001
+  batch_size: 32
+  epochs_or_steps: 100
+  schedule: "none; deterministic solver preferred for fast-fail unless reference code requires otherwise"
+  seeds: [42, 123, 456]
+  num_runs: 3
+  hardware: "CPU"
+  estimated_runtime: "30-90 minutes after dataset recovery; mostly dominated by repeated base-model fitting and k-fold out-of-fold prediction generation"
+  estimated_cost_credits: 10
+  measurement_type: "estimated"
+  confound_controls:
+    initialization: "Use the same seeds across BMA, trivial baseline, and stacking; deterministic solvers where possible."
+    hyperparam_search: "Small matched grid over meta-learner regularization only; no extra search for stacking beyond what is allowed for all methods."
+    data_split: "Fixed reference-paper split for evaluation; fixed internal CV folds with seed 42 for stacking meta-feature generation."
+    hardware_noise: "Run all methods on the same CPU environment and record wall-clock time separately, but do not treat RQ3 as in-scope in fast-fail."
+plan_testing:
+  metrics:
+    - name: "accuracy"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+      threshold: 0.05
+    - name: "accuracy"
+      paper_rq: "RQ2"
+      direction: "higher_better"
+      threshold: 0.03
+  statistical_tests:
+    - name: "descriptive_mean_std"
+      purpose: "FAST_FAIL reporting of mean and standard deviation across seeds for prediction accuracy and adaptation-decision accuracy."
+      report: ["mean", "std", "n"]
+    - name: "paired_bootstrap_optional"
+      purpose: "Optional early uncertainty check on paired test predictions if the recovered sample size is sufficient."
+      report: ["effect_size", "ci_95"]
+  baselines:
+    - name: "TUNE + Bayesian Model Averaging (BMA)"
+      why_chosen: "Strong reference baseline from the source paper; must be reproduced faithfully with the same candidate model space, data, split, preprocessing, and planner."
+      resource_parity: "Same dataset, same split, same level-0 candidate models, same planner, same hardware, same seeds; only the combiner differs."
+    - name: "Best single reference candidate model"
+      why_chosen: "Trivial/non-ensemble baseline to verify that any gain is due to ensemble uncertainty handling rather than merely using any predictive model."
+      resource_parity: "Selected from the same reference candidate model space and trained on the same split/hardware."
+  ablation:
+    - component: "level-1 stacking meta-learner"
+      replacement: "remove"
+      purpose: "Test whether gains disappear when the proposed stacking mechanism is removed, isolating the contribution of learned combination weights."
+  success_criteria:
+    - "Prediction accuracy on RQ1 is at least 0.05 higher than the faithfully reproduced BMA baseline on the exact reference-paper split."
+    - "Adaptation-decision accuracy on RQ2 is at least 0.03 higher than BMA while the planner remains unchanged."
+    - "Across 3 seeds, stacked method reports higher mean accuracy than both BMA and the best single-model baseline without evidence of leakage from meta-feature generation."
+  failure_conditions:
+    - "RQ1 accuracy improvement over BMA is less than 0.05."
+    - "Removing the meta-learner changes accuracy by less than 0.02, suggesting the stacking mechanism is not the causal driver."
+    - "Exact reference dataset files, split, or preprocessing cannot be recovered, preventing a fair comparison under the pipeline's consistency rule."
+risks:
+  - severity: "high"
+    issue: "Exact dataset files, split protocol, preprocessing pipeline, and numeric baseline values are not available in current pipeline artifacts."
+    mitigation: "Before implementation, extract these from the reference paper/repository and update baseline.metric_values plus data consistency checks; block any claim if unresolved."
+  - severity: "medium"
+    issue: "The paper's evaluation protocol uses the exact metric name 'accuracy' for multiple RQs, creating ambiguity between predictive accuracy and adaptation-decision accuracy in one metrics list."
+    mitigation: "Coder should log them as separate result channels keyed by paper_rq while preserving the exact metric name 'accuracy' in the metric contract."
+  - severity: "medium"
+    issue: "If the reference dataset is small, stacking may overfit even with out-of-fold training."
+    mitigation: "Use only out-of-fold meta-features, constrain the meta-learner with simple regularized models, and inspect mean±std across seeds in fast-fail."

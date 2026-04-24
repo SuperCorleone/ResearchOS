@@ -13,6 +13,8 @@ import json
 import logging
 from pathlib import Path
 
+import yaml
+
 from researchos.schemas.artifact import ResultsArtifact
 from researchos.utils.paths import PROJECT_ROOT, ARTIFACTS_DIR, KNOWLEDGE_WIKI_DIR
 
@@ -55,6 +57,39 @@ def validate_artifact_write(file_path: str, content: str | None = None) -> dict:
             return {
                 "allowed": False,
                 "reason": f"results.json schema violation: {validation['reason']}",
+            }
+
+    # Rule 2b: .yaml artifacts must parse as YAML (round-trip safety).
+    # Prevents DESIGN / CONCEPT_EXTRACT / MANIFEST agents from persisting
+    # malformed YAML (e.g. mis-indented keys) that breaks every downstream
+    # consumer — preflight, publisher, judge.
+    if path.suffix in (".yaml", ".yml") and content:
+        try:
+            parsed = yaml.safe_load(content)
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = (
+                f" at line {mark.line + 1}, column {mark.column + 1}"
+                if mark is not None
+                else ""
+            )
+            return {
+                "allowed": False,
+                "reason": (
+                    f"{path.name} failed YAML parse{where}: "
+                    f"{getattr(e, 'problem', str(e))}. "
+                    f"Rewrite the file with valid YAML indentation."
+                ),
+            }
+        # A bare scalar or null YAML is almost always an LLM truncation
+        # artifact for plan-shaped files; reject it so the agent retries.
+        if parsed is None or not isinstance(parsed, (dict, list)):
+            return {
+                "allowed": False,
+                "reason": (
+                    f"{path.name} must contain a YAML mapping or list, "
+                    f"got {type(parsed).__name__}."
+                ),
             }
 
     # Rule 3: Don't write directly to knowledge/wiki/
@@ -116,8 +151,6 @@ def validate_data_source_compliance(pipeline_id: str, project_root: Path | None 
     Called before the RUN step to ensure fetch_dataset was used when required.
     Returns dict with ``compliant: bool``, ``source: str``, ``reason: str``.
     """
-    import yaml
-
     root = project_root or PROJECT_ROOT
     pdir = root / "artifacts" / f"pipeline_{pipeline_id}"
     plan_path = pdir / "experiment_plan.yaml"

@@ -105,3 +105,48 @@ This page tracks proposals that were rejected by the Topic Evaluator due to high
 - **Gate Result**: reject
 - **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
 - **Rejected At**: 2026-04-24T09:09:44.689044+00:00
+
+## Stacking-Based Analyze Modules for Heterogeneous-Goal Self-Adaptive AI Workflows
+- **ID**: stacking_based_analyze_modules
+- **Direction**: self-adaptive-systems
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T17:51:25.615849+00:00
+
+## Reflection-Triggered Communication Gating for Multi-Agent Workflows
+- **ID**: reflection_triggered_communica
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T18:50:59.130745+00:00
+
+## Counterfactual Communication Pruning for Multi-Agent Workflows
+- **ID**: counterfactual_communication_p
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T18:52:28.115243+00:00
+
+## Value-of-Information Communication Gating for Multi-Agent Workflows
+- **ID**: value_of_information_communica
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T18:52:51.122333+00:00
+
+## Constraint-Aware Hierarchical Task Decomposition for Multi-Agent Workflows
+- **ID**: constraint_aware_hierarchical_
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=5/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T18:53:14.849329+00:00

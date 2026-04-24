@@ -1,21 +1,24 @@
 """MCP server — expose ResearchOS verbs as Model-Context-Protocol tools.
 
-This adapter lets any MCP-speaking host (Claude Desktop, Cursor, a custom
-orchestrator) drive ResearchOS over the standard MCP tool-call surface.
+Lets any MCP 1.x host (OpenCode, Claude Desktop, Cursor, …) drive
+ResearchOS over the standard MCP tool-call surface. All six user-facing
+lifecycle modes from the README plus the post-hoc control verbs:
 
-Tools exposed:
-- ``researchos_launch``          — start the autonomous scheduler loop
-- ``researchos_trial``           — run one pipeline end-to-end and stop
-- ``researchos_get_state``       — return typed pipeline state as JSON
-- ``researchos_inject_directive``— append a user directive to a pipeline
-- ``researchos_kill``            — terminate a pipeline (stage → FAILED)
+- ``researchos_launch``             — heartbeat → miner → candidates
+- ``researchos_trial``              — single pipeline then stop
+- ``researchos_inject``             — PDF(s) → wiki → miner OR direct proposal
+- ``researchos_create``             — manual proposal (no PDF)
+- ``researchos_candidates_list``    — list pending candidate topics
+- ``researchos_candidates_select``  — pick a candidate into a pipeline
+- ``researchos_candidates_reject``  — reject a candidate
+- ``researchos_get_state``          — typed PipelineState JSON
+- ``researchos_inject_directive``   — append directive to user_directives.yaml
+- ``researchos_kill``               — stage → FAILED
 
-The server ships with a thin ``researchos.agent_runtime.sdk.SDKRuntime``
-under the hood, which is the zero-dependency path. Swap via
-``RESEARCHOS_RUNTIME=openharness`` if the host already has OH installed.
-
-This file deliberately imports the MCP SDK lazily so the module loads (and
-tools can still be introspected) on systems that don't have ``mcp`` installed.
+Uses ``researchos.agent_runtime.sdk.SDKRuntime`` by default; override via
+``RESEARCHOS_RUNTIME=openharness|skill``. On import this module loads
+``~/.env`` and ``<project_root>/.env`` (precedence: shell > project > home)
+so opencode users don't have to put secrets in ``opencode.json``.
 """
 
 from __future__ import annotations
@@ -25,9 +28,52 @@ import logging
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 logger = logging.getLogger("researchos.mcp")
+
+
+# ---------------------------------------------------------------------------
+# .env auto-loading — same rules as researchos.cli._load_dotenv_files.
+# ---------------------------------------------------------------------------
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip(); v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in {'"', "'"}:
+                v = v[1:-1]
+            out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+def _load_dotenv_files() -> None:
+    """Merge .env files into os.environ; shell env always wins."""
+    home_env = Path.home() / ".env"
+    proj_root = Path(os.environ.get("RESEARCHOS_PROJECT_ROOT", Path.cwd())).resolve()
+    proj_env = proj_root / ".env"
+    for path in (home_env, proj_env):
+        if path.exists() and path != (home_env if path == proj_env else proj_env):
+            for k, v in _parse_dotenv(path).items():
+                os.environ.setdefault(k, v)
+        elif path.exists():
+            for k, v in _parse_dotenv(path).items():
+                os.environ.setdefault(k, v)
+
+
+_load_dotenv_files()
 
 # ---------------------------------------------------------------------------
 # Tool descriptors (MCP-style JSON-Schema). These are the single source of
@@ -36,42 +82,138 @@ logger = logging.getLogger("researchos.mcp")
 # ---------------------------------------------------------------------------
 
 TOOLS: list[dict[str, Any]] = [
+    # ── lifecycle ────────────────────────────────────────────────
     {
         "name": "researchos_launch",
         "description": (
-            "Run the autonomous ResearchOS scheduler loop until idle. "
-            "Returns a short status summary when the run stops."
+            "Start the autonomous ResearchOS loop: heartbeat → miner → "
+            "candidates → (user select, unless auto_select=true) → pipeline "
+            "→ milestones → paper. Use auto_select=true for full autonomy."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "auto_select": {
                     "type": "boolean", "default": False,
-                    "description": "Skip PROPOSAL-stage professor approval.",
+                    "description": "Skip user selection — miner picks automatically.",
                 },
-                "simulate": {
-                    "type": "boolean", "default": False,
-                    "description": "Mock LLM calls (for CI/testing).",
+                "mode": {
+                    "type": "string", "enum": ["simulate", "autonomous", "interactive"],
+                    "default": "autonomous",
                 },
+                "max_ticks":      {"type": "integer", "default": 50},
+                "max_milestones": {"type": "integer", "default": 3},
             },
         },
     },
     {
         "name": "researchos_trial",
         "description": (
-            "Execute exactly one pipeline end-to-end (heartbeat + miner + "
-            "scheduler) and return the final pipeline id + stage."
+            "Heartbeat once + miner once + exactly one pipeline end-to-end, "
+            "then stop. Typical smoke test / single-topic run."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "mode": {
-                    "type": "string", "enum": ["real", "simulate"],
-                    "default": "real",
+                    "type": "string", "enum": ["simulate", "autonomous", "interactive"],
+                    "default": "autonomous",
                 },
+                "max_ticks": {"type": "integer", "default": 500},
             },
         },
     },
+    {
+        "name": "researchos_inject",
+        "description": (
+            "Inject evidence into ResearchOS. "
+            "Typed mode (preferred): supply base_paper + title + question. "
+            "The base paper is compiled to wiki AND saved to the pipeline dir. "
+            "proposal is saved to the pipeline dir only (NOT wiki). "
+            "ref_code URL is recorded for CODE_RECON (not cloned here). "
+            "Legacy mode (deprecated): supply papers array; miner will surface "
+            "candidates (Path A) or pipeline created directly with title+question (Path B)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_paper": {"type": "string",
+                               "description": "Path to the base paper PDF or markdown (typed mode, preferred)."},
+                "proposal":   {"type": "string",
+                               "description": "Path to the user proposal file (typed mode). NOT compiled to wiki."},
+                "ref_code":   {"type": "string",
+                               "description": "Git URL of the reference code repo (typed mode). Recorded, not cloned."},
+                "related_work": {"type": "array", "items": {"type": "string"},
+                                 "description": "Optional related-work file paths (typed mode); can repeat."},
+                "papers":     {"type": "array", "items": {"type": "string"},
+                               "description": "[DEPRECATED] Paths to PDF/MD/TXT files. Use base_paper instead."},
+                "title":      {"type": "string",
+                               "description": "Pipeline title. Required in typed mode."},
+                "question":   {"type": "string",
+                               "description": "Research question. Required with title."},
+                "id":         {"type": "string"},
+                "budget":     {"type": "integer", "default": 20000},
+            },
+        },
+    },
+    {
+        "name": "researchos_create",
+        "description": (
+            "Create a pipeline proposal by hand — no PDF injection. For when "
+            "the research question is known a priori."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["title", "question"],
+            "properties": {
+                "title":    {"type": "string"},
+                "question": {"type": "string"},
+                "id":       {"type": "string"},
+                "budget":   {"type": "integer", "default": 20000},
+                "refs":     {"type": "array", "items": {"type": "string"},
+                             "description": "Evidence reference identifiers."},
+            },
+        },
+    },
+    # ── candidate triage ────────────────────────────────────────
+    {
+        "name": "researchos_candidates_list",
+        "description": (
+            "List pending candidate topics surfaced by the miner. Use this "
+            "then researchos_candidates_select to approve one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "verbose": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    {
+        "name": "researchos_candidates_select",
+        "description": "Select a candidate topic (by 1-based index) and start its pipeline.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["index"],
+            "properties": {
+                "index":    {"type": "integer"},
+                "feedback": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "researchos_candidates_reject",
+        "description": "Reject a candidate topic (by 1-based index).",
+        "inputSchema": {
+            "type": "object",
+            "required": ["index"],
+            "properties": {
+                "index":    {"type": "integer"},
+                "feedback": {"type": "string"},
+            },
+        },
+    },
+    # ── control / introspection ────────────────────────────────
     {
         "name": "researchos_get_state",
         "description": "Return the typed PipelineState as JSON.",
@@ -119,24 +261,110 @@ def _project_root() -> Path:
     return Path(os.environ.get("RESEARCHOS_PROJECT_ROOT", Path.cwd())).resolve()
 
 
+# -- canonical CLI delegation ---------------------------------------------
+#
+# launch / trial / inject / create / candidates_* share their behaviour with
+# scripts.run_research's cmd_*. We build a minimal argparse.Namespace from
+# the MCP tool arguments, capture stdout, and return the lines as the tool
+# response body. This keeps one source of truth.
+
+def _rr_module():
+    from scripts import run_research
+    return run_research
+
+
+def _capture_stdout(fn, ns: SimpleNamespace) -> str:
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try:
+            fn(ns)
+        except SystemExit as exc:
+            buf.write(f"\n[exit_code={exc.code}]")
+    return buf.getvalue()
+
+
 async def _handle_launch(args: dict[str, Any]) -> str:
-    from researchos.runtime.scheduler import Scheduler
-    scheduler = Scheduler(
-        _project_root(),
-        simulate=bool(args.get("simulate")),
-        auto_professor=bool(args.get("auto_select")),
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        mode=args.get("mode", "autonomous"),
+        max_ticks=int(args.get("max_ticks", 50)),
+        interval=5,
+        human_review=False,
+        max_milestones=int(args.get("max_milestones", 3)),
+        enable_heartbeat=False,
+        auto_select=bool(args.get("auto_select", False)),
     )
-    await scheduler.run_until_idle()
-    return json.dumps({"status": "idle"})
+    body = _capture_stdout(rr.cmd_launch, ns)
+    return json.dumps({"status": "done", "output": body})
 
 
 async def _handle_trial(args: dict[str, Any]) -> str:
-    from researchos.runtime.scheduler import Scheduler
-    scheduler = Scheduler(
-        _project_root(), simulate=args.get("mode") == "simulate",
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        mode=args.get("mode", "autonomous"),
+        max_ticks=int(args.get("max_ticks", 500)),
+        interval=5,
     )
-    await scheduler.run_trial()
-    return json.dumps({"status": "trial_complete"})
+    body = _capture_stdout(rr.cmd_trial, ns)
+    return json.dumps({"status": "trial_complete", "output": body})
+
+
+async def _handle_inject(args: dict[str, Any]) -> str:
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        papers=list(args.get("papers", [])),
+        base_paper=args.get("base_paper"),
+        proposal=args.get("proposal"),
+        ref_code=args.get("ref_code"),
+        related_work=list(args.get("related_work", [])),
+        title=args.get("title"),
+        question=args.get("question"),
+        id=args.get("id"),
+        budget=int(args.get("budget", 20000)),
+    )
+    body = _capture_stdout(rr.cmd_inject, ns)
+    return json.dumps({"status": "done", "output": body})
+
+
+async def _handle_create(args: dict[str, Any]) -> str:
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        id=args.get("id"),
+        title=args["title"],
+        question=args["question"],
+        budget=int(args.get("budget", 20000)),
+        refs=list(args.get("refs", [])),
+    )
+    body = _capture_stdout(rr.cmd_create, ns)
+    return json.dumps({"status": "done", "output": body})
+
+
+async def _handle_candidates_list(args: dict[str, Any]) -> str:
+    rr = _rr_module()
+    ns = SimpleNamespace(action="list", verbose=bool(args.get("verbose", False)))
+    body = _capture_stdout(rr.cmd_candidates, ns)
+    return json.dumps({"status": "done", "output": body})
+
+
+async def _handle_candidates_select(args: dict[str, Any]) -> str:
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        action="select", index=int(args["index"]),
+        feedback=args.get("feedback"),
+    )
+    body = _capture_stdout(rr.cmd_candidates, ns)
+    return json.dumps({"status": "done", "output": body})
+
+
+async def _handle_candidates_reject(args: dict[str, Any]) -> str:
+    rr = _rr_module()
+    ns = SimpleNamespace(
+        action="reject", index=int(args["index"]),
+        feedback=args.get("feedback"),
+    )
+    body = _capture_stdout(rr.cmd_candidates, ns)
+    return json.dumps({"status": "done", "output": body})
 
 
 async def _handle_get_state(args: dict[str, Any]) -> str:
@@ -179,11 +407,16 @@ async def _handle_kill(args: dict[str, Any]) -> str:
 
 
 _HANDLERS = {
-    "researchos_launch":            _handle_launch,
-    "researchos_trial":             _handle_trial,
-    "researchos_get_state":         _handle_get_state,
-    "researchos_inject_directive":  _handle_inject_directive,
-    "researchos_kill":              _handle_kill,
+    "researchos_launch":                _handle_launch,
+    "researchos_trial":                 _handle_trial,
+    "researchos_inject":                _handle_inject,
+    "researchos_create":                _handle_create,
+    "researchos_candidates_list":       _handle_candidates_list,
+    "researchos_candidates_select":     _handle_candidates_select,
+    "researchos_candidates_reject":     _handle_candidates_reject,
+    "researchos_get_state":             _handle_get_state,
+    "researchos_inject_directive":      _handle_inject_directive,
+    "researchos_kill":                  _handle_kill,
 }
 
 
@@ -200,48 +433,40 @@ async def dispatch(name: str, arguments: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Stdio entry-point (for hosts that talk MCP over stdin/stdout).
+# Stdio entry-point (uses the official MCP SDK so any MCP 1.x host —
+# OpenCode, Claude Desktop, Cursor — can connect over stdio without
+# reinventing JSON-RPC framing).
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    """Minimal stdio MCP server.
-
-    Expects JSON-RPC over stdin — one request per line:
-      { "method": "tools/list" }
-      { "method": "tools/call", "params": {"name": "...", "arguments": {...}} }
-
-    Writes a JSON-RPC response per line to stdout. Real MCP protocol framing
-    (Content-Length headers) can sit on top of this if the host requires it.
-    """
+    """Run the MCP server over stdio using the ``mcp`` Python SDK."""
     import asyncio
 
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    from mcp.types import Tool, TextContent
+
+    app = Server("researchos")
+
+    @app.list_tools()
+    async def _list_tools() -> list[Tool]:
+        return [
+            Tool(
+                name=t["name"],
+                description=t["description"],
+                inputSchema=t["inputSchema"],
+            )
+            for t in TOOLS
+        ]
+
+    @app.call_tool()
+    async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+        body = await dispatch(name, arguments or {})
+        return [TextContent(type="text", text=body)]
+
     async def _serve() -> None:
-        loop = asyncio.get_event_loop()
-        while True:
-            line = await loop.run_in_executor(None, sys.stdin.readline)
-            if not line:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                req = json.loads(line)
-            except json.JSONDecodeError as exc:
-                print(json.dumps({"error": f"bad_json: {exc}"}), flush=True)
-                continue
-            method = req.get("method")
-            rid = req.get("id")
-            if method == "tools/list":
-                response = {"id": rid, "result": {"tools": TOOLS}}
-            elif method == "tools/call":
-                params = req.get("params", {})
-                name = params.get("name", "")
-                args = params.get("arguments") or {}
-                body = await dispatch(name, args)
-                response = {"id": rid, "result": {"content": body}}
-            else:
-                response = {"id": rid, "error": f"unknown_method: {method}"}
-            print(json.dumps(response), flush=True)
+        async with stdio_server() as (read, write):
+            await app.run(read, write, app.create_initialization_options())
 
     try:
         asyncio.run(_serve())

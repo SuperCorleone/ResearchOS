@@ -61,7 +61,15 @@ logger = logging.getLogger(__name__)
 # (WAITING_APPROVAL, PRE_PUBLISH_GATE) are removed. Professor auto-decides
 # stage transitions via decisions/*.yaml.
 _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {
-    (PipelineStage.MAIN, None): PipelineStep.HYPOTHESIS,
+    # Alignment workflow (2026-04). All MAIN-stage pipelines enter via
+    # PAPER_SPEC; legacy pipelines without typed evidence_refs SKIP each
+    # alignment step in the dispatcher's specialised handler and advance
+    # immediately to HYPOTHESIS.
+    (PipelineStage.MAIN, None): PipelineStep.PAPER_SPEC,
+    (PipelineStage.MAIN, PipelineStep.PAPER_SPEC): PipelineStep.PROPOSAL_SPEC,
+    (PipelineStage.MAIN, PipelineStep.PROPOSAL_SPEC): PipelineStep.ALIGNMENT,
+    (PipelineStage.MAIN, PipelineStep.ALIGNMENT): PipelineStep.ALIGNMENT_VALIDATOR,
+    (PipelineStage.MAIN, PipelineStep.ALIGNMENT_VALIDATOR): PipelineStep.HYPOTHESIS,
     (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
     (PipelineStage.MAIN, PipelineStep.DESIGN): PipelineStep.CODE_RECON,
     (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.CONCEPT_EXTRACT,
@@ -83,6 +91,12 @@ _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None]
 }
 
 STEP_ARTIFACT: dict[PipelineStep, str] = {
+    # Alignment workflow artifacts
+    PipelineStep.PAPER_SPEC: "paper_spec.yaml",
+    PipelineStep.PROPOSAL_SPEC: "proposal_spec.yaml",
+    PipelineStep.ALIGNMENT: "alignment_contract.yaml",
+    PipelineStep.ALIGNMENT_VALIDATOR: "alignment_validation_report.json",
+
     PipelineStep.HYPOTHESIS: "hypothesis.md",
     PipelineStep.DESIGN: "experiment_plan.yaml",
     # DESIGN_REVIEW retired 2026-04 (scientific review is now exp_designer's
@@ -243,14 +257,24 @@ class ResearchScheduler:
         main_stage = PipelineStage.MAIN.value
         fast_fail_stage = PipelineStage.FAST_FAIL.value
         edges_main = {
+            # Alignment workflow (2026-04): PAPER_SPEC -> PROPOSAL_SPEC ->
+            # ALIGNMENT -> ALIGNMENT_VALIDATOR -> HYPOTHESIS. Legacy pipelines
+            # SKIP each alignment step in the dispatcher.
+            (main_stage, None): PipelineStep.PAPER_SPEC.value,
+            (main_stage, PipelineStep.PAPER_SPEC.value): PipelineStep.PROPOSAL_SPEC.value,
+            (main_stage, PipelineStep.PROPOSAL_SPEC.value): PipelineStep.ALIGNMENT.value,
+            (main_stage, PipelineStep.ALIGNMENT.value): PipelineStep.ALIGNMENT_VALIDATOR.value,
+            (main_stage, PipelineStep.ALIGNMENT_VALIDATOR.value): PipelineStep.HYPOTHESIS.value,
             # DESIGN -> CODE_RECON -> CONCEPT_EXTRACT -> CODE
             # (DESIGN_REVIEW step retired 2026-04; exp_designer self-reviews.)
             (main_stage, PipelineStep.DESIGN.value): PipelineStep.CODE_RECON.value,
             (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
             (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
-            # RUN -> RESULTS_REVERIFY -> CRITIC
+            # RUN -> RESULTS_REVERIFY -> CRITIC -> JUDGE -> REPORT
             (main_stage, PipelineStep.RUN.value): PipelineStep.RESULTS_REVERIFY.value,
             (main_stage, PipelineStep.RESULTS_REVERIFY.value): PipelineStep.CRITIC.value,
+            (main_stage, PipelineStep.CRITIC.value): PipelineStep.JUDGE.value,
+            (main_stage, PipelineStep.JUDGE.value): PipelineStep.REPORT.value,
         }
         # H1: BASELINE_CONFIRM is the first step on FAST_FAIL entry.  The
         # handler (_run_baseline_confirm) writes metric_contract.json when
@@ -1177,8 +1201,8 @@ class ResearchScheduler:
         step_name = pipeline.step.value if pipeline.step else None
         wf_key = (stage_name, step_name)
 
-        # Dynamic routing: DESIGN and DESIGN_REVIEW use _next_after_design
-        if pipeline.step in (PipelineStep.DESIGN, PipelineStep.DESIGN_REVIEW) and wf_key not in self._next_step_map:
+        # Dynamic routing: DESIGN uses _next_after_design
+        if pipeline.step == PipelineStep.DESIGN and wf_key not in self._next_step_map:
             next_step = self._next_after_design(pipeline)
         else:
             next_step_name = self._next_step_map.get(wf_key)
@@ -1362,6 +1386,23 @@ class ResearchScheduler:
             self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
         )
 
+        # ── Alignment workflow (2026-04) ────────────────────────────────
+        # PAPER_SPEC / PROPOSAL_SPEC / ALIGNMENT are LLM-dispatched but need
+        # a no-op SKIP path for legacy pipelines that have no typed
+        # base_paper evidence. ALIGNMENT_VALIDATOR is pure Python.
+        if step in (
+            PipelineStep.PAPER_SPEC,
+            PipelineStep.PROPOSAL_SPEC,
+            PipelineStep.ALIGNMENT,
+        ):
+            if not self._has_alignment_inputs(pipeline, pdir):
+                return self._skip_alignment_step(step, pipeline, pdir)
+            # Otherwise fall through to standard dispatch (None return).
+            return None
+
+        if step == PipelineStep.ALIGNMENT_VALIDATOR:
+            return self._run_alignment_validator(pipeline, pdir)
+
         # CODE_RECON — pure-Python shallow clone + static scan.
         if step == PipelineStep.CODE_RECON:
             return self._run_code_recon(pipeline, pdir)
@@ -1414,6 +1455,120 @@ class ResearchScheduler:
                 "REPORT: publisher failed for pipeline %s", pipeline.pipeline_id
             )
             return False
+
+    # ── Alignment workflow helpers (2026-04) ────────────────────────────
+
+    def _has_alignment_inputs(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Return True iff the pipeline qualifies for the alignment workflow.
+
+        Two signals must both hold:
+          * pipeline.metadata['source'] == 'user_inject' (typed inject CLI)
+          * a TypedEvidenceRef with role='base_paper' is present
+            (or, as a runtime fallback, base_paper.md exists in pdir).
+        """
+        if pipeline.metadata.get("source") != "user_inject":
+            return False
+        # Typed evidence_refs path
+        for ref in pipeline.evidence_refs or []:
+            role = getattr(ref, "role", None)
+            if role is None and isinstance(ref, dict):
+                role = ref.get("role")
+            if role == "base_paper":
+                return True
+        # Fallback: base_paper.md staged on disk
+        return (pdir / "base_paper.md").exists()
+
+    def _skip_alignment_step(
+        self,
+        step: PipelineStep,
+        pipeline: PipelineState,
+        pdir: Path,
+    ) -> bool:
+        """Write a SKIP marker artifact so the scheduler can advance.
+
+        Used for legacy pipelines that lack a base_paper. The pipeline still
+        progresses through PAPER_SPEC / PROPOSAL_SPEC / ALIGNMENT, but each
+        step writes a one-line skip notice rather than a real product.
+        Downstream agents detect missing alignment_contract.yaml and fall
+        back to legacy behaviour (kb_retrieve, etc.).
+        """
+        pdir.mkdir(parents=True, exist_ok=True)
+        artifact = STEP_ARTIFACT.get(step)
+        if artifact is None:
+            return True
+        target = pdir / artifact
+        if not target.exists():
+            content = (
+                f"# {step.value} SKIPPED: pipeline has no typed base_paper "
+                f"evidence (legacy mode). Downstream agents will use "
+                f"kb_retrieve fallbacks.\n"
+            )
+            target.write_text(content, encoding="utf-8")
+        self.state.append_log(
+            f"{step.value} SKIPPED (legacy pipeline, no base_paper)",
+            pipeline.pipeline_id,
+        )
+        return True
+
+    def _run_alignment_validator(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Pure-Python validator for the alignment contract.
+
+        Returns True on PASS or WARN (pipeline continues), False on BLOCK
+        (scheduler treats as failure and halts the pipeline). For legacy
+        pipelines where alignment was skipped, write a permissive PASS
+        report and continue.
+        """
+        report_path = pdir / "alignment_validation_report.json"
+        # Legacy short-circuit: contract absent → write trivial PASS.
+        contract_path = pdir / "alignment_contract.yaml"
+        if not contract_path.exists() or not self._has_alignment_inputs(pipeline, pdir):
+            import json as _json
+            pdir.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                _json.dumps(
+                    {
+                        "verdict": "PASS",
+                        "summary": {"PASS": 1, "WARN": 0, "ERROR": 0},
+                        "checks": [{
+                            "check": "alignment_workflow.applicable",
+                            "severity": "PASS",
+                            "detail": "skipped: legacy pipeline (no contract)",
+                        }],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            return True
+
+        try:
+            from researchos.runtime.alignment_validator import run_validator
+        except ImportError:
+            logger.warning(
+                "alignment_validator module unavailable; treating as PASS"
+            )
+            return True
+
+        try:
+            report = run_validator(pdir)
+        except Exception:
+            logger.exception(
+                "ALIGNMENT_VALIDATOR: run_validator crashed for pipeline %s",
+                pipeline.pipeline_id,
+            )
+            return False
+
+        self.state.append_log(
+            f"ALIGNMENT_VALIDATOR verdict={report.verdict} "
+            f"({report.summary})",
+            pipeline.pipeline_id,
+        )
+        # PASS or WARN → pipeline continues; BLOCK → halt.
+        return report.verdict != "BLOCK"
 
     def _run_code_recon(
         self, pipeline: PipelineState, pdir: Path

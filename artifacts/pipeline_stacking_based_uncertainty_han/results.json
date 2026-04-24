@@ -1,0 +1,17 @@
+{
+  "metrics": {
+    "accuracy__RQ1": 0.0,
+    "accuracy__RQ2": 0.0
+  },
+  "config": {
+    "pipeline": "stacking_based_uncertainty_han",
+    "status": "blocked_fast_fail",
+    "data_source": "file",
+    "data_rows": 39420,
+    "split_seed": 42,
+    "data_hash": "sha256:e231cac0020e75dbc0732f915cdb60ac42d8452ccc23b427165350d85e9ed03e"
+  },
+  "seed": 42,
+  "runtime_seconds": 0.0,
+  "notes": "Blocked fast-fail: Missing exact reference dataset files, train/test split metadata, and preprocessing pipeline required for consistency with the reference paper."
+}

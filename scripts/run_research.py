@@ -30,7 +30,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from researchos.schemas.pipeline import PipelineDefinition, PipelineStage
+from researchos.schemas.pipeline import PipelineDefinition, PipelineStage, TypedEvidenceRef
 from researchos.runtime.state_manager import StateManager
 from researchos.runtime.scheduler import ResearchScheduler
 from researchos.runtime.recovery import recover_failed_pipeline
@@ -709,19 +709,138 @@ def _cmd_continue_deprecated_body(args: argparse.Namespace) -> None:
 def cmd_inject(args: argparse.Namespace) -> None:
     """Inject user-provided papers (and optional proposal) into the system.
 
-    Mode 1 - papers only:
+    Typed mode (preferred): --base-paper is set.
+        base_paper → knowledge/raw/ + wiki + pipeline_dir/base_paper.md
+        proposal   → pipeline_dir/proposal.md only (NOT wiki)
+        ref_code   → recorded in evidence_refs (not cloned here)
+
+    Legacy mode (deprecated): positional 'papers' list is used.
         Papers → compile to wiki → Knowledge Miner discovers topic → pipeline
-    Mode 2 - papers + proposal:
-        Papers → compile to wiki → skip Miner → pipeline created directly
-    Both share the knowledge base.
+        Add --title + --question to skip Miner and create pipeline directly.
     """
     import shutil
     from researchos.runtime.knowledge_compiler import compile_raw_to_wiki
 
-    papers = args.papers
-    if not papers:
-        print("  ERROR: Provide at least one paper file.")
+    base_paper = getattr(args, "base_paper", None)
+    papers = getattr(args, "papers", []) or []
+    ref_code = getattr(args, "ref_code", None)
+    related_work = getattr(args, "related_work", []) or []
+    proposal_path = getattr(args, "proposal", None)
+
+    # Guard: mixing typed and legacy modes is an error.
+    if base_paper and papers:
+        print(
+            "  ERROR: Cannot mix typed mode (--base-paper) with legacy positional 'papers'. "
+            "Use one or the other.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # ── TYPED MODE ──────────────────────────────────────────────────────────
+    if base_paper:
+        if not args.title or not args.question:
+            print(
+                "  ERROR: --base-paper requires --title and --question.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        pipeline_id = args.id or _slugify(args.title)
+        pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
+        if pdir.exists():
+            print(f"  ERROR: Pipeline '{pipeline_id}' already exists.", file=sys.stderr)
+            sys.exit(1)
+        pdir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Copy base_paper to knowledge/raw/ and compile to wiki.
+        raw_dir = PROJECT_ROOT / "knowledge" / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        base_src = Path(base_paper)
+        if not base_src.exists():
+            print(f"  ERROR: Base paper not found: {base_paper}", file=sys.stderr)
+            sys.exit(1)
+        base_raw_dest = raw_dir / base_src.name
+        if base_raw_dest.exists():
+            print(f"  Skip copy to raw (already exists): {base_src.name}")
+        else:
+            shutil.copy2(base_src, base_raw_dest)
+            print(f"  Imported to knowledge/raw/: {base_src.name}")
+
+        page = compile_raw_to_wiki(base_raw_dest, PROJECT_ROOT)
+        if page:
+            print(f"  Compiled to wiki: {page.name}")
+        else:
+            print(f"  Wiki page already exists or skipped for: {base_src.name}")
+
+        # 2. Write base_paper to pipeline dir (convert PDF→md text if PDF).
+        base_paper_dest = pdir / "base_paper.md"
+        suffix = base_src.suffix.lower()
+        if suffix == ".pdf":
+            try:
+                import fitz
+                doc = fitz.open(str(base_src))
+                md_text = "\n\n".join(doc[i].get_text() for i in range(len(doc)))
+                doc.close()
+            except ImportError:
+                md_text = f"[PDF text extraction requires pymupdf]\n\nSource: {base_src}"
+            base_paper_dest.write_text(md_text)
+        else:
+            shutil.copy2(base_src, base_paper_dest)
+        print(f"  Written to pipeline dir: base_paper.md")
+
+        # 3. Copy proposal to pipeline dir only (NOT to wiki).
+        proposal_dest_str: str | None = None
+        if proposal_path:
+            proposal_src = Path(proposal_path)
+            if not proposal_src.exists():
+                print(f"  WARNING: Proposal file not found: {proposal_path}", file=sys.stderr)
+            else:
+                proposal_dest = pdir / "proposal.md"
+                shutil.copy2(proposal_src, proposal_dest)
+                proposal_dest_str = str(proposal_dest)
+                print(f"  Written to pipeline dir: proposal.md (NOT compiled to wiki)")
+
+        # 4. Build typed evidence_refs.
+        refs: list[TypedEvidenceRef] = [
+            TypedEvidenceRef(role="base_paper", path_or_url=str(base_paper_dest))
+        ]
+        if proposal_dest_str:
+            refs.append(TypedEvidenceRef(role="proposal", path_or_url=proposal_dest_str))
+        if ref_code:
+            refs.append(TypedEvidenceRef(role="ref_code", path_or_url=ref_code))
+        for rw in related_work:
+            refs.append(TypedEvidenceRef(role="related_work", path_or_url=rw))
+
+        # 5. Save PipelineDefinition.
+        pipeline_def = PipelineDefinition(
+            pipeline_id=pipeline_id,
+            title=args.title,
+            research_question=args.question,
+            budget_request=args.budget,
+            source="user_inject_typed",
+            evidence_refs=refs,
+        )
+        RUNTIME_PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = RUNTIME_PIPELINES_DIR / f"new_{pipeline_id}.json"
+        out_path.write_text(pipeline_def.model_dump_json(indent=2))
+
+        print(f"\n  Pipeline proposal created (typed mode): {pipeline_id}")
+        print(f"  Saved to: {out_path.relative_to(PROJECT_ROOT)}")
+        print(f"\n  Next: python scripts/run_research.py run autonomous --max-ticks 50")
         return
+
+    # ── LEGACY MODE ─────────────────────────────────────────────────────────
+    if not papers:
+        print("  Hint: provide paper files or use --base-paper / --proposal / --ref-code.")
+        print("  Run 'researchos inject --help' for usage.")
+        return
+
+    print(
+        "DEPRECATED: positional 'papers' is being phased out. "
+        "Use --base-paper / --proposal / --ref-code for typed roles. "
+        "See researchos inject --help.",
+        file=sys.stderr,
+    )
 
     # Copy papers to knowledge/raw/
     raw_dir = PROJECT_ROOT / "knowledge" / "raw"
@@ -750,7 +869,7 @@ def cmd_inject(args: argparse.Namespace) -> None:
 
     print(f"\n  {len(imported)} papers imported, {compiled} compiled to wiki.")
 
-    # Mode 2: user also provides a proposal → create pipeline directly
+    # Legacy Mode 2: user also provides a proposal → create pipeline directly
     if args.title and args.question:
         pipeline_id = args.id or _slugify(args.title)
         pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
