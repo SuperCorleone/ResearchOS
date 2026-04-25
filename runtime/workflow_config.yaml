@@ -67,6 +67,51 @@ agent_model_tiers:
 
   # T3 — low-reasoning agents
   experiment_runner: T3
+  baseline_diagnose: T3      # python step; listed for symmetry/observability
+
+# ---------------------------------------------------------------------------
+# Baseline reconnaissance configuration
+# ---------------------------------------------------------------------------
+# Limits for code_recon clones and baseline_analyze read budget.
+# Override via env vars where ${VAR:-default} pattern is supported by the
+# workflow_loader.
+
+baseline_recon:
+  max_size_mb: 500           # ${RESEARCHOS_RECON_MAX_MB:-500}
+  max_files: 5000            # ${RESEARCHOS_RECON_MAX_FILES:-5000}
+  allowed_hosts:
+    - github.com
+    - gitlab.com
+    - bitbucket.org
+    - zenodo.org
+    - osf.io
+    - figshare.com
+    - huggingface.co
+    - codeocean.com
+    - doi.org
+  prune_extensions:
+    - .pth
+    - .pt
+    - .bin
+    - .safetensors
+    - .ckpt
+    - .h5
+    - .onnx
+    - .tar
+    - .tar.gz
+    - .tgz
+    - .zip
+    - .7z
+    - .rar
+    - .mp4
+    - .mov
+    - .avi
+    - .mkv
+    - .iso
+    - .dmg
+    - .parquet
+    - .arrow
+    - .feather
 
 # ---------------------------------------------------------------------------
 # Retry state-machine constants (A14)
@@ -164,6 +209,9 @@ steps:
     timeout: 600
     retries: 3
     type: llm
+    # mode_aware: experiment_runner reads scale_profile[stage] from
+    # experiment_plan.yaml to adjust dataset size / iteration count
+    # based on whether we are in fast_fail or main stage.
 
   critic:
     agent: critic
@@ -236,6 +284,31 @@ steps:
     retries: 3
     type: llm
 
+  paper_spec:
+    agent: paper_spec_extractor
+    output: paper_spec.yaml
+    timeout: 300
+    retries: 2
+    type: llm
+
+  waiting_approval:
+    # Terminal sentinel of every milestone. The scheduler converts this step
+    # into a milestone checkpoint + professor decision; no LLM call here.
+    # Listed in `steps:` so the workflow validator does not reject the
+    # `stages.<*>.sequence` entries that reference it.
+    agent: pipeline_manager
+    output: ""
+    timeout: 30
+    retries: 1
+    type: python
+
+  baseline_diagnose:
+    agent: baseline_diagnose      # python step, agent name kept for symmetry
+    output: baseline_diagnose.json
+    timeout: 60
+    retries: 2
+    type: python
+
 # ---------------------------------------------------------------------------
 # Review configuration
 # ---------------------------------------------------------------------------
@@ -264,42 +337,40 @@ stages:
   main:
     sequence:
       - hypothesis
+      - paper_spec
+      - code_recon
+      - baseline_analyze
+      - data_recon
+      - concept_paper
+      - concept_code
       - design                 # includes integrated scientific self-review
-      - code_recon             # shallow-clone reference repos
-      - baseline_analyze       # LLM code-first: identify real datasets vs. badges/logs/plots
-      - data_recon             # pure-python executor: copy/download per baseline_analysis.yaml
-      - concept_paper          # 2-pass concept extraction (paper side)
-      - concept_code           # 2-pass concept extraction (code side)
       - code
       - code_preflight
       - run
       - judge                  # merged: critic + experiment_analysis + interrogation
       - figure_compose
       - report
-    dynamic_routing:
-      # DESIGN_REVIEW retired 2026-04 — exp_designer self-reviews inline.
-      design:
-        default: code_recon
-        alternatives:
-          - next: code
-            condition: "design already reviewed or reused from prior milestone"
+      - waiting_approval
 
   fast_fail:
+    # Identical prefix to main (cached via step_cache when entering main).
+    # Only difference: omits figure_compose since fast_fail is a small-scale
+    # falsification gate, not a publication-grade run.
     sequence:
       - hypothesis
+      - paper_spec
+      - code_recon
+      - baseline_analyze
+      - data_recon
+      - concept_paper
+      - concept_code
       - design
       - code
+      - code_preflight
       - run
       - judge
       - report
-    dynamic_routing:
-      # After DESIGN in fast_fail, go directly to CODE.
-      # Skips code_preflight and interrogation for speed.
-      design:
-        default: code
-        alternatives:
-          - next: run
-            condition: "code already exists from prior iteration"
+      - waiting_approval
 
 # ---------------------------------------------------------------------------
 # Gate configuration

@@ -11,6 +11,7 @@ Checks:
 5. Data source consistency
 6. G3 claim-to-code mapping completeness
 7. Timeout/cost risk estimation
+8. Baseline reuse compliance (coder honored baseline_analysis.yaml)
 """
 
 from __future__ import annotations
@@ -131,6 +132,17 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
         i["severity"] == "ERROR" for i in concept_issues
     )
 
+    # 12. Baseline reuse compliance
+    baseline_reuse = _check_baseline_reuse(pipeline_dir)
+    checks["baseline_reuse"] = baseline_reuse["passed"]
+    if not baseline_reuse["passed"]:
+        for reason in baseline_reuse.get("reasons", []):
+            issues.append({
+                "severity": "ERROR",
+                "check": "baseline_reuse",
+                "detail": reason,
+            })
+
     # Determine verdict
     errors = [i for i in issues if i["severity"] == "ERROR"]
     warns = [i for i in issues if i["severity"] == "WARN"]
@@ -148,6 +160,7 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
         "issues": issues,
         "g3_implementation_coverage": g3,
         "reference_codebases": code_ref_result,
+        "baseline_reuse_check": baseline_reuse,
     }
 
 
@@ -1147,3 +1160,159 @@ def _check_reference_codebases(
     if had_error:
         result["verdict"] = "BLOCK"
     return result
+
+
+# ── Baseline reuse compliance check ─────────────────────────────────────────
+
+_DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+
+
+def _load_confidence_threshold(pipeline_dir: Path) -> float:
+    """Try to load baseline_recon.confidence_threshold from runtime/research_config.yaml.
+
+    Falls back to 0.7 if the file is absent or the key is missing.
+    """
+    # Walk up from pipeline_dir to find the project root (contains runtime/).
+    candidate = pipeline_dir
+    for _ in range(10):
+        config_path = candidate / "runtime" / "research_config.yaml"
+        if config_path.exists():
+            try:
+                cfg = yaml.safe_load(config_path.read_text()) or {}
+                threshold = (
+                    (cfg.get("baseline_recon") or {}).get("confidence_threshold")
+                )
+                if threshold is not None:
+                    return float(threshold)
+            except Exception:
+                pass
+            break
+        parent = candidate.parent
+        if parent == candidate:
+            break
+        candidate = parent
+    return _DEFAULT_CONFIDENCE_THRESHOLD
+
+
+def _check_baseline_reuse(pipeline_dir: Path) -> dict:
+    """Static check that coder honored baseline_analysis.yaml.
+
+    Returns:
+      {
+        "passed": bool,
+        "case": "A" | "B" | "C" | "skipped",
+        "reasons": list[str],   # BLOCK reasons; empty when passed
+      }
+
+    Cases (matching coder.md spec):
+      A: confidence>=0.7 AND package_acquired AND same language
+         → must find at least one file under experiment_*/baseline/
+           containing the literal substring 'COPIED FROM:'
+      B: confidence>=0.7 AND package_acquired AND cross-language
+         → must find REWRITE_RATIONALE.md and non-empty baseline_original/
+      C: confidence<0.7 OR not acquired → no checks (passed=True)
+      skipped: baseline_analysis.yaml absent → passed=True with reason note
+    """
+    analysis_path = pipeline_dir / "baseline_analysis.yaml"
+    if not analysis_path.exists():
+        return {
+            "passed": True,
+            "case": "skipped",
+            "reasons": ["baseline_analysis.yaml absent — baseline reuse check skipped"],
+        }
+
+    try:
+        analysis = yaml.safe_load(analysis_path.read_text()) or {}
+    except Exception as exc:
+        return {
+            "passed": True,
+            "case": "skipped",
+            "reasons": [f"baseline_analysis.yaml unreadable ({exc}) — skipped"],
+        }
+
+    confidence_threshold = _load_confidence_threshold(pipeline_dir)
+
+    confidence_section = analysis.get("confidence") or {}
+    confidence: float
+    try:
+        confidence = float(confidence_section.get("overall", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    package_section = analysis.get("package") or {}
+    package_acquired: bool = bool(package_section.get("acquired", False))
+
+    # Case C: low confidence or package not acquired → no enforcement
+    if confidence < confidence_threshold or not package_acquired:
+        return {"passed": True, "case": "C", "reasons": []}
+
+    # Determine whether this is a cross-language port
+    plan_path = pipeline_dir / "experiment_plan.yaml"
+    is_cross_language = False
+    if plan_path.exists():
+        try:
+            plan = yaml.safe_load(plan_path.read_text()) or {}
+            porting = plan.get("cross_language_porting") or {}
+            if porting:
+                is_cross_language = True
+        except Exception:
+            pass
+
+    if is_cross_language:
+        # Case B: cross-language port
+        reasons: list[str] = []
+
+        # Must find REWRITE_RATIONALE.md anywhere under pipeline_dir
+        rationale_files = list(pipeline_dir.rglob("REWRITE_RATIONALE.md"))
+        if not rationale_files:
+            reasons.append(
+                "Case B (cross-language): REWRITE_RATIONALE.md not found under pipeline directory"
+            )
+
+        # Must find a non-empty baseline_original/ directory anywhere under pipeline_dir
+        baseline_original_dirs = [
+            p for p in pipeline_dir.rglob("baseline_original")
+            if p.is_dir() and any(p.iterdir())
+        ]
+        if not baseline_original_dirs:
+            reasons.append(
+                "Case B (cross-language): non-empty baseline_original/ directory not found "
+                "under pipeline directory"
+            )
+
+        return {"passed": not reasons, "case": "B", "reasons": reasons}
+
+    else:
+        # Case A: same language — must find 'COPIED FROM:' in at least one baseline file
+        reasons: list[str] = []
+
+        # Candidate directories: experiment*/baseline/ and pipeline_dir/baseline/
+        baseline_dirs: list[Path] = list(pipeline_dir.glob("experiment*/baseline"))
+        baseline_dirs += list(pipeline_dir.glob("experiment/baseline"))
+        direct_baseline = pipeline_dir / "baseline"
+        if direct_baseline.is_dir():
+            baseline_dirs.append(direct_baseline)
+
+        found_copied_from = False
+        for bdir in baseline_dirs:
+            for fpath in bdir.rglob("*"):
+                if not fpath.is_file():
+                    continue
+                try:
+                    chunk = fpath.read_bytes()[:2048]
+                    if b"COPIED FROM:" in chunk:
+                        found_copied_from = True
+                        break
+                except OSError:
+                    continue
+            if found_copied_from:
+                break
+
+        if not found_copied_from:
+            reasons.append(
+                "Case A (same language): no file containing 'COPIED FROM:' found under "
+                "experiment*/baseline/ or baseline/ directories — coder must annotate "
+                "copied baseline code"
+            )
+
+        return {"passed": not reasons, "case": "A", "reasons": reasons}

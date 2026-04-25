@@ -36,8 +36,10 @@ class PipelineStep(str, Enum):
     DESIGN = "design"
     # DESIGN_REVIEW retired (2026-04): exp_designer now runs its own
     # scientific self-review; structural checks remain in design_checks.py.
+    DESIGN_REVIEW = "design_review"
     CODE_RECON = "code_recon"  # shallow clone + static scan of reference codebases
     BASELINE_ANALYZE = "baseline_analyze"  # LLM: code-first analysis of cloned baseline package
+    BASELINE_DIAGNOSE = "baseline_diagnose"  # Python: post-run divergence triage for baseline reproduction
     DATA_RECON = "data_recon"  # thin executor: copy dataset_paths / download external URLs from baseline_analysis.yaml
     CONCEPT_EXTRACT = "concept_extract"  # atomic concept decomposition (legacy 1-pass)
     CONCEPT_PAPER = "concept_paper"  # 2-pass: paper side (math + refs)
@@ -50,7 +52,10 @@ class PipelineStep(str, Enum):
     INTERROGATION = "interrogation"
     EXPERIMENT_ANALYSIS = "experiment_analysis"
     JUDGE = "judge"  # merges critic + experiment_analysis + interrogation
+    FIGURE_COMPOSE = "figure_compose"  # automated figure generation (C15)
     REPORT = "report"
+    WAITING_APPROVAL = "waiting_approval"  # pipeline paused; awaiting professor decision
+    AWAITING_HUMAN_PIVOT = "awaiting_human_pivot"  # hard/kill-flag divergence; human must write pivot_request.md
     BASELINE_CONFIRM = "baseline_confirm"  # baseline lock-in
 
 

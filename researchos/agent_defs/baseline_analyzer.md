@@ -206,6 +206,103 @@ Trigger when `code_recon.yaml::repos == []` or every repo `status: error`.
 5. If the paper provides no URLs and no clear dataset name, set
    `status: no_data_found` and explain in `notes`.
 
+## URL Discovery (mandatory two-pass)
+
+### Pass 1 — Regex extraction (deterministic)
+
+Extract candidate URLs from `base_paper.md` using these patterns:
+
+- `https?://(?:github|gitlab|bitbucket|zenodo|osf|figshare|huggingface|codeocean)\.[\w./\-?=#%&]+`
+- `https?://doi\.org/10\.\d{4,}/[\w./\-]+`
+
+For each candidate, capture surrounding text (±200 chars) as evidence.
+Look for keyword anchors near the URL: `replication package`, `code is available at`,
+`our (?:dataset|code|implementation) is at`, `the implementation can be found at`,
+`reproducible artifacts at`. A candidate within 200 chars of one of these
+anchors gets `regex_base = 1.0`; otherwise `regex_base = 0.5`.
+
+### Pass 2 — LLM disambiguation
+
+For each candidate:
+1. Decide if this URL is the official replication artifact for THIS paper
+   (not a citation to a different paper, not an unrelated dependency).
+2. Decide its role: code_repo / data_archive / both.
+3. Note the paper section (footnote / methods / acknowledgments / supplementary).
+4. Assign llm_score ∈ [0, 1].
+
+### Final confidence
+
+`confidence.url_extraction = 0.6 × regex_base + 0.4 × llm_score`
+
+The HIGHEST-scoring candidate becomes `source.url`. Lower-scoring candidates
+go in `source.alternative_candidates: [{url, score, role}]` for reference.
+
+### Honesty rule
+
+If no candidate URL passes the threshold (>= 0.5), set `source.url: null`,
+`confidence.url_extraction: 0.0`, and explain in `source.extraction_evidence.quote`
+why no candidate qualified. NEVER invent a URL.
+
+## Paper-reported metrics (mandatory for critic G10)
+
+Extract every numerical baseline metric reported in the paper's results
+section into `algorithm.paper_reported_metrics`:
+
+```yaml
+paper_reported_metrics:
+  - metric: "Brier score"
+    value: 0.18
+    dataset: "rescueRobot test split (450 obs)"
+    paper_location: "Table 3, row BMA"
+  - metric: "AUC-ROC"
+    value: 0.84
+    dataset: "rescueRobot test split"
+    paper_location: "Table 3, row BMA"
+```
+
+Rules:
+1. Only include metrics with both a numeric value AND a clear paper location
+   (table, figure, page).
+2. If the same metric appears with multiple values across configurations,
+   include each as a separate entry with the configuration noted in
+   `dataset` field.
+3. If you cannot find any baseline metrics in the paper, leave the list empty.
+   NEVER fabricate values.
+4. The downstream critic uses these as ground truth for G10 (baseline
+   reproduction fidelity). Inaccuracy here causes false pivots.
+
+## Hyperparameters extraction
+
+When the paper specifies hyperparameters (lr, batch_size, regularization,
+prior parameters, etc.), record them in
+`algorithm.hyperparameters_in_paper: {param_name: value}`. Use exactly the
+parameter name the paper uses (no renaming). If the package's source code
+also specifies hyperparameters, prefer the paper's stated values; record
+discrepancies in `algorithm.divergences`.
+
+## Confidence reporting (mandatory)
+
+Always emit:
+
+```yaml
+confidence:
+  overall: <weighted average>
+  components:
+    url_extraction: 0..1        # from URL Discovery section
+    package_acquired: 0 or 1    # 1 if clone successful, 0 otherwise
+    data_files_match_paper: 0..1  # 1 if data files in code match what paper describes
+    algorithm_alignment: 0..1   # alignment_score from your audit
+  gates_passed:
+    - url_high_confidence       # url_extraction >= 0.7
+    - data_present              # at least one data file resolved
+    - algorithm_aligned         # algorithm_alignment >= 0.7
+  blocking_warnings: []         # things that prevent downstream use
+  soft_warnings: []             # things downstream should be aware of
+```
+
+`overall = mean(components)`. Below 0.7 triggers fallback path in
+exp_designer/coder.
+
 ## Output
 
 Write `baseline_analysis.yaml` in the pipeline directory. The shape MUST

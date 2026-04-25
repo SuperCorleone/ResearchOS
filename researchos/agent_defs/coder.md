@@ -38,6 +38,70 @@ Write `code_patch.diff` to the pipeline directory. The diff must produce:
 - **Simple experiments** (<300 lines): single `run_experiment.py`.
 - **Complex experiments** (>300 lines): split into focused modules (`data_generator.py`, `base_learners.py`, `ensemble.py`, `evaluate.py`) with `run_experiment.py` as the thin entry point.
 
+## Baseline Implementation (mandatory three-case decision)
+
+Read `baseline_analysis.yaml` from the pipeline directory before writing any code.
+
+Determine which case applies:
+
+### Case A — confidence.overall >= 0.7 AND package.acquired == true AND
+            target language matches baseline language
+
+  你 MUST：
+  1. 直接 import 或文件级拷贝 `algorithm.code_locations[*].file` 中的源码到
+     `experiment_<id>/baseline/`（保持目录结构）。
+  2. 拷贝的每个文件首部加注释（必须包含字面量 `COPIED FROM:`）：
+     ```
+     # COPIED FROM: <repo_url>@<commit_sha> <relative_path>
+     ```
+  3. 实验脚本调用这份拷贝的 baseline，绝不重新实现 baseline 核心算法。
+  4. 提议方法（你的改进）单独写在 `experiment_<id>/proposed/` 下，与 baseline
+     物理隔离，方便 critic 做对照。
+  5. 禁止生成 "intentionally blocks until data is available" 之类的占位代码。
+     真实数据来源已在 `baseline_analysis.yaml::data.files`，调用 fetch_dataset
+     或直接从 `baseline_analysis.yaml::source.local_path` 读取。
+
+### Case B — confidence.overall >= 0.7 AND package.acquired == true BUT
+            语言不兼容（如 baseline=R, target=Python; baseline=Julia, target=Python）
+
+  允许重写 baseline，但 MUST：
+  1. 在 `experiment_<id>/baseline/REWRITE_RATIONALE.md` 写明：
+     - 原始包语言 + 目标语言
+     - 移植映射表：原包关键 API/函数 → 目标语言对应 API/函数
+       例：`R::stats::glm(family=binomial)` → `statsmodels.GLM(family=Binomial())`
+     - 已知差异点（默认参数、数值精度、库实现差异）
+     - 移植决策依据（为何选择 X 库而非 Y 库）
+  2. 在 `experiment_plan.yaml` 顶层加：
+     ```yaml
+     cross_language_porting:
+       baseline_language: R
+       target_language: Python
+       rewrite_rationale_doc: experiment_<id>/baseline/REWRITE_RATIONALE.md
+       critic_must_verify: true
+     ```
+  3. 仍 MUST 把原始源码物理拷贝到 `experiment_<id>/baseline_original/`
+     供 critic 对照，目录非空。
+
+### Case C — confidence.overall < 0.7 OR package.acquired == false
+
+  Fallback path：
+  1. 选用一个公开 benchmark 替代私有 reference。
+  2. 在 `experiment_plan.yaml::fallback_rationale` 字段写明选择理由。
+  3. baseline 从零实现，但必须以 paper 的算法描述为唯一规范。
+  4. 不得声称 "like-for-like comparison with the reference paper"；
+     在代码注释里写 `# Fallback baseline (paper package not available, conf=<X>)`。
+
+### Self-check before submitting code_patch.diff
+
+- [ ] 我已读 baseline_analysis.yaml
+- [ ] 我已确定 Case A / B / C 中的哪一个
+- [ ] Case A：experiment_<id>/baseline/ 下至少一个文件含 `COPIED FROM:`
+- [ ] Case B：REWRITE_RATIONALE.md 存在 + baseline_original/ 非空 +
+       experiment_plan.yaml.cross_language_porting 已填
+- [ ] Case C：experiment_plan.yaml.fallback_rationale 已填
+
+code_preflight 会静态校验上述，不达标会 BLOCK。
+
 ## Code Reuse Protocol
 
 Before writing new code, read `code_recon.yaml`. Reuse functions by:

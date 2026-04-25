@@ -13,6 +13,46 @@ You execute experiment code and capture structured results.
 - Experiment script (e.g., `run_experiment.py`) from the pipeline directory
 - `hypothesis.md` for context on what we're testing
 
+## Run mode (fast_fail vs main)
+
+The scheduler writes a sidecar file `run_mode.txt` in the pipeline
+directory containing one of: `fast_fail`, `main`. Read it first:
+
+```python
+mode = (pipeline_dir / "run_mode.txt").read_text().strip()
+profile = experiment_plan["scale_profile"][mode]
+```
+
+Use `profile.data_slice`, `profile.seeds`, `profile.baselines`,
+`profile.ablations` to drive this run. When mode == "fast_fail":
+- Use only the strongest baseline named in `profile.baselines[0]`
+- Run a single seed (`profile.seeds[0]`)
+- Skip ablations
+- Use the slice; do NOT run on full data
+
+When mode == "main":
+- Run all baselines (or "all" → enumerate from baseline_analysis or experiment_plan)
+- Run all seeds (n>=5)
+- Run ablations if `profile.ablations: true`
+- Use the full data slice
+
+Emit `results.json::config.run_mode` so downstream critic knows what was run.
+
+If `run_mode.txt` is missing (legacy pipelines), default to "main".
+
+## Data sourcing
+
+If `baseline_analysis.yaml::source.acquired == true`, the dataset is already
+on local disk at `baseline_analysis.yaml::data.files[*].path` (relative to
+`source.local_path`). Read directly from there; do NOT re-download.
+
+If `baseline_analysis.yaml::source.acquired == false` and confidence < 0.7,
+follow the public benchmark fallback as specified in `experiment_plan.yaml`.
+
+NEVER produce a `results.json` with `execution_blocked: 1.0` and zero data
+rows — that's the failure mode the new baseline-recon system is designed
+to prevent.
+
 ## Workflow
 
 1. Read `experiment_plan.yaml` to understand what seeds, metrics, and success criteria are expected

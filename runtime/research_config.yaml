@@ -117,3 +117,36 @@ innovation:
   cross_domain_bonus: 1
   cross_method_bonus: 1
   extension_bonus: 1
+
+# ---------------------------------------------------------------------------
+# Baseline reconnaissance gating
+# ---------------------------------------------------------------------------
+# When `baseline_analysis.yaml::confidence.overall >= confidence_threshold`,
+# downstream agents (exp_designer, coder) MUST use the recovered baseline
+# package. Below threshold, they fall back to a public benchmark.
+
+baseline_recon:
+  confidence_threshold: 0.7
+
+# ---------------------------------------------------------------------------
+# Critic G10 — baseline reproduction fidelity thresholds
+# ---------------------------------------------------------------------------
+# Relative error |actual − paper| / |paper| triggers escalating verdicts:
+#   <= soft  → REPRODUCED (no action)
+#   (soft, hard]  → SOFT_FLAG (auto-trigger baseline_diagnose)
+#   (hard, kill]  → HARD_FLAG (professor must write pivot_request.md)
+#   > kill   → KILL_FLAG (professor kills pipeline)
+#
+# Cross-language ports get relaxed thresholds since reimplementations can
+# have legitimate small numerical differences.
+
+critic:
+  baseline_divergence_thresholds:
+    same_language:
+      soft: 0.05
+      hard: 0.15
+      kill: 0.50
+    cross_language:
+      soft: 0.10
+      hard: 0.25
+      kill: 0.60

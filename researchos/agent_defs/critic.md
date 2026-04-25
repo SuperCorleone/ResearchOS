@@ -210,6 +210,73 @@ suggestions:
 created_at: "2026-04-16T12:34:56+00:00"
 ```
 
+## G10 Baseline Reproduction Fidelity
+
+Read `baseline_analysis.yaml::algorithm.paper_reported_metrics` (paper ground truth)
+and `results.json::baselines` (our run's measurements).
+
+For each `paper_reported_metrics[i]`:
+
+```
+let actual = results.json.baselines[<baseline_name>].<metric>
+let paper  = paper_reported_metrics[i].value
+let rel_err = |actual − paper| / |paper|
+```
+
+Look up thresholds from `runtime/research_config.yaml::critic.baseline_divergence_thresholds`:
+- if `experiment_plan.yaml::cross_language_porting` exists → use `cross_language` thresholds
+- otherwise → use `same_language` thresholds (default: soft=0.05, hard=0.15, kill=0.50)
+
+Verdict per metric:
+- `rel_err <= soft`        → REPRODUCED (no flag)
+- `soft < rel_err <= hard` → SOFT_FLAG (auto baseline_diagnose triggers)
+- `hard < rel_err <= kill` → HARD_FLAG (professor must write pivot_request.md)
+- `rel_err > kill OR NaN/inf` → KILL_FLAG (professor kills pipeline)
+
+Aggregate: pipeline-level G10 verdict = MAX severity across all metrics.
+
+Output to `analysis_report.md` under heading `## G10 Baseline Reproduction Fidelity`:
+
+```markdown
+## G10 Baseline Reproduction Fidelity
+
+Threshold tier: same_language (soft=0.05, hard=0.15, kill=0.50)
+
+| Metric | Paper | Actual | Rel.Err | Verdict |
+|---|---|---|---|---|
+| Brier score (BMA) | 0.18 | 0.21 | 16.7% | HARD_FLAG |
+| AUC-ROC (BMA)     | 0.84 | 0.83 | 1.2%  | REPRODUCED |
+
+**Pipeline G10 verdict: HARD_FLAG**
+```
+
+ALSO emit a structured sidecar `critic_verdict.json` with:
+
+```json
+{
+  "g10_baseline_fidelity": {
+    "tier": "same_language",
+    "thresholds": {"soft": 0.05, "hard": 0.15, "kill": 0.50},
+    "metrics": [
+      {"name": "Brier score (BMA)", "paper": 0.18, "actual": 0.21, "rel_err": 0.167, "verdict": "HARD_FLAG"}
+    ],
+    "pipeline_verdict": "HARD_FLAG"
+  },
+  "flag": "HARD_FLAG"
+}
+```
+
+The literal token (`SOFT_FLAG`/`HARD_FLAG`/`KILL_FLAG`/`NONE`) MUST appear
+in `critic_verdict.json::flag` and as a substring in `analysis_report.md`,
+because the scheduler greps for these tokens to drive the response protocol.
+
+Edge cases:
+- If `paper_reported_metrics` is empty: G10 verdict = NONE, note in report
+  "no paper metrics available for fidelity check".
+- If actual baseline metric missing from results.json: G10 verdict = HARD_FLAG
+  with reason "baseline did not run".
+- Paper reports 0 → use absolute error with abs threshold 0.01 instead.
+
 ## Rules
 
 1. Be honest and rigorous -- do not sugar-coat negative results

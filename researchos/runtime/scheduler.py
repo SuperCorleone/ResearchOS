@@ -134,6 +134,12 @@ except ImportError:  # pragma: no cover — optional Wave 2 dep
     _reverify_results = None  # type: ignore[assignment]
     logger.warning("reverify module not available; RESULTS_REVERIFY will be a no-op")
 
+try:  # baseline divergence triage (Change 4C / 4D)
+    from researchos.runtime.baseline_diagnose import diagnose as _baseline_diagnose_fn  # noqa: F401
+except ImportError:  # pragma: no cover
+    _baseline_diagnose_fn = None  # type: ignore[assignment]
+    logger.info("baseline_diagnose module not available; BASELINE_DIAGNOSE will be a no-op")
+
 try:  # code-reference reconnaissance
     from researchos.runtime.code_recon import run_code_recon as _run_code_recon_fn  # noqa: F401
 except ImportError:  # pragma: no cover
@@ -355,6 +361,21 @@ class ResearchScheduler:
         schedule_tasks = []
 
         for pipeline in pipelines:
+            # ── Change 4D: check for human pivot response ────────────────
+            # If the pipeline is BLOCKED and waiting for a human pivot
+            # decision, poll for a pivot_response file and act on it.
+            if (
+                pipeline.stage == PipelineStage.BLOCKED
+                and pipeline.step == PipelineStep.AWAITING_HUMAN_PIVOT
+            ):
+                try:
+                    self._check_pivot_response(pipeline)
+                except Exception:
+                    logger.exception(
+                        "Pivot response check failed for %s", pipeline.pipeline_id
+                    )
+                continue  # stay blocked until response processed
+
             if pipeline.stage in (
                 PipelineStage.COMPLETED,
                 PipelineStage.FAILED,
@@ -1305,6 +1326,44 @@ class ResearchScheduler:
                 self.state.save_pipeline(pipeline)
                 return
 
+        # ── Change 4B: inject baseline confidence brief before DESIGN ───────
+        # Written as a sidecar file (design_baseline_brief.txt) so the
+        # exp_designer agent knows whether to use the verified baseline data
+        # files or fall back to a public benchmark.
+        if next_step == PipelineStep.DESIGN:
+            self._write_design_baseline_brief(pipeline)
+
+        # ── Change 4A: inject run_mode before RUN ────────────────────────────
+        # The experiment_runner agent reads artifacts/pipeline_<id>/run_mode.txt
+        # to decide whether to run a fast-fail variant or the full MAIN run.
+        # We write a sidecar file rather than passing through the dispatcher's
+        # prompt so the approach works regardless of backend (OpenHarness /
+        # Anthropic / simulate).
+        if next_step == PipelineStep.RUN:
+            try:
+                run_mode = self.workflow.get_run_mode_for_milestone(
+                    pipeline.milestone_count,
+                    skip_fast_fail=self._read_skip_fast_fail(pipeline),
+                )
+            except Exception:
+                run_mode = "main"  # safe default
+            pipeline.metadata["run_mode"] = run_mode
+            self.state.save_pipeline(pipeline)
+            # Write sidecar file for experiment_runner agent
+            pdir_run = (
+                self.project_root
+                / "artifacts"
+                / f"pipeline_{pipeline.pipeline_id}"
+            )
+            pdir_run.mkdir(parents=True, exist_ok=True)
+            try:
+                (pdir_run / "run_mode.txt").write_text(run_mode)
+            except Exception:
+                logger.warning(
+                    "Could not write run_mode.txt for pipeline %s",
+                    pipeline.pipeline_id,
+                )
+
         # Pre-flight: if RUN step and data.source is file/api, check data exists
         if next_step == PipelineStep.RUN:
             from researchos.runtime.hooks import validate_data_source_compliance
@@ -1376,6 +1435,20 @@ class ResearchScheduler:
                     self._journal_record_critic(pipeline)
                 except Exception:
                     logger.exception("Journal record failed (non-fatal)")
+
+                # ── Change 4C: route on critic flag ──────────────────────
+                # After CRITIC completes, inspect the verdict and diverge:
+                #   SOFT_FLAG  → dispatch BASELINE_DIAGNOSE (pure Python),
+                #                then either fixer+re-run or escalate to L2.
+                #   HARD_FLAG  → AWAITING_HUMAN_PIVOT (Change 4D).
+                #   KILL_FLAG  → write failure wiki + kill pipeline.
+                #   NONE       → normal flow continues (REPORT on next tick).
+                try:
+                    await self._handle_post_critic_routing(pipeline)
+                except Exception:
+                    logger.exception(
+                        "Post-CRITIC routing failed (non-fatal); pipeline continues normally"
+                    )
         else:
             pipeline.retry_count += 1
             error_msg = f"Failed to dispatch step {next_step.value}"
@@ -1394,6 +1467,108 @@ class ResearchScheduler:
                     pipeline.pipeline_id,
                 )
             self.state.save_pipeline(pipeline)
+
+    # ── Change 4C: post-CRITIC routing ───────────────────────────────────────
+
+    async def _handle_post_critic_routing(self, pipeline: "PipelineState") -> None:
+        """Route pipeline after CRITIC based on the critic's flag.
+
+        SOFT_FLAG  → run BASELINE_DIAGNOSE (pure Python); if auto_fixable and
+                     fixer_directives non-empty, dispatch fixer agent and reset
+                     to RUN.  If escalate_to_l2, treat as HARD_FLAG.
+        HARD_FLAG  → transition to AWAITING_HUMAN_PIVOT (Change 4D).
+        KILL_FLAG  → write failure wiki entry, then kill the pipeline.
+        NONE/other → no-op; pipeline continues normally to REPORT on next tick.
+        """
+        verdict = self._read_critic_verdict(pipeline)
+        flag = verdict.get("flag", "NONE")
+
+        if flag == "NONE":
+            return  # normal flow
+
+        pid = pipeline.pipeline_id
+        pdir = self.project_root / "artifacts" / f"pipeline_{pid}"
+
+        if flag == "SOFT_FLAG":
+            self.state.append_log(
+                f"Critic SOFT_FLAG detected — running BASELINE_DIAGNOSE for {pid}", pid
+            )
+            pipeline.step = PipelineStep.BASELINE_DIAGNOSE
+            self.state.save_pipeline(pipeline)
+
+            diag = self._run_baseline_diagnose_step(pipeline)
+            diag_verdict = diag.get("verdict", "escalate_to_l2")
+            fixer_directives = diag.get("fixer_directives") or []
+
+            if diag_verdict == "auto_fixable" and fixer_directives:
+                # Dispatch fixer agent, then reset pipeline to re-run from RUN
+                directives_text = "\n".join(f"- {d}" for d in fixer_directives)
+                fixer_prompt = (
+                    f"Pipeline: {pid}\n"
+                    f"Baseline divergence detected. Apply the following fix directives "
+                    f"to the experiment code/data configuration, then confirm.\n\n"
+                    f"## Directives\n{directives_text}\n\n"
+                    f"Read experiment_plan.yaml and code_patch.diff, apply the "
+                    f"minimal changes needed, and re-write them. Do NOT re-run the "
+                    f"experiment — the scheduler will dispatch RUN again.\n"
+                )
+                try:
+                    result = await self.dispatcher.dispatch_via_executor(
+                        "experiment_fixer", fixer_prompt, pid
+                    )
+                    if result.get("success"):
+                        self.state.append_log(
+                            f"Fixer applied directives for {pid}; resetting to RUN", pid
+                        )
+                    else:
+                        self.state.append_log(
+                            f"Fixer failed for {pid}: "
+                            f"{(result.get('output') or '')[:200]}",
+                            pid,
+                        )
+                except Exception:
+                    logger.exception("Fixer dispatch failed for pipeline %s", pid)
+
+                # Reset pipeline: delete stale RUN and CRITIC artifacts so they re-run
+                for stale in ("results.json", "analysis_report.md",
+                              "critic_verdict.json", "reverify_report.json",
+                              "baseline_diagnose.json"):
+                    p = pdir / stale
+                    if p.exists():
+                        p.unlink()
+                pipeline.step = PipelineStep.CODE_PREFLIGHT  # re-enters at CODE_PREFLIGHT→RUN
+                pipeline.last_error = None
+                self.state.save_pipeline(pipeline)
+                self.state.append_log(
+                    f"Pipeline {pid} reset to CODE_PREFLIGHT after fixer", pid
+                )
+
+            elif diag_verdict == "escalate_to_l2" or (
+                diag_verdict == "auto_fixable" and not fixer_directives
+            ):
+                # Escalate: treat as HARD_FLAG
+                self.state.append_log(
+                    f"baseline_diagnose escalated to L2 for {pid} — triggering pivot",
+                    pid,
+                )
+                await self._trigger_awaiting_human_pivot(pipeline)
+
+        elif flag == "HARD_FLAG":
+            self.state.append_log(
+                f"Critic HARD_FLAG detected — triggering pivot for {pid}", pid
+            )
+            await self._trigger_awaiting_human_pivot(pipeline)
+
+        elif flag == "KILL_FLAG":
+            self.state.append_log(
+                f"Critic KILL_FLAG detected — killing pipeline {pid}", pid
+            )
+            self._write_kill_flag_wiki(pipeline)
+            self._write_default_decision(
+                pid, "kill",
+                comment="[AUTO-KILL] Critic emitted KILL_FLAG (L3): "
+                        "baseline reproduction irrecoverable.",
+            )
 
     # ── Wave 2 specialised step handlers ─────────────────────────
 
@@ -2086,6 +2261,433 @@ class ResearchScheduler:
             )
         return True
 
+    # ── Change 4A helper ─────────────────────────────────────────────────────
+    # Reads experiment_plan.yaml to determine whether the fast-fail prefix
+    # should be skipped.  Called just before the RUN step is dispatched so the
+    # run_mode sidecar file is always fresh.
+
+    def _read_skip_fast_fail(self, pipeline: "PipelineState") -> bool:
+        """Return True when experiment_plan.yaml sets skip_fast_fail: true."""
+        plan_path = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+            / "experiment_plan.yaml"
+        )
+        if not plan_path.exists():
+            return False
+        try:
+            import yaml as _yaml
+            plan = _yaml.safe_load(plan_path.read_text()) or {}
+            return bool(plan.get("skip_fast_fail", False))
+        except Exception:
+            return False
+
+    # ── Change 4B helpers ────────────────────────────────────────────────────
+    # Read baseline_analysis.yaml before the DESIGN step and write a sidecar
+    # design_baseline_brief.txt so the exp_designer agent knows whether the
+    # baseline confidence is high enough to use the analysed data files
+    # directly or whether it must fall back to a public benchmark.
+
+    def _baseline_confidence_threshold(self) -> float:
+        """Read baseline_recon.confidence_threshold from research_config.yaml."""
+        cfg_path = self.project_root / "runtime" / "research_config.yaml"
+        if not cfg_path.exists():
+            return 0.7
+        try:
+            import yaml as _yaml
+            cfg = _yaml.safe_load(cfg_path.read_text()) or {}
+            return float(cfg.get("baseline_recon", {}).get("confidence_threshold", 0.7))
+        except Exception:
+            return 0.7
+
+    def _write_design_baseline_brief(self, pipeline: "PipelineState") -> None:
+        """Write design_baseline_brief.txt sidecar before the DESIGN step.
+
+        The exp_designer agent reads this file to decide whether to use the
+        verified baseline data files (high-confidence path) or fall back to
+        a public benchmark (low-confidence path).
+
+        Called immediately before the DESIGN step is dispatched so the file
+        is always present when the agent starts.
+        """
+        pdir = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+        )
+        ba_path = pdir / "baseline_analysis.yaml"
+        if not ba_path.exists():
+            return
+        try:
+            import yaml as _yaml
+            ba = _yaml.safe_load(ba_path.read_text()) or {}
+        except Exception:
+            return
+        threshold = self._baseline_confidence_threshold()
+        overall = float(
+            (ba.get("confidence") or {}).get("overall", 0.0) or 0.0
+        )
+        if overall >= threshold:
+            msg = (
+                f"Baseline analysis confidence: {overall:.2f} (>= {threshold} threshold)\n"
+                "→ You MUST use baseline_analysis.yaml.data.files / algorithm.code_locations.\n"
+                "→ Do NOT write 'TBD' for dataset path; populate from baseline_analysis.\n"
+            )
+        else:
+            msg = (
+                f"Baseline analysis confidence: {overall:.2f} (< {threshold} threshold)\n"
+                "→ baseline package unverified. Use the public benchmark fallback path.\n"
+                "→ Document the fallback choice in experiment_plan.yaml.fallback_rationale.\n"
+            )
+        try:
+            (pdir / "design_baseline_brief.txt").write_text(msg)
+        except Exception:
+            logger.warning(
+                "Could not write design_baseline_brief.txt for pipeline %s",
+                pipeline.pipeline_id,
+            )
+
+    # ── Change 4C helpers ────────────────────────────────────────────────────
+    # After CRITIC/JUDGE completes, inspect the critic verdict and route:
+    #   SOFT_FLAG  → BASELINE_DIAGNOSE (Python)
+    #   HARD_FLAG  → AWAITING_HUMAN_PIVOT (Change 4D)
+    #   KILL_FLAG  → write failure wiki entry, kill pipeline
+    #   NONE       → normal flow (REPORT)
+
+    def _read_critic_verdict(self, pipeline: "PipelineState") -> dict:
+        """Return {'flag': 'NONE'|'SOFT_FLAG'|'HARD_FLAG'|'KILL_FLAG', ...}.
+
+        Tries critic_verdict.json first, then falls back to scanning
+        analysis_report.md or judge_report.md for the literal flag tokens.
+        """
+        pdir = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+        )
+        json_path = pdir / "critic_verdict.json"
+        if json_path.exists():
+            try:
+                import json as _json
+                return _json.loads(json_path.read_text())
+            except Exception:
+                pass
+        # Fallback: scan reports for literal flag tokens
+        for fname in ("analysis_report.md", "judge_report.md"):
+            path = pdir / fname
+            if not path.exists():
+                continue
+            try:
+                text = path.read_text(errors="ignore")
+            except Exception:
+                continue
+            for token in ("KILL_FLAG", "HARD_FLAG", "SOFT_FLAG"):
+                if token in text:
+                    return {"flag": token}
+        return {"flag": "NONE"}
+
+    def _run_baseline_diagnose_step(self, pipeline: "PipelineState") -> dict:
+        """Run baseline_diagnose.diagnose() and return the verdict dict.
+
+        Writes baseline_diagnose.json to the pipeline directory.
+        Falls back to a stub dict when the module is unavailable.
+        """
+        pdir = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+        )
+        if _baseline_diagnose_fn is None:
+            # Module not yet landed; write stub and return escalate so the
+            # scheduler doesn't loop on an unresolvable soft flag.
+            import json as _json
+            stub = {
+                "verdict": "escalate_to_l2",
+                "fixer_directives": [],
+                "note": "baseline_diagnose module unavailable",
+            }
+            try:
+                (pdir / "baseline_diagnose.json").write_text(
+                    _json.dumps(stub, indent=2)
+                )
+            except Exception:
+                pass
+            return stub
+        try:
+            return _baseline_diagnose_fn(pdir) or {}
+        except Exception:
+            logger.exception(
+                "baseline_diagnose.diagnose() crashed for pipeline %s",
+                pipeline.pipeline_id,
+            )
+            return {"verdict": "escalate_to_l2", "fixer_directives": []}
+
+    def _write_kill_flag_wiki(self, pipeline: "PipelineState") -> None:
+        """Write a failure wiki entry when critic emits KILL_FLAG."""
+        from datetime import datetime, timezone
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        wiki_dir = self.project_root / "wiki" / "failures"
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        out = wiki_dir / f"baseline_reproduction_{pipeline.pipeline_id}_{ts}.md"
+        pdir = (
+            self.project_root
+            / "artifacts"
+            / f"pipeline_{pipeline.pipeline_id}"
+        )
+        # Best-effort content assembly
+        lines = [
+            f"# Baseline Reproduction Failure — {pipeline.pipeline_id}",
+            "",
+            f"- **Pipeline**: {pipeline.pipeline_id}",
+            f"- **Title**: {pipeline.title}",
+            f"- **Milestone**: M{pipeline.milestone_count}",
+            f"- **Timestamp**: {datetime.now(timezone.utc).isoformat()}",
+            "",
+            "## Critic Verdict",
+            "KILL_FLAG",
+            "",
+        ]
+        # Include a snippet from analysis_report.md if present
+        report = pdir / "analysis_report.md"
+        if report.exists():
+            try:
+                snippet = report.read_text(errors="ignore")[:2000]
+                lines += ["## Analysis Report (excerpt)", "```", snippet, "```", ""]
+            except Exception:
+                pass
+        # Include baseline_diagnose.json if present
+        diag = pdir / "baseline_diagnose.json"
+        if diag.exists():
+            try:
+                lines += [
+                    "## Baseline Diagnose",
+                    "```json",
+                    diag.read_text(errors="ignore")[:1000],
+                    "```",
+                    "",
+                ]
+            except Exception:
+                pass
+        try:
+            out.write_text("\n".join(lines))
+            self.state.append_log(
+                f"KILL_FLAG: failure wiki written to {out.relative_to(self.project_root)}",
+                pipeline.pipeline_id,
+            )
+        except Exception:
+            logger.warning("Could not write KILL_FLAG wiki for %s", pipeline.pipeline_id)
+
+    # ── Change 4D: HARD_FLAG → AWAITING_HUMAN_PIVOT ─────────────────────────
+    # Block the pipeline and dispatch the professor to draft a pivot request.
+    # The tick() loop watches for decisions/pivot_response_<pid>_*.yaml and
+    # resumes or kills the pipeline when one appears.
+
+    async def _trigger_awaiting_human_pivot(
+        self, pipeline: "PipelineState"
+    ) -> None:
+        """Transition pipeline to BLOCKED/AWAITING_HUMAN_PIVOT and draft pivot request.
+
+        Called when critic emits HARD_FLAG or when baseline_diagnose escalates
+        (escalate_to_l2 verdict).  The professor agent writes
+        decisions/pivot_request_<pid>_<ts>.md with three options; a human then
+        writes decisions/pivot_response_<pid>_<ts>.yaml to resume.
+        """
+        from datetime import datetime, timezone
+
+        pid = pipeline.pipeline_id
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        pdir = self.project_root / "artifacts" / f"pipeline_{pid}"
+
+        # Transition pipeline state
+        pipeline.stage = PipelineStage.BLOCKED
+        pipeline.step = PipelineStep.AWAITING_HUMAN_PIVOT
+        self.state.save_pipeline(pipeline)
+        self.state.append_log(
+            f"Pipeline {pid} BLOCKED awaiting_human_pivot at M{pipeline.milestone_count}",
+            pid,
+        )
+
+        # Gather context for the professor
+        baseline_confidence = "unknown"
+        ba_path = pdir / "baseline_analysis.yaml"
+        if ba_path.exists():
+            try:
+                import yaml as _yaml
+                ba = _yaml.safe_load(ba_path.read_text()) or {}
+                baseline_confidence = str(
+                    (ba.get("confidence") or {}).get("overall", "unknown")
+                )
+            except Exception:
+                pass
+
+        g10_divergences = "(see analysis_report.md)"
+        report_path = pdir / "analysis_report.md"
+        if report_path.exists():
+            try:
+                text = report_path.read_text(errors="ignore")
+                # Extract a small snippet around G10 or baseline fidelity
+                for marker in ("g10_baseline_fidelity", "G10", "baseline fidelity"):
+                    idx = text.lower().find(marker.lower())
+                    if idx >= 0:
+                        g10_divergences = text[max(0, idx - 50): idx + 500].strip()
+                        break
+            except Exception:
+                pass
+
+        diag_summary = "(baseline_diagnose.json not present)"
+        diag_path = pdir / "baseline_diagnose.json"
+        if diag_path.exists():
+            try:
+                diag_summary = diag_path.read_text(errors="ignore")[:600]
+            except Exception:
+                pass
+
+        pivot_prompt = (
+            f"Mode: pivot_request_draft. "
+            f"Write decisions/pivot_request_{pid}_{ts}.md following Pivot Protocol "
+            f"from your agent definition.\n\n"
+            f"## Pipeline\n"
+            f"- Pipeline ID: {pid}\n"
+            f"- Title: {pipeline.title}\n"
+            f"- Milestone: M{pipeline.milestone_count}\n"
+            f"- Baseline confidence: {baseline_confidence}\n\n"
+            f"## G10 Divergences\n{g10_divergences}\n\n"
+            f"## Baseline Diagnose Summary\n{diag_summary}\n\n"
+            f"## Required sections in pivot_request_{pid}_{ts}.md\n"
+            f"1. Baseline confidence and G10 divergences list\n"
+            f"2. Baseline_diagnose findings\n"
+            f"3. Three suggested directions:\n"
+            f"   a) fix data/hyperparams + retry\n"
+            f"   b) public benchmark fallback\n"
+            f"   c) terminate + knowledge sediment\n"
+            f"4. Your recommendation (one of the above)\n\n"
+            f"Human will respond via decisions/pivot_response_{pid}_<ts>.yaml\n"
+            f"with fields: decision (kill|pivot|continue_with_known_divergence), "
+            f"direction, comment.\n"
+        )
+        try:
+            result = await self.dispatcher.dispatch_via_executor(
+                "professor", pivot_prompt, pid
+            )
+            if result.get("success"):
+                self.state.append_log(
+                    f"Professor pivot_request drafted for {pid}", pid
+                )
+            else:
+                self.state.append_log(
+                    f"Professor pivot_request draft failed for {pid}: "
+                    f"{(result.get('output') or '')[:200]}",
+                    pid,
+                )
+        except Exception:
+            logger.exception("Professor pivot_request dispatch failed for %s", pid)
+
+    def _check_pivot_response(self, pipeline: "PipelineState") -> None:
+        """Check for a human pivot_response file and act on it.
+
+        Called from tick() for each pipeline in BLOCKED / AWAITING_HUMAN_PIVOT.
+        Reads the newest decisions/pivot_response_<pid>_*.yaml and applies:
+          - decision == 'kill'                         → kill pipeline
+          - decision == 'pivot'                        → restart from DESIGN in MAIN
+          - decision == 'continue_with_known_divergence' → write approve decision
+        Moves the pivot_request file to .processed.md to avoid double-processing.
+        """
+        from datetime import datetime, timezone
+
+        pid = pipeline.pipeline_id
+        decisions_dir = self.project_root / "decisions"
+        pattern = f"pivot_response_{pid}_*.yaml"
+        responses = sorted(decisions_dir.glob(pattern), key=lambda p: p.name)
+        if not responses:
+            return  # No response yet — leave pipeline blocked
+
+        response_path = responses[-1]  # Newest
+        try:
+            import yaml as _yaml
+            response = _yaml.safe_load(response_path.read_text()) or {}
+        except Exception:
+            logger.warning("Could not parse pivot_response: %s", response_path)
+            return
+
+        decision = response.get("decision", "")
+        direction = response.get("direction", "")
+        comment = response.get("comment", "")
+
+        if decision == "kill":
+            self._write_kill_flag_wiki(pipeline)
+            self._write_default_decision(
+                pid, "kill",
+                comment=f"[PIVOT_RESPONSE kill] {comment}",
+            )
+            self.state.append_log(
+                f"Pivot response: KILL for pipeline {pid}", pid
+            )
+
+        elif decision == "pivot":
+            # Restart from DESIGN in MAIN; cache prefix steps reused naturally
+            # via the idempotency check (STEP_ARTIFACT already exists for
+            # steps before DESIGN).
+            pdir = self.project_root / "artifacts" / f"pipeline_{pid}"
+            for stale in (
+                "experiment_plan.yaml",
+                "code_patch.diff",
+                "preflight_report.json",
+                "results.json",
+                "analysis_report.md",
+                "reverify_report.json",
+                "judge_verdict.json",
+                "critic_verdict.json",
+                "baseline_diagnose.json",
+            ):
+                stale_path = pdir / stale
+                if stale_path.exists():
+                    stale_path.unlink()
+            pipeline.stage = PipelineStage.MAIN
+            pipeline.step = PipelineStep.HYPOTHESIS  # advances to DESIGN next tick
+            pipeline.last_error = None
+            pipeline.retry_count = 0
+            pipeline.metadata["pivot_direction"] = direction
+            pipeline.metadata["pivot_comment"] = comment
+            self.state.save_pipeline(pipeline)
+            self.state.append_log(
+                f"Pivot response: PIVOT → restarting from DESIGN for {pid} "
+                f"(direction={direction})",
+                pid,
+            )
+
+        elif decision == "continue_with_known_divergence":
+            self._write_default_decision(
+                pid, "approve",
+                comment=f"[PIVOT_RESPONSE continue_with_known_divergence] {comment}",
+            )
+            self.state.append_log(
+                f"Pivot response: CONTINUE with known divergence for {pid}", pid
+            )
+
+        else:
+            logger.warning(
+                "Unknown pivot_response decision %r for pipeline %s; ignoring",
+                decision, pid,
+            )
+            return
+
+        # Archive the pivot_request file so it isn't reprocessed
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        for req in decisions_dir.glob(f"pivot_request_{pid}_*.md"):
+            try:
+                req.rename(req.with_suffix(f".processed_{ts}.md"))
+            except Exception:
+                logger.debug("Could not rename pivot_request: %s", req)
+        # Archive the response itself
+        try:
+            response_path.rename(
+                response_path.with_suffix(f".processed_{ts}.yaml")
+            )
+        except Exception:
+            pass
+
     def _maybe_save_findings(self, pipeline: PipelineState) -> None:
         """Persist a FindingCard when critic verdict is fully_correct.
 
@@ -2770,6 +3372,25 @@ class ResearchScheduler:
                 f"Auto-advanced to paper after {pipeline.milestone_count} milestones",
                 pid,
             )
+            return
+
+        # ── Change 4E: auto-professor safety for L2 (HARD_FLAG) ─────────────
+        # In auto mode, if the latest critic report shows HARD_FLAG, the
+        # professor must NOT auto-decide — route to AWAITING_HUMAN_PIVOT
+        # instead.  KILL_FLAG (L3) is still allowed in auto mode (the
+        # post-critic routing already handles it via _handle_post_critic_routing,
+        # but we guard here too in case the professor is dispatched after JUDGE
+        # without the CRITIC routing path running first).
+        critic_verdict = self._read_critic_verdict(pipeline)
+        if critic_verdict.get("flag") == "HARD_FLAG":
+            logger.info(
+                "Auto-professor: HARD_FLAG detected for %s — routing to AWAITING_HUMAN_PIVOT",
+                pid,
+            )
+            self.state.append_log(
+                f"Auto-professor: HARD_FLAG → AWAITING_HUMAN_PIVOT for {pid}", pid
+            )
+            await self._trigger_awaiting_human_pivot(pipeline)
             return
 
         prompt = self.dispatcher._build_professor_prompt(pid, context_files)

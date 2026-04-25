@@ -9,6 +9,7 @@ defaults that match the original hardcoded scheduler/dispatcher behaviour.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -235,7 +236,9 @@ class WorkflowConfig:
             )
             for name, cfg in _DEFAULT_STAGES.items()
         }
-        return cls(steps=steps, stages=stages)
+        instance = cls(steps=steps, stages=stages)
+        instance._raw = {}
+        return instance
 
     @classmethod
     def _from_raw(cls, raw: dict[str, Any]) -> WorkflowConfig:
@@ -263,7 +266,66 @@ class WorkflowConfig:
                 dynamic_routing=cfg.get("dynamic_routing", {}),
             )
 
-        return cls(steps=steps, stages=stages)
+        instance = cls(steps=steps, stages=stages)
+        instance._raw = raw
+        return instance
+
+    # ------------------------------------------------------------------
+    # Baseline recon config
+    # ------------------------------------------------------------------
+
+    def get_baseline_recon_config(self) -> dict:
+        """Return the baseline_recon: block from workflow_config.yaml.
+
+        Falls back to documented defaults when the block is absent so old
+        workflow files continue to work. Env-var overrides supported via
+        the same ${VAR:-default} substitution used for model_tiers.
+        """
+        raw = getattr(self, "_raw", {}) or {}
+        block = raw.get("baseline_recon", {}) or {}
+
+        def _resolve_env(value, env_var: str, default):
+            # Mirror the existing ${VAR:-default} parsing if present in the codebase.
+            # Fallback: if value is a string starting with '${', try env lookup.
+            if isinstance(value, str) and value.startswith("${"):
+                # naive parse: ${VAR:-default}
+                inner = value[2:-1]
+                if ":-" in inner:
+                    var, dflt = inner.split(":-", 1)
+                    return os.environ.get(var, dflt)
+                return os.environ.get(inner, default)
+            return value
+
+        return {
+            "max_size_mb": int(_resolve_env(
+                block.get("max_size_mb", 500), "RESEARCHOS_RECON_MAX_MB", 500)),
+            "max_files": int(_resolve_env(
+                block.get("max_files", 5000), "RESEARCHOS_RECON_MAX_FILES", 5000)),
+            "allowed_hosts": tuple(block.get("allowed_hosts", (
+                "github.com", "gitlab.com", "bitbucket.org",
+                "zenodo.org", "osf.io", "figshare.com",
+                "huggingface.co", "codeocean.com", "doi.org",
+            ))),
+            "prune_extensions": tuple(block.get("prune_extensions", (
+                ".pth", ".pt", ".bin", ".safetensors", ".ckpt", ".h5", ".onnx",
+                ".tar", ".tar.gz", ".tgz", ".zip", ".7z", ".rar",
+                ".mp4", ".mov", ".avi", ".mkv",
+                ".iso", ".dmg",
+                ".parquet", ".arrow", ".feather",
+            ))),
+        }
+
+    def get_run_mode_for_milestone(
+        self, milestone_count: int, *, skip_fast_fail: bool = False
+    ) -> str:
+        """Return 'fast_fail' or 'main' for the upcoming run() of the given milestone.
+
+        M1 (milestone_count==0 entering) is fast_fail by default; M2+ is main.
+        When experiment_plan.yaml sets skip_fast_fail=true, M1 also runs as main.
+        """
+        if skip_fast_fail:
+            return "main"
+        return "fast_fail" if milestone_count == 0 else "main"
 
     # ------------------------------------------------------------------
     # Step accessors

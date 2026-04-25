@@ -39,20 +39,52 @@
                      ↓
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Pipeline 状态机（2026-04 简化）                                       │
-│  PROPOSAL → BASELINE_CONFIRM → FAST_FAIL → [AUTO-GATE] → MAIN        │
-│            → MILESTONE → PAPER → COMPLETED                           │
 │                                                                       │
-│  MAIN 阶段（v5.3 update）：                                            │
-│    PAPER_SPEC → PROPOSAL_SPEC → ALIGNMENT → ALIGNMENT_VALIDATOR       │
-│      → HYPOTHESIS → DESIGN → CODE_RECON → BASELINE_ANALYZE            │
-│      → DATA_RECON → CONCEPT_PAPER → CONCEPT_CODE                      │
-│      → CODE → CODE_PREFLIGHT → RUN → ...                              │
+│  PROPOSAL ──批准──→ 共享前缀（每个 pipeline 生命周期跑一次，缓存复用）   │
+│                 │   hypothesis → paper_spec → code_recon              │
+│                 │   → baseline_analyze → data_recon                   │
+│                 │   → concept_paper → concept_code                    │
+│                 │   → design → code → code_preflight                  │
+│                 ↓                                                     │
+│            run(mode) → judge → [figure_compose] → report             │
+│                 ↓                           → waiting_approval        │
+│        M1: mode=fast_fail（小规模 falsification）   ←─── 等待审批    │
+│        M2+: mode=main（完整规模）                        ↓            │
+│                 ↓                          ┌─ 批准 → 下一轮 milestone │
+│        critic G10 baseline 复现度检查      ├─ 转向 → awaiting_human_pivot │
+│                 ↓                          ├─ 终止 → 完成            │
+│        SOFT_FLAG → baseline_diagnose → fixer └─ 暂停 → 阻塞          │
+│        HARD_FLAG → awaiting_human_pivot (人工)                        │
+│        KILL_FLAG → 自动 kill + 失败知识沉淀                            │
+│                 ↓                                                     │
+│        达到 max_milestones → PAPER → completed                        │
 │                                                                       │
 │  Professor 仍是决策边界的 LLM；但所有 HITL gate（pre-MAIN /           │
 │  milestone-N / pre-publish）在 2026-04 refactor 中移除，改由 typed     │
 │  JudgeVerdict + contract_guard 自动决策。保留 kill/tweak 作紧急制动。   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+### 流水线步骤总览
+
+| 步骤 | 类型 | 阶段 | 说明 |
+|---|---|---|---|
+| hypothesis | LLM | 共享 | 假设生成 |
+| paper_spec | LLM | 共享 | 从 base_paper 抽 baseline 名称、URL、关键指标 |
+| code_recon | Python | 共享 | 浅克隆 reference 仓库（白名单 + 大小限制）|
+| baseline_analyze | LLM | 共享 | code-first 分析 baseline 包，输出 baseline_analysis.yaml |
+| data_recon | Python | 共享 | 按 baseline_analysis.yaml 拷贝/下载数据 |
+| concept_paper | LLM | 共享 | 论文侧概念抽取 |
+| concept_code | LLM | 共享 | 代码侧概念抽取 |
+| design | LLM | 共享 | 实验设计（含 scale_profile, skip_fast_fail）|
+| code | LLM | 共享 | 实验代码生成（Case A/B/C 硬规则）|
+| code_preflight | Python | 共享 | 静态检查（含 baseline_reuse 校验）|
+| run | LLM | 每 milestone | 执行实验（mode=fast_fail\|main 由 scheduler 注入）|
+| judge | LLM | 每 milestone | 合并 critic + 分析 + interrogation |
+| figure_compose | LLM | 每 milestone (main) | 论文图表 |
+| report | LLM | 每 milestone | milestone 报告 |
+| baseline_diagnose | Python | 触发式 | critic SOFT_FLAG 时自动调度 |
+| awaiting_human_pivot | 阻塞 | 触发式 | critic HARD_FLAG 时等待用户 pivot_response |
 
 ## 对齐契约工作流（2026-04-25 新增）
 
@@ -569,6 +601,28 @@ LLM 最顽固的失败类是"看似实现了但漏关键组件"。流程（MAIN�
    file_read 逐概念验证 mechanism ↔ math_formula；grep 验证 metric 真的被
    计算；import 烟测；输出 `judge.digest.json`（Pydantic）。
 
+## fast_fail vs main 的 run mode 设计
+
+design + code 阶段只跑一次，run 阶段在不同 milestone 用不同参数执行：
+
+```yaml
+# experiment_plan.yaml 示例
+scale_profile:
+  fast_fail:
+    data_slice: "first_50_rows"
+    seeds: [42]
+    baselines: ["primary"]
+    ablations: false
+  main:
+    data_slice: "all"
+    seeds: [42, 7, 13, 21, 99]
+    baselines: "all"
+    ablations: true
+skip_fast_fail: false  # 当数据规模不足以体现 scale gap 时设 true
+```
+
+scheduler 写 sidecar `run_mode.txt`，experiment_runner 读取并按对应 profile 执行。
+
 ## Professor 决策模式
 
 ```yaml
@@ -604,6 +658,44 @@ Professor 在以下位置被触发：
 | G10 | 章节完整性（Abstract/Intro/Related/Method/Experiments/Conclusion）| paper_auditor |
 | G11 | 数值跨节一致性（Abstract vs 表格 vs 正文 vs 图注）| paper_auditor |
 | G12 | 引用利用率 ≥85% + 多层验证 | paper_auditor |
+
+## Baseline 复现保真度（G10 Baseline）
+
+每个 milestone 的 critic 自动比对实验跑出的 baseline 数值与 paper 报告的数值：
+
+| 相对误差 | Verdict | 后续动作 |
+|---|---|---|
+| ≤ 5% | REPRODUCED | 无 |
+| (5%, 15%] | SOFT_FLAG | 自动 baseline_diagnose；可修则 fixer 介入；不可修则升级 |
+| (15%, 50%] | HARD_FLAG | professor 写 `pivot_request_*.md`，pipeline 进入 awaiting_human_pivot |
+| > 50% 或 NaN | KILL_FLAG | 自动 kill + 写 `wiki/failures/baseline_reproduction_*.md` |
+
+阈值在 `runtime/research_config.yaml::critic.baseline_divergence_thresholds` 配置；
+跨语言移植（cross_language_porting）使用更宽松的阈值组（10/25/60%）。
+
+### 人工 pivot 协议
+
+HARD_FLAG 时 professor 不自动决策，而是写：
+
+```markdown
+decisions/pivot_request_<id>_<ts>.md
+  - baseline 置信度
+  - G10 偏差列表
+  - baseline_diagnose 结果
+  - 三个建议方向（修参数/换 benchmark/终止）
+  - professor 推荐
+```
+
+用户回复：
+
+```yaml
+# decisions/pivot_response_<id>_<ts>.yaml
+decision: pivot|kill|continue_with_known_divergence
+direction: a|b|c
+comment: "..."
+```
+
+scheduler 见 response 解除阻塞，按 decision 推进。
 
 ## 目录结构
 
@@ -713,6 +805,18 @@ model_tiers:
   T2: ${RESEARCHOS_MODEL_T2:-gpt-4o}
   T3: ${RESEARCHOS_MODEL_T3:-o4-mini}
 ```
+
+### 代理环境变量（必须 unset）
+
+如果你的 shell 设置了 SOCKS 代理：
+
+```bash
+unset ALL_PROXY all_proxy GRPC_PROXY grpc_proxy FTP_PROXY ftp_proxy RSYNC_PROXY
+```
+
+httpx（OpenAI SDK 内部）不识别 `socks5h://` scheme。代码层已通过
+`httpx.Client(trust_env=False)` 隔离，但保留在 README 留痕以备旧版本使用。
+保留 HTTP_PROXY/HTTPS_PROXY 不影响。
 
 ### 多后端支持
 

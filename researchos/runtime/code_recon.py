@@ -34,6 +34,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 import yaml
 
@@ -41,9 +42,73 @@ from researchos.runtime.knowledge_compiler import _slugify, extract_code_refs
 
 logger = logging.getLogger(__name__)
 
+
+def _load_baseline_recon_config() -> dict:
+    """Read baseline_recon block from runtime/workflow_config.yaml.
+    Falls back to safe defaults if config or block is missing."""
+    from researchos.runtime.workflow_loader import WorkflowConfig
+    try:
+        # WorkflowConfig.load expects project_root; resolve relative to CWD.
+        cfg = WorkflowConfig.load(Path.cwd())
+        return cfg.get_baseline_recon_config()
+    except Exception:
+        return {
+            "max_size_mb": 500,
+            "max_files": 5000,
+            "allowed_hosts": (
+                "github.com", "gitlab.com", "bitbucket.org",
+                "zenodo.org", "osf.io", "figshare.com",
+                "huggingface.co", "codeocean.com", "doi.org",
+            ),
+            "prune_extensions": (
+                ".pth", ".pt", ".bin", ".safetensors", ".ckpt", ".h5", ".onnx",
+                ".tar", ".tar.gz", ".tgz", ".zip", ".7z", ".rar",
+                ".mp4", ".mov", ".avi", ".mkv",
+                ".iso", ".dmg",
+                ".parquet", ".arrow", ".feather",
+            ),
+        }
+
+
+def _max_repo_bytes() -> int:
+    return int(_load_baseline_recon_config().get("max_size_mb", 500)) * 1024 * 1024
+
+
+def _max_file_count() -> int:
+    return int(_load_baseline_recon_config().get("max_files", 5000))
+
+
+def _host_allowed(url: str, allowed_hosts: Iterable[str] | None = None) -> tuple[bool, str]:
+    """Return (allowed, reason). reason is empty string if allowed.
+
+    doi.org URLs are accepted without a HEAD-follow at this layer; the
+    actual git clone will fail loudly if the resolved target is not git.
+    """
+    if allowed_hosts is None:
+        allowed_hosts = _load_baseline_recon_config().get("allowed_hosts", ())
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        return False, f"unparseable URL: {e}"
+    host = (parsed.hostname or "").lower()
+    # Strip leading www. for matching
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return False, "empty hostname"
+    for allowed in allowed_hosts:
+        allowed_norm = allowed.lower()
+        if allowed_norm.startswith("www."):
+            allowed_norm = allowed_norm[4:]
+        if host == allowed_norm or host.endswith("." + allowed_norm):
+            return True, ""
+    return False, f"host '{host}' not in allowed_hosts"
+
+
 # Reference codebases can be huge (weights, datasets). Cap per-repo disk
 # usage. 500 MB is generous for code-only scans; anything over is likely
 # checkpoints or a bundled dataset and gets pruned after clone.
+# Kept for backward compatibility; runtime callers should use _max_repo_bytes().
 MAX_REPO_BYTES = 500 * 1024 * 1024
 
 # Extensions we prune post-clone. They carry weights, datasets, or binary
@@ -86,36 +151,146 @@ def _owner_repo_slug(url: str) -> str:
     return f"{owner}__{repo}"
 
 
+def clone_repository(
+    url: str,
+    target_dir: Path,
+    *,
+    allowed_hosts: Iterable[str] | None = None,
+    max_size_mb: int | None = None,
+    max_files: int | None = None,
+    prune_extensions: Iterable[str] | None = None,
+    timeout: int = 180,
+) -> dict:
+    """Shared clone helper used by code_recon and (future) baseline_recon agents.
+
+    Returns a result dict with at least: url, status, path (or None), reason
+    (when status != ok), size_mb, file_count, license_path (when found),
+    readme_path (when found), language (when detected).
+
+    status ∈ {ok, cached, rejected_by_whitelist, error, oversized, too_many_files}
+    """
+    # Resolve limits from config if not explicitly supplied.
+    cfg = _load_baseline_recon_config()
+    if max_size_mb is None:
+        max_size_mb = int(cfg.get("max_size_mb", 500))
+    if max_files is None:
+        max_files = int(cfg.get("max_files", 5000))
+    if prune_extensions is None:
+        prune_extensions = cfg.get("prune_extensions", _PRUNE_EXTENSIONS)
+
+    max_bytes = max_size_mb * 1024 * 1024
+
+    # Whitelist check.
+    allowed, reason = _host_allowed(url, allowed_hosts)
+    if not allowed:
+        return {
+            "url": url,
+            "status": "rejected_by_whitelist",
+            "reason": reason,
+            "path": None,
+        }
+
+    dest = target_dir
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    cached = dest.exists()
+    if not cached:
+        # Perform the actual git clone.
+        try:
+            proc = subprocess.run(
+                [
+                    "git", "clone", "--depth=1", "--single-branch",
+                    "--no-tags", url, str(dest),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            return {"url": url, "status": "error", "reason": "git executable not found", "path": None}
+        except subprocess.TimeoutExpired:
+            return {"url": url, "status": "error", "reason": f"git clone timed out after {timeout}s", "path": None}
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip().splitlines()[-1:] or [""]
+            return {"url": url, "status": "error", "reason": err[0][:200], "path": None}
+
+    # Count files before pruning (use rglob to count).
+    file_count_pre = sum(1 for f in dest.rglob("*") if f.is_file() and not f.is_symlink())
+    if file_count_pre > max_files:
+        shutil.rmtree(dest, ignore_errors=True)
+        return {
+            "url": url,
+            "status": "too_many_files",
+            "reason": f"file count {file_count_pre} > max_files {max_files}",
+            "path": None,
+        }
+
+    # Prune heavy extensions.
+    pruned_bytes = 0
+    prune_ext_tuple = tuple(prune_extensions)
+    for f in dest.rglob("*"):
+        try:
+            if not f.is_file() or f.is_symlink():
+                continue
+            name = f.name.lower()
+            if name.endswith(prune_ext_tuple):
+                pruned_bytes += f.stat().st_size
+                f.unlink()
+        except OSError:
+            continue
+
+    size = _dir_size(dest)
+    if size > max_bytes:
+        shutil.rmtree(dest, ignore_errors=True)
+        return {
+            "url": url,
+            "status": "oversized",
+            "reason": f"size {size} > max_bytes {max_bytes} after prune",
+            "path": None,
+            "size_mb": round(size / (1024 * 1024), 2),
+        }
+
+    file_count = sum(1 for f in dest.rglob("*") if f.is_file() and not f.is_symlink())
+
+    # Detect README / LICENSE.
+    readme = _find_first(dest, _README_NAMES)
+    license_file = _find_first(dest, _LICENSE_NAMES)
+
+    result: dict = {
+        "url": url,
+        "status": "cached" if cached else "ok",
+        "path": str(dest),
+        "size_mb": round(size / (1024 * 1024), 2),
+        "file_count": file_count,
+        "pruned_bytes": pruned_bytes,
+        "commit_sha": _head_commit(dest),
+        "entry_points": _detect_entry_points(dest),
+        "license": _detect_license(dest),
+        "readme_path": str(readme) if readme else None,
+        "license_path": str(license_file) if license_file else None,
+        "language": None,  # Language detection reserved for future enhancement.
+    }
+    return result
+
+
 def _shallow_clone(url: str, dest: Path, timeout: int = 180) -> dict:
     """Run ``git clone --depth=1`` into ``dest``.
 
     Returns a dict with ``status`` (``ok`` / ``error``) and diagnostic
     fields. Never raises.
+
+    Delegates to ``clone_repository`` for whitelist enforcement and size
+    checking; adapts the return dict to the legacy schema expected by
+    ``run_code_recon``.
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        # Idempotent: treat an existing directory as a cache hit and read
-        # its commit SHA. We only skip re-cloning; pruning still runs.
-        return {"status": "cached", "path": str(dest)}
-    try:
-        proc = subprocess.run(
-            [
-                "git", "clone", "--depth=1", "--single-branch",
-                "--no-tags", url, str(dest),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        return {"status": "error", "error": "git executable not found"}
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "error": f"git clone timed out after {timeout}s"}
-    if proc.returncode != 0:
-        # Truncate to keep yaml readable.
-        err = (proc.stderr or "").strip().splitlines()[-1:] or [""]
-        return {"status": "error", "error": err[0][:200]}
-    return {"status": "ok", "path": str(dest)}
+    result = clone_repository(url, dest, timeout=timeout)
+    status = result["status"]
+    if status in ("ok", "cached"):
+        return {"status": status, "path": result["path"]}
+    if status == "rejected_by_whitelist":
+        return {"status": "rejected_by_whitelist", "reason": result.get("reason", ""), "path": None}
+    # oversized / too_many_files / error all map to error for legacy callers.
+    return {"status": status, "error": result.get("reason", ""), "path": None}
 
 
 def _head_commit(repo: Path) -> str:
@@ -383,10 +558,11 @@ def run_code_recon(
     pipeline_id = pipeline_dir.name.removeprefix("pipeline_")
     recon_root = scratch_root / pipeline_id / "code_refs"
 
+    max_bytes = _max_repo_bytes()
     urls = gather_urls_for_pipeline(pipeline_dir, project_root)
     report: dict = {
         "pipeline_id": pipeline_id,
-        "max_repo_bytes": MAX_REPO_BYTES,
+        "max_repo_bytes": max_bytes,
         "repos": [],
     }
 
@@ -394,28 +570,36 @@ def run_code_recon(
         slug = _owner_repo_slug(url)
         dest = recon_root / slug
         clone = _shallow_clone(url, dest, timeout=clone_timeout)
+        status = clone["status"]
         row: dict = {
             "url": url,
             "slug": slug,
             "path": str(dest.relative_to(project_root)) if dest.exists() else "",
-            "status": clone["status"],
+            "status": status,
         }
-        if clone["status"] == "error":
-            row["error"] = clone.get("error", "")
+        if status == "rejected_by_whitelist":
+            row["reason"] = clone.get("reason", "")
+            row["path"] = ""
+            report["repos"].append(row)
+            continue
+        if status in ("error", "oversized", "too_many_files"):
+            row["error"] = clone.get("error", clone.get("reason", ""))
+            row["path"] = ""
             report["repos"].append(row)
             continue
 
+        # ok / cached — clone_repository already pruned heavy files and checked
+        # the size cap; record the results from the clone helper.
         pruned = _prune_heavy(dest)
         row["pruned_bytes"] = pruned
         size = _dir_size(dest)
         row["size_bytes"] = size
-        if size > MAX_REPO_BYTES:
-            # We exceeded the cap even after pruning weights. Wipe the
-            # clone to stay within the scratch budget.
+        if size > max_bytes:
+            # Belt-and-suspenders: wipe if still oversized after secondary prune.
             shutil.rmtree(dest, ignore_errors=True)
             row["status"] = "oversize"
             row["error"] = (
-                f"size {size} > MAX_REPO_BYTES {MAX_REPO_BYTES} after prune"
+                f"size {size} > max_repo_bytes {max_bytes} after prune"
             )
             row["path"] = ""
             report["repos"].append(row)
@@ -442,7 +626,12 @@ def run_code_recon(
 
 __all__ = [
     "MAX_REPO_BYTES",
+    "clone_repository",
     "extract_code_refs",
     "gather_urls_for_pipeline",
     "run_code_recon",
+    "_host_allowed",
+    "_load_baseline_recon_config",
+    "_max_repo_bytes",
+    "_max_file_count",
 ]

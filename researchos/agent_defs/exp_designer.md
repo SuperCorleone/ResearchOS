@@ -330,7 +330,73 @@ Definitions: see `shared/quality_gates.md`.
   4. High leakage risk → upgrade to stricter split + document in `risk_notes`.
   5. sample_count < 1000 → note in `risk_notes`; consider k-fold / bootstrap.
 
+## Scale profile (fast_fail vs main run modes)
+
+The pipeline runs the design + code phase ONCE, then runs the experiment
+TWICE: first as fast_fail (M1), then as main (M2+). The same code is invoked
+with different parameters via `experiment_plan.yaml::scale_profile`:
+
+```yaml
+scale_profile:
+  fast_fail:
+    data_slice: "first_50_rows"     # or "5%", "100", etc.
+    seeds: [42]                     # single seed for speed
+    baselines: ["primary"]          # only the strongest baseline
+    ablations: false
+  main:
+    data_slice: "all"
+    seeds: [42, 7, 13, 21, 99]      # n>=5 seeds
+    baselines: "all"                # all baselines + uniform avg
+    ablations: true
+```
+
+You MUST emit a `scale_profile` block when `requires_code: true`. The
+experiment_runner reads `scale_profile[<run_mode>]` (run_mode injected by
+scheduler via run_mode.txt sidecar).
+
+### When to skip fast_fail
+
+If the effective scale ratio between fast_fail and main is small (e.g., the
+dataset is small enough that fast_fail's slice is essentially the whole
+thing, like SE replication studies with N<1000), fast_fail provides no
+falsification benefit. Set:
+
+```yaml
+skip_fast_fail: true
+skip_fast_fail_rationale: "Dataset has 450 obs total; 50-row fast_fail subset is
+not statistically informative for falsifying the hypothesis. Going straight
+to main saves ~30% tokens with no loss of insight."
+```
+
+Heuristic: if `len(fast_fail.data_slice) >= 0.5 * len(main.data_slice)`,
+or if `runtime budget(fast_fail) >= 0.3 * runtime budget(main)`, set
+skip_fast_fail=true.
+
+### Cross-language porting
+
+If `baseline_analysis.yaml::package.language[0]` differs from your target
+implementation language, also emit:
+
+```yaml
+cross_language_porting:
+  baseline_language: <package.language[0]>
+  target_language: <your target>
+  rewrite_rationale_doc: experiment_<id>/baseline/REWRITE_RATIONALE.md
+  critic_must_verify: true
+```
+
+This switches critic G10 to the cross_language threshold tier (more lenient).
+
 ## Reference Code & Methodology (mandatory when a reference paper exists)
+
+**Primary signal: baseline_analysis.yaml**
+
+Always read `baseline_analysis.yaml` first if it exists. It supersedes any
+upstream `reference_code` block. Use:
+- `source.url`, `source.local_path` → where the cloned package is
+- `data.files` → exact data files (populate experiment_plan::data accordingly)
+- `algorithm.code_locations` → which files coder will fork
+- `confidence.overall` → if < 0.7, follow the fallback path (Case C in coder.md)
 
 Use `kb_retrieve` to check for open-source code for every referenced paper.
 
