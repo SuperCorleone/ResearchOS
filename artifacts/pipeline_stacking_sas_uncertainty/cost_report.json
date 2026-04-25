@@ -1,0 +1,46 @@
+{
+  "pipeline_id": "stacking_sas_uncertainty",
+  "records": [
+    {
+      "pipeline_id": "stacking_sas_uncertainty",
+      "step_name": "hypothesis_gen",
+      "agent_name": "hypothesis_gen",
+      "model_name": "gpt-5.4",
+      "input_tokens": 84997,
+      "output_tokens": 2606,
+      "total_tokens": 87603,
+      "credits_used": 88,
+      "duration_seconds": 43.81,
+      "timestamp": "2026-04-25T21:04:27.888775+00:00"
+    },
+    {
+      "pipeline_id": "stacking_sas_uncertainty",
+      "step_name": "baseline_analyzer",
+      "agent_name": "baseline_analyzer",
+      "model_name": "gpt-4o",
+      "input_tokens": 23609,
+      "output_tokens": 614,
+      "total_tokens": 24223,
+      "credits_used": 25,
+      "duration_seconds": 17.9,
+      "timestamp": "2026-04-25T21:05:03.357944+00:00"
+    },
+    {
+      "pipeline_id": "stacking_sas_uncertainty",
+      "step_name": "concept_extract_paper",
+      "agent_name": "concept_extract_paper",
+      "model_name": "gpt-4o",
+      "input_tokens": 33719,
+      "output_tokens": 981,
+      "total_tokens": 34700,
+      "credits_used": 35,
+      "duration_seconds": 13.87,
+      "timestamp": "2026-04-25T21:05:27.498766+00:00"
+    }
+  ],
+  "total_input_tokens": 142325,
+  "total_output_tokens": 4201,
+  "total_tokens": 146526,
+  "total_credits": 148,
+  "total_duration_seconds": 75.58
+}

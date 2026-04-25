@@ -28,6 +28,7 @@ gets it right by reading the entry-point code.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import urllib.parse
 import urllib.request
@@ -106,12 +107,37 @@ def _download_one(url: str, dest_dir: Path, *, max_bytes: int) -> dict:
     return row
 
 
-def _copy_dataset_path(
+def _link_or_copy_file(src: Path, dest: Path) -> str:
+    """Hard-link, fall back to symlink, fall back to copy. Returns the mode used.
+
+    Hard link is preferred — same inode, free, lineage-clean. Symlink works
+    cross-fs but breaks if the source is later cleaned up. Copy is the
+    last resort and is the only mode that costs disk.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() or dest.is_symlink():
+        dest.unlink()
+    try:
+        os.link(src, dest)
+        return "hardlink"
+    except OSError:
+        pass
+    try:
+        os.symlink(src.resolve(), dest)
+        return "symlink"
+    except OSError:
+        pass
+    shutil.copy2(src, dest)
+    return "copy"
+
+
+def _link_dataset_path(
     repo_root: Path, rel_path: str, dest_root: Path,
 ) -> dict:
-    """Copy a single dataset path (file or dir) from a cloned repo into data/raw/.
-
-    Returns a manifest log row.
+    """Materialise a single dataset path (file or dir) from a cloned repo into
+    ``data/raw/<pid>/<slug>/``. Files are hard-linked when possible (same fs
+    → no extra disk, real inode for hashing); directories are walked and each
+    file is hard-linked individually so the manifest sees real per-file hashes.
     """
     src = repo_root / rel_path
     dest = dest_root / rel_path
@@ -125,25 +151,33 @@ def _copy_dataset_path(
         row["error"] = f"source not found: {src}"
         return row
     try:
+        modes_used: set[str] = set()
         if src.is_dir():
             if dest.exists():
                 shutil.rmtree(dest)
-            shutil.copytree(src, dest)
-            size = sum(
-                f.stat().st_size for f in src.rglob("*")
-                if f.is_file() and not f.is_symlink()
-            )
+            dest.mkdir(parents=True, exist_ok=True)
+            size = 0
+            for sub in src.rglob("*"):
+                if sub.is_symlink() or not sub.is_file():
+                    continue
+                rel_sub = sub.relative_to(src)
+                modes_used.add(_link_or_copy_file(sub, dest / rel_sub))
+                size += sub.stat().st_size
         else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+            modes_used.add(_link_or_copy_file(src, dest))
             size = src.stat().st_size
         row["size_bytes"] = size
         row["dest"] = str(dest.relative_to(dest_root))
+        row["materialise_mode"] = "+".join(sorted(modes_used)) or "copy"
         row["status"] = "ok"
     except Exception as exc:
         row["status"] = "error"
-        row["error"] = f"copy failed: {exc}"
+        row["error"] = f"link/copy failed: {exc}"
     return row
+
+
+# Back-compat alias — older callers may import _copy_dataset_path.
+_copy_dataset_path = _link_dataset_path
 
 
 def _existing_success(manifest_path: Path) -> bool:
@@ -236,7 +270,7 @@ def run_data_recon(
             })
             continue
         for ds in repo.dataset_paths:
-            row = _copy_dataset_path(repo_root, ds.path, repo_dest)
+            row = _link_dataset_path(repo_root, ds.path, repo_dest)
             row["repo"] = repo.slug
             row["kind_label"] = ds.kind
             row["purpose"] = ds.purpose

@@ -1,0 +1,48 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-25T21:09:07.322949+00:00'
+evaluator_model: ''
+falsification:
+  baseline: A static multi-agent orchestration baseline with fixed numbers of agent
+    messages, fixed debate rounds, and fixed verification steps tuned once on a validation
+    set.
+  expected_signal: At least 10% reduction in tokens and 10% reduction in latency with
+    no drop in success, or at least 2% absolute success gain at equal budget.
+  failure_condition: The adaptive controller fails if it does not improve task success
+    by at least 2% at equal token budget, or does not reduce tokens or latency by
+    at least 10% at matched success rate.
+  hypothesis: A runtime adaptive communication-budget controller can achieve equal
+    or higher task success than a fixed-pattern multi-agent workflow while reducing
+    total token usage and end-to-end latency.
+  metric: 'Primary: task success rate. Secondary: total tokens consumed and end-to-end
+    latency. Evaluate Pareto improvement or cost at matched success.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a MAPE-K-inspired runtime controller that monitors workflow
+    signals and dynamically allocates inter-agent communication frequency, debate
+    depth, and verification effort during execution.
+  problem_gap: Existing methods fail because they rely on fixed communication and
+    deliberation patterns that do not adapt to task difficulty, uncertainty, or diminishing
+    returns, causing unnecessary token/latency overhead or missed quality gains.
+  why_it_matters: Which improves cost-quality tradeoffs in multi-agent LLM workflows
+    under heterogeneous task demands and constrained latency/token budgets.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: adaptive_communication_budgeti
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a MAPE-K-inspired controller that dynamically allocates communication
+  and deliberation budget across agents reduce latency and token cost while preserving
+  or improving task success in multi-agent LLM workflows?
+retrieval_cache_key: 4adec553d997d28f
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Adaptive Communication Budgeting for Multi-Agent LLM Workflows

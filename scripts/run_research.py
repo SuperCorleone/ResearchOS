@@ -719,7 +719,10 @@ def cmd_inject(args: argparse.Namespace) -> None:
         Add --title + --question to skip Miner and create pipeline directly.
     """
     import shutil
-    from researchos.runtime.knowledge_compiler import compile_raw_to_wiki
+    from researchos.runtime.knowledge_compiler import (
+        compile_raw_to_wiki,
+        register_raw_paper,
+    )
 
     base_paper = getattr(args, "base_paper", None)
     papers = getattr(args, "papers", []) or []
@@ -766,6 +769,7 @@ def cmd_inject(args: argparse.Namespace) -> None:
             shutil.copy2(base_src, base_raw_dest)
             print(f"  Imported to knowledge/raw/: {base_src.name}")
 
+        register_raw_paper(base_raw_dest, "base_paper", PROJECT_ROOT)
         page = compile_raw_to_wiki(base_raw_dest, PROJECT_ROOT)
         if page:
             print(f"  Compiled to wiki: {page.name}")
@@ -862,6 +866,7 @@ def cmd_inject(args: argparse.Namespace) -> None:
     # Compile all imported papers to wiki
     compiled = 0
     for f in imported:
+        register_raw_paper(f, "base_paper", PROJECT_ROOT)
         page = compile_raw_to_wiki(f, PROJECT_ROOT)
         if page:
             compiled += 1

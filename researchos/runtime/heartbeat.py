@@ -211,6 +211,12 @@ def _download_pdf(paper: dict, direction_name: str) -> Path | None:
 
         pdf_path.write_bytes(pdf_data)
 
+        try:
+            from researchos.runtime.knowledge_compiler import register_raw_paper
+            register_raw_paper(pdf_path, "base_paper", PROJECT_ROOT)
+        except Exception:
+            logger.exception("heartbeat: failed to register %s in raw_registry", pdf_filename)
+
         # Also save a metadata sidecar for quick indexing
         meta_path = pdf_path.with_suffix(".meta.yaml")
         meta = {

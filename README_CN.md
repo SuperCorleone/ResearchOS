@@ -103,9 +103,16 @@ researchos inject \
 ```
 
 每个文件按 role 分类：`base_paper` / `proposal` / `ref_code` / `related_work`。
-- `base_paper` 进 wiki + 转 markdown 写 `artifacts/pipeline_<id>/base_paper.md`
-- `proposal` **不**入 wiki（避免被 BM25 当背景污染），写 `artifacts/pipeline_<id>/proposal.md`
+- `base_paper` 进 wiki + 转 markdown 写 `artifacts/pipeline_<id>/base_paper.md`，并在 `runtime/raw_registry.yaml` 登记 role
+- `proposal` **不**入 wiki（避免被 BM25 当背景污染），写 `artifacts/pipeline_<id>/proposal.md`，**不**进 raw 也**不**进 registry
 - `ref_code` 仅记 git URL，由 CODE_RECON 实际 clone + import 测试
+
+**raw 编译白名单（2026-04-26 起）**：`scheduler.tick()` 每次跑 `compile_all_raw()` 仅
+编译 `runtime/raw_registry.yaml` 中标了 `base_paper` / `related_work` 的文件。即使
+proposal 因为遗留路径或手动复制误入 `knowledge/raw/`，registry 缺它就不进 wiki。
+inject / heartbeat fetch 入口都会调 `register_raw_paper(file, role)` 自动登记，
+普通用户不感知。
+- 同时 wiki frontmatter 不再写启发式抽取的 `evaluation_protocol` / `follow_up_questions`（之前会把"to address RQ1 we executed the?"这种回指误抓为 RQ）；结构化 RQ/metric 一律由 `paper_spec_extractor` 写到 `paper_spec.yaml`
 
 ### 4 个新 pipeline step
 
@@ -186,6 +193,15 @@ REQUIRED PATTERNS（contract 存在时）：
 
 不带 typed `base_paper` 角色的 pipeline（legacy / miner-driven）在 4 个新 step 自动写 SKIP 标记直通 HYPOTHESIS。`scheduler._has_alignment_inputs()` 同时检查 `metadata['source']=='user_inject'` 与 `evidence_refs` 的 typed role；行为完全向后兼容。
 
+### Focused mode：inject 独占项目作用域
+
+inject 的设计意图是"在用户给定的 paper+proposal 范围内开一条 pipeline，走 PROPOSAL → FAST_FAIL → MAIN，不要旁支"。一旦 `artifacts/pipeline_*` 里出现任何 `metadata['source']` 以 `user_inject` 开头（typed 或 legacy）的 pipeline——**无论其 stage 是 active、BLOCKED、COMPLETED 还是 FAILED**——项目即进入 focused mode，下面两个矿工相关入口同时静默：
+
+- `scheduler._maybe_run_knowledge_miner()`：不会触发新一轮挖矿，`knowledge/proposals/` 不会冒出 off-topic `new_idea_*.yaml` / `evaluated_*.yaml`。
+- `scheduler._intake_knowledge_proposals()`：即使存在上一次运行残留的 `new_idea_*.yaml`，intake 直接 return，不会派生平行 pipeline 跳出 inject 作用域。
+
+判定逻辑集中在 `scheduler._is_focused_mode()`（O(N) 扫 artifacts/）。退出 focused mode 必须显式移除 inject pipeline 目录（或 archive），不存在自动放行。全局静音仍可 `touch runtime/.miner_paused`。
+
 ## 完整科研生命周期
 
 ```
@@ -264,9 +280,27 @@ Dispatcher 注入 digest JSON 到下游 prompt，而非原 markdown。Digests �
 - `assert_data_manifest_match` — run.data_hash 必须等于 data_manifest.yaml::directory_hash
 - `assert_baseline_honesty` — run_inline 必须有 baseline_metrics；waived 不得有
 - `assert_concept_atomicity` — 委托给 ConceptsDigest model_validator
+- `assert_strategy_actions_consistent` — `BaselineAnalysis.analysis_strategy` 与产出必须一致：
+  - `code_primary` ⇒ `analyzed_repos[*].dataset_paths` 非空 + `status ≠ no_data_found`
+  - `text_fallback` ⇒ `fallback_used=true` + `notes` 非空
+  - 任何非 `none` 策略 + `data_manifest.yaml` 存在 ⇒ `executed_actions` 非空
+  - 触发场景：BMA pipeline 出现的 "strategy=text_fallback + executed_actions=[]" 矛盾会被立即 BLOCK
 
 `state_manager.save_pipeline()` 每次 save 后自动运行 `enforce_all`；违反 →
 pipeline stage=BLOCKED + `ContractViolation` 异常向上冒泡。
+
+### LLM 不再选策略，只描述事实（2026-04-26 拓展）
+
+下面这些"看似 LLM 决策、其实是事实判断"的环节都已退化成纯 Python：
+
+| 函数/位置 | 之前 | 现在 |
+|---|---|---|
+| `scheduler._run_baseline_analyze` | LLM 自选 `code_primary` / `text_fallback` | 看 cloned repo 实际有没有数据形态文件 (`data_shape.decide_strategy`)；LLM 错配 → BLOCK |
+| `topic_evaluator.competitive_select` | LLM 两两 head-to-head 选 N→top_k | 直接按 `EvaluationScores` 5 维加权 + 字典序 tie-break；O(N log N) 纯函数；权重在 `research_config.yaml::tournament.weights` |
+| BASELINE_ANALYZE URL 分类 | LLM 给每个 URL 标 `should_download` / `kind` | scheduler 先跑 `url_classify` 给 high 置信度判定；LLM 抄写 high 条目；contradicting → BLOCK |
+
+原则：能 `os.listdir` / 加权和 / 正则 host 解决的事，LLM 不再插手；
+LLM 只在确实需要语义解读（写假设、设计实验、写代码、写论文）时被调用。
 
 ## 智能体（重构后 10 核心 + 3 对齐 + 2 条件）
 
@@ -356,13 +390,40 @@ external_data_urls:
      kind: decorative_badge, reason: "DOI shield SVG, not data"}
 ```
 
-**策略选择**：
+**策略选择（2026-04-26 起改为确定性裁决，不交给 LLM）**：
 
-| 输入 | strategy | 说明 |
+策略由 `scheduler._run_baseline_analyze` 在 dispatch LLM **之前** 用纯 Python
+判定（`researchos/utils/data_shape.py::decide_strategy`），写进 prompt 的
+`MANDATORY analysis_strategy: X` 区块。LLM 只做事实描述。
+
+| 输入 | strategy | 决策依据 |
 |---|---|---|
-| 至少有一个 `status ∈ {ok,cached}` 的 clone repo | `code_primary` | 默认；grep 入口代码 |
-| 没有 clone（CODE_RECON repos:[]） | `text_fallback` | 退到论文文本扫描；`fallback_used: true` |
-| 存在 `upstream_sources.yaml` 且有 `confidence: trusted` | `upstream_trusted` 或 `mixed` | 上游标注最高优先级（见下） |
+| 至少一个 ok/cached clone repo + `scan_repo_for_data` 有 high/medium hits | `code_primary` | 仓库目录里真有数据形态文件 |
+| 有 ok/cached clone repo 但 0 hits | `text_fallback` | 仓库存在但里面没数据 |
+| 没有 ok/cached clone repo | `text_fallback` | 全部 clone 失败 / 被白名单拒 |
+
+`scan_repo_for_data` 两层置信度：
+- **high**：路径含 `data/` `datasets/` `fixtures/` `simulation*/` `examples/` `benchmarks/` 等约定段
+- **medium**：扩展名 ∈ `{.csv,.tsv,.parquet,.h5,.npy,.npz,.pkl,.zip,.gz,.xlsx,...}`
+- 排除：`.git/` `tests/` `docs/` `figures/` `__pycache__/` `node_modules/` `venv/` 等
+
+post-LLM 校验：若 LLM 写出与强制策略不一致的 `analysis_strategy`，scheduler
+直接 BLOCK pipeline（`last_error: baseline_analyze:strategy mismatch:...`），
+避免 LLM 拍脑袋选 `text_fallback` 而仓库里其实有数据这类错位。
+
+**URL 预分类（2026-04-26 起）**：scheduler 在 dispatch LLM 之前扫每个 cloned
+repo 的 README/`*.md` 抓出所有 URL，过 `researchos/utils/url_classify.py` 的
+host+扩展规则得到 `(kind, should_download, confidence)`：
+- **high**：badge/DOI/已知 dataset host (`zenodo.org` `huggingface.co/datasets`
+  `archive.ics.uci.edu` `figshare.com` 等)、明确扩展（`.svg/.png` → badge；
+  `.csv/.parquet/.h5` → data；`.pt/.safetensors` → model_weights）
+- **medium**：未知 host 上的数据扩展（提示 LLM 可能是 data，需确认）
+- **low**：完全无信号 → LLM 自行判断
+
+prompt 注入"URL pre-classification"块；high 置信度条目要求 LLM 逐字
+抄进 `external_data_urls[*]`。post-LLM 校验：LLM 与 high 置信度结果在
+`kind` 或 `should_download` 上不一致 → BLOCK（典型反例："想下载一个
+shields.io 的 SVG"）。
 
 ### Step 3: DATA_RECON （pure Python, thin executor）
 
@@ -370,8 +431,8 @@ external_data_urls:
 零目录猜测。完全照 `baseline_analysis.yaml` 执行：
 
 - 对每个 `analyzed_repos[*].dataset_paths[*]`：从
-  `scratch/<id>/code_refs/<slug>/<path>` `copytree` 到
-  `data/raw/<id>/<slug>/<path>`
+  `scratch/<id>/code_refs/<slug>/<path>` **hardlink → symlink → copy 三级降级**
+  到 `data/raw/<id>/<slug>/<path>`（同 fs 走 hardlink，零额外字节，inode 共享让 hash 直接对应原文件；不同 fs 退 symlink；都失败再 copy）。manifest 行记录 `materialise_mode`
 - 对每个 `external_data_urls[*]` 中 `should_download: true` 的：
   `urlretrieve` 到 `data/raw/<id>/`
 - 生成 `data_manifest.yaml`（每个文件 SHA256 + `directory_hash`）

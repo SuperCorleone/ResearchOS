@@ -1,0 +1,223 @@
+{
+  "pipeline_id": "stacking_sas_uncertainty",
+  "generated_at": "2026-04-25T21:05:27.500206+00:00",
+  "schema_version": 1,
+  "nodes": [
+    {
+      "id": "pipeline:stacking_sas_uncertainty",
+      "kind": "pipeline",
+      "label": "Mitigating Model Uncertainty in Self-Adaptive Systems",
+      "attrs": {
+        "stage": "fast_fail",
+        "step": "concept_paper",
+        "research_question": "Can a stacking-based ensemble in the MAPE-K analyze component replace Bayesian Model Averaging to better handle model-selection uncertainty in self-adaptive systems?",
+        "budget_used": 0,
+        "budget_allocated": 20000
+      }
+    },
+    {
+      "id": "paper:6a8767bd6b56",
+      "kind": "paper",
+      "label": "base_paper",
+      "attrs": {
+        "path_or_url": "/Users/adukopun/Documents/ClaudeCodeWorkspace/ResearchOS/.claude/worktrees/shiny-tickling-marble/artifacts/pipeline_stacking_sas_uncertainty/base_paper.md",
+        "role": "base_paper"
+      }
+    },
+    {
+      "id": "proposal:stacking_sas_uncertainty",
+      "kind": "proposal",
+      "label": "proposal",
+      "attrs": {
+        "path_or_url": "/Users/adukopun/Documents/ClaudeCodeWorkspace/ResearchOS/.claude/worktrees/shiny-tickling-marble/artifacts/pipeline_stacking_sas_uncertainty/proposal.md",
+        "role": "proposal"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:hypothesis",
+      "kind": "step",
+      "label": "hypothesis",
+      "attrs": {
+        "agent": "hypothesis_gen",
+        "artifact": "hypothesis.md"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:paper_spec",
+      "kind": "step",
+      "label": "paper_spec",
+      "attrs": {
+        "agent": "paper_spec_extractor",
+        "artifact": "paper_spec.yaml"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:code_recon",
+      "kind": "step",
+      "label": "code_recon",
+      "attrs": {
+        "agent": "code_recon",
+        "artifact": "code_recon.yaml"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:baseline_analyze",
+      "kind": "step",
+      "label": "baseline_analyze",
+      "attrs": {
+        "agent": "baseline_analyzer",
+        "artifact": "baseline_analysis.yaml"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:data_recon",
+      "kind": "step",
+      "label": "data_recon",
+      "attrs": {
+        "agent": "data_recon",
+        "artifact": "data_manifest.yaml"
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:concept_paper",
+      "kind": "step",
+      "label": "concept_paper",
+      "attrs": {
+        "agent": "concept_extract_paper",
+        "artifact": "concepts_paper.digest.json",
+        "current": true
+      }
+    },
+    {
+      "id": "step:stacking_sas_uncertainty:baseline_confirm",
+      "kind": "step",
+      "label": "baseline_confirm",
+      "attrs": {
+        "agent": "?",
+        "artifact": "metric_contract.json"
+      }
+    },
+    {
+      "id": "code_repo:matteocamilli__bma-package",
+      "kind": "code_repo",
+      "label": "bma-package",
+      "attrs": {
+        "url": "https://github.com/matteocamilli/bma-package",
+        "slug": "matteocamilli__bma-package",
+        "status": "ok",
+        "clone_path": "scratch/stacking_sas_uncertainty/code_refs/matteocamilli__bma-package",
+        "commit_sha": "3739706acbcaa6fc68f78dcd1e1140a4c7301b4a",
+        "license": "MIT License",
+        "entry_points": []
+      }
+    },
+    {
+      "id": "decision:stacking_sas_uncertainty:request_stacking_sas_uncertainty_20260425210329",
+      "kind": "decision",
+      "label": "?",
+      "attrs": {
+        "verdict": "",
+        "comment": "",
+        "next_milestone": "",
+        "created_at": "",
+        "file": "decisions/request_stacking_sas_uncertainty_20260425210329.yaml"
+      }
+    },
+    {
+      "id": "decision:stacking_sas_uncertainty:approval_stacking_sas_uncertainty_20260425210329.processed",
+      "kind": "decision",
+      "label": "approve",
+      "attrs": {
+        "verdict": "approve",
+        "comment": "Results look promising. Continue with expanded experiments. (simulation)",
+        "next_milestone": "M2",
+        "created_at": "2026-04-25T21:03:29.417591+00:00",
+        "file": "decisions/approval_stacking_sas_uncertainty_20260425210329.processed.yaml"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "src": "pipeline:stacking_sas_uncertainty",
+      "dst": "paper:6a8767bd6b56",
+      "rel": "derived_from",
+      "evidence": null
+    },
+    {
+      "src": "pipeline:stacking_sas_uncertainty",
+      "dst": "proposal:stacking_sas_uncertainty",
+      "rel": "derived_from",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:hypothesis",
+      "dst": "step:stacking_sas_uncertainty:paper_spec",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:paper_spec",
+      "dst": "step:stacking_sas_uncertainty:code_recon",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:code_recon",
+      "dst": "step:stacking_sas_uncertainty:baseline_analyze",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:baseline_analyze",
+      "dst": "step:stacking_sas_uncertainty:data_recon",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:data_recon",
+      "dst": "step:stacking_sas_uncertainty:concept_paper",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:concept_paper",
+      "dst": "step:stacking_sas_uncertainty:baseline_confirm",
+      "rel": "next_step",
+      "evidence": null
+    },
+    {
+      "src": "step:stacking_sas_uncertainty:code_recon",
+      "dst": "code_repo:matteocamilli__bma-package",
+      "rel": "produces",
+      "evidence": null
+    },
+    {
+      "src": "paper:6a8767bd6b56",
+      "dst": "code_repo:matteocamilli__bma-package",
+      "rel": "references",
+      "evidence": null
+    },
+    {
+      "src": "decision:stacking_sas_uncertainty:request_stacking_sas_uncertainty_20260425210329",
+      "dst": "pipeline:stacking_sas_uncertainty",
+      "rel": "applies_to",
+      "evidence": null
+    },
+    {
+      "src": "decision:stacking_sas_uncertainty:approval_stacking_sas_uncertainty_20260425210329.processed",
+      "dst": "pipeline:stacking_sas_uncertainty",
+      "rel": "applies_to",
+      "evidence": null
+    }
+  ],
+  "extraction_log": [
+    "evidence_refs: 2 paper/proposal nodes from state.json",
+    "steps: 7 step nodes",
+    "code_recon: 1 code_repo nodes",
+    "baseline_analysis: 0 dataset_file + 0 dataset_url",
+    "data_manifest: 0 dataset_file nodes (with sha256)",
+    "decisions: 2 decision nodes",
+    "milestones: 0 milestone_report nodes",
+    "paper_drafts: 0 paper_draft nodes"
+  ]
+}

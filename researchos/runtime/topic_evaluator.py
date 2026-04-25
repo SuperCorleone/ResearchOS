@@ -1073,66 +1073,100 @@ class BacklogManager:
 # ── Competitive idea selection ───────────────────────────────────
 
 
+# Default weights across the 5 EvaluationScores dimensions. Sum = 1.0.
+# Override in research_config.yaml::tournament.weights.
+_DEFAULT_TOURNAMENT_WEIGHTS: dict[str, float] = {
+    "significance":     0.25,
+    "novelty":          0.25,
+    "differentiation":  0.15,
+    "feasibility":      0.20,
+    "falsifiability":   0.15,
+}
+
+
+def _tournament_weights(config: dict | None) -> dict[str, float]:
+    """Resolve weights: research_config.yaml overrides default, normalised to 1.0."""
+    cfg = (config or {}).get("tournament", {}).get("weights", {}) or {}
+    weights = dict(_DEFAULT_TOURNAMENT_WEIGHTS)
+    for k, v in cfg.items():
+        if k in weights:
+            try:
+                weights[k] = float(v)
+            except (TypeError, ValueError):
+                continue
+    s = sum(weights.values())
+    if s <= 0:
+        return dict(_DEFAULT_TOURNAMENT_WEIGHTS)
+    return {k: v / s for k, v in weights.items()}
+
+
+def _candidate_score(candidate: dict, weights: dict[str, float]) -> float:
+    """Weighted sum over the 5 dims. Missing scores → 0 contribution."""
+    scores = candidate.get("scores") or {}
+    if not isinstance(scores, dict):
+        # Pydantic model — try .model_dump()
+        try:
+            scores = scores.model_dump()  # type: ignore[union-attr]
+        except Exception:
+            return 0.0
+    total = 0.0
+    for dim, w in weights.items():
+        v = scores.get(dim, 0)
+        try:
+            total += float(v) * w
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 async def competitive_select(
     candidates: list[dict],
-    dispatcher: Any,
+    dispatcher: Any = None,
     top_k: int = 2,
+    *,
+    config: dict | None = None,
 ) -> list[dict]:
-    """LLM tournament selection: rank N candidates, return the top_k.
+    """Deterministic top-k selection by weighted EvaluationScores.
 
-    Each round pits two candidates head-to-head. The LLM picks the
-    stronger research direction based on novelty, feasibility, and
-    potential impact. Survivors advance until top_k remain.
+    Replaces the previous LLM head-to-head tournament. Rationale: the
+    upstream Topic Evaluator already produces ``EvaluationScores`` (5
+    dimensions, 0-3 each). Running an LLM tournament on top throws those
+    numbers away and reintroduces ordering bias (proposal-A-shown-first
+    wins more often). A weighted sort gives the same selection
+    deterministically, with O(N log N) cost and full reproducibility.
+
+    Sort key (descending → highest first):
+      (weighted_score, scores.total, novelty, -alphabetical_proposal_id)
+
+    The ``dispatcher`` parameter is retained for backward compatibility
+    but unused — call sites can drop it.
     """
+    del dispatcher  # unused; kept for signature compat
     if len(candidates) <= top_k:
-        return candidates
+        return list(candidates)
 
-    pool = list(candidates)
-    round_num = 0
-    while len(pool) > top_k:
-        round_num += 1
-        next_pool: list[dict] = []
-        for i in range(0, len(pool) - 1, 2):
-            a, b = pool[i], pool[i + 1]
-            winner = await _head_to_head(a, b, dispatcher)
-            next_pool.append(winner)
-        if len(pool) % 2 == 1:
-            next_pool.append(pool[-1])
-        logger.info("Tournament round %d: %d -> %d", round_num, len(pool), len(next_pool))
-        pool = next_pool
-    return pool[:top_k]
+    weights = _tournament_weights(config)
 
+    def _key(c: dict) -> tuple:
+        weighted = _candidate_score(c, weights)
+        scores = c.get("scores") or {}
+        if not isinstance(scores, dict):
+            try:
+                scores = scores.model_dump()  # type: ignore[union-attr]
+            except Exception:
+                scores = {}
+        total = sum(int(v) for v in scores.values() if isinstance(v, (int, float)))
+        novelty = int(scores.get("novelty", 0) or 0)
+        # Stable tie-break: alphabetical proposal_id (or title).
+        ident = str(c.get("proposal_id") or c.get("title") or "")
+        return (-weighted, -total, -novelty, ident)
 
-async def _head_to_head(a: dict, b: dict, dispatcher: Any) -> dict:
-    """Compare two research proposals via LLM, return the winner."""
-    prompt = (
-        "You are comparing two research proposals. Pick the STRONGER one "
-        "based on novelty, feasibility, and potential impact.\n\n"
-        f"## Proposal A\n"
-        f"Title: {a.get('title', '')}\n"
-        f"Question: {a.get('research_question', '')}\n"
-        f"Hypothesis: {a.get('hypothesis', '')}\n"
-        f"Innovation Type: {a.get('innovation_type', '')}\n\n"
-        f"## Proposal B\n"
-        f"Title: {b.get('title', '')}\n"
-        f"Question: {b.get('research_question', '')}\n"
-        f"Hypothesis: {b.get('hypothesis', '')}\n"
-        f"Innovation Type: {b.get('innovation_type', '')}\n\n"
-        "Output ONLY a JSON object: {\"winner\": \"A\" or \"B\", \"reason\": \"...\"}"
+    ranked = sorted(candidates, key=_key)
+    logger.info(
+        "competitive_select: %d candidates → top %d (weights=%s)",
+        len(candidates), top_k, weights,
     )
-    try:
-        result = await dispatcher.dispatch_via_executor(
-            "professor", prompt, "_system_tournament"
-        )
-        if result.get("success"):
-            text = (result.get("output") or "").strip()
-            if '"A"' in text:
-                return a
-            if '"B"' in text:
-                return b
-    except Exception:
-        logger.exception("Tournament head-to-head failed")
-    return a
+    return ranked[:top_k]
 
 
 async def refine_idea(candidate: dict, dispatcher: Any) -> dict:

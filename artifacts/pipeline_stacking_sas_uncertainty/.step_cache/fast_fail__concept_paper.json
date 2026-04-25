@@ -1,0 +1,13 @@
+{
+  "step": "concept_paper",
+  "stage": "fast_fail",
+  "status": "completed",
+  "result": {
+    "agent": "concept_extract_paper",
+    "tokens_used": 34700,
+    "artifacts_written": [
+      "concepts_paper.digest.json"
+    ]
+  },
+  "cached_at": 1777151127.4992158
+}

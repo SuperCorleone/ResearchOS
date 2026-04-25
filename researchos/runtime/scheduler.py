@@ -421,9 +421,10 @@ class ResearchScheduler:
         if schedule_tasks:
             await asyncio.gather(*schedule_tasks, return_exceptions=True)
 
-        # 5. After all pipelines done, run Knowledge Miner to discover new topics
-        if self.auto_professor:
-            await self._maybe_run_knowledge_miner()
+        # 5. Knowledge Miner: discover new topics when no user-injected work
+        # is active. Gating logic lives inside _maybe_run_knowledge_miner so
+        # every caller (autonomous, interactive, future modes) gets it.
+        await self._maybe_run_knowledge_miner()
 
         # 6. Backlog management: sweep expired and re-evaluate candidates
         await self._process_backlog()
@@ -1910,35 +1911,153 @@ class ResearchScheduler:
             )
             return True
 
-        # Inject code_recon.yaml summary into the prompt so the LLM doesn't
-        # have to remember to file_read it.
+        # ── Deterministic strategy decision ─────────────────────────
+        # Pre-LLM: read code_recon.yaml, scan each ok/cached repo for
+        # data-shape files, decide the strategy in pure Python. The LLM
+        # gets the verdict + concrete file list and only describes facts
+        # — it no longer chooses between code_primary / text_fallback.
+        from researchos.utils.data_shape import (
+            decide_strategy as _decide_strategy,
+            scan_repo_for_data,
+        )
+        from researchos.utils.url_classify import classify_url
+        import re as _re
+
+        _URL_RE = _re.compile(r"https?://[^\s)\]>'\"]+", _re.IGNORECASE)
+
         recon_path = pdir / "code_recon.yaml"
-        recon_summary = "(code_recon.yaml not found — text_fallback strategy expected)"
+        recon_repos: list[dict] = []
         if recon_path.exists():
             try:
                 recon = yaml.safe_load(recon_path.read_text()) or {}
-                ok_repos = [
-                    r for r in recon.get("repos", [])
-                    if r.get("status") in ("ok", "cached")
-                ]
-                if not ok_repos:
-                    recon_summary = (
-                        "code_recon.yaml present but no repos with status ok/cached. "
-                        "Use text_fallback strategy."
-                    )
-                else:
-                    lines = [
-                        f"  - slug={r['slug']}, status={r['status']}, "
-                        f"path={r.get('path','?')}, "
-                        f"entry_points={r.get('entry_points', [])}"
-                        for r in ok_repos
-                    ]
-                    recon_summary = (
-                        "Cloned repos available for analysis (paths relative to project root):\n"
-                        + "\n".join(lines)
-                    )
+                recon_repos = list(recon.get("repos", []))
             except Exception:
-                recon_summary = "code_recon.yaml exists but failed to parse"
+                logger.warning("baseline_analyze: code_recon.yaml unparseable")
+
+        ok_repos = [r for r in recon_repos if r.get("status") in ("ok", "cached")]
+
+        hits_by_slug: dict[str, list] = {}
+        for r in ok_repos:
+            repo_path_rel = r.get("path", "")
+            if not repo_path_rel:
+                continue
+            repo_abs = self.project_root / repo_path_rel
+            hits_by_slug[r.get("slug", "")] = scan_repo_for_data(repo_abs)
+
+        forced_strategy = _decide_strategy(recon_repos, hits_by_slug)
+
+        # Build the recon summary block (now also surfaces data-shape hits).
+        if not recon_path.exists():
+            recon_summary = "(code_recon.yaml not found)"
+        elif not ok_repos:
+            recon_summary = (
+                "code_recon.yaml present but no repos with status ok/cached."
+            )
+        else:
+            lines = []
+            for r in ok_repos:
+                slug = r.get("slug", "?")
+                hits = hits_by_slug.get(slug, [])
+                top_hits = hits[:20]
+                hit_lines = "".join(
+                    f"\n      - {h.path}  [{h.tier}: {h.reason}]"
+                    for h in top_hits
+                )
+                if not hits:
+                    hit_lines = "\n      (no data-shape files detected)"
+                elif len(hits) > 20:
+                    hit_lines += f"\n      ... and {len(hits) - 20} more"
+                lines.append(
+                    f"  - slug={slug}, status={r.get('status')}, "
+                    f"path={r.get('path','?')}, "
+                    f"entry_points={r.get('entry_points', [])}"
+                    f"\n    data_shape_hits ({len(hits)}):{hit_lines}"
+                )
+            recon_summary = (
+                "Cloned repos (paths relative to project root):\n"
+                + "\n".join(lines)
+            )
+
+        if forced_strategy == "code_primary":
+            strategy_block = (
+                "## MANDATORY analysis_strategy: code_primary\n"
+                "Reason: at least one cloned repo contains data-shape files "
+                "(see hit list above). You MUST set "
+                "`analysis_strategy: code_primary` and populate "
+                "`analyzed_repos[*].dataset_paths` with paths drawn from the "
+                "data_shape_hits — supplement with code_data_calls evidence "
+                "from entry-point grep. DO NOT choose text_fallback when a "
+                "code_primary path exists; the scheduler will reject schema "
+                "violations and BLOCK the pipeline.\n"
+            )
+        else:  # text_fallback
+            strategy_block = (
+                "## MANDATORY analysis_strategy: text_fallback\n"
+                "Reason: no cloned repo with data-shape files. Set "
+                "`analysis_strategy: text_fallback`, `fallback_used: true`, "
+                "and write a one-line `notes:` justification. "
+                "`analyzed_repos` may be empty.\n"
+            )
+
+        # ── URL pre-classification ──────────────────────────────────
+        # Scan README files in cloned repos for URLs and pre-classify
+        # each via researchos.utils.url_classify. The LLM gets a
+        # confidence-tagged table and is told to copy verbatim for
+        # confidence=high entries — it only judges the small ambiguous
+        # tail (confidence=low). Post-LLM the scheduler re-validates
+        # high-confidence verdicts and rejects mismatches.
+        url_pool: dict[str, str] = {}  # url -> source-repo-slug
+        for r in ok_repos:
+            repo_path_rel = r.get("path", "")
+            if not repo_path_rel:
+                continue
+            repo_abs = self.project_root / repo_path_rel
+            for readme in repo_abs.glob("README*"):
+                try:
+                    text = readme.read_text(errors="replace")
+                except OSError:
+                    continue
+                for url in _URL_RE.findall(text):
+                    url = url.rstrip(".,;:!?)]}>")
+                    if url and url not in url_pool:
+                        url_pool[url] = r.get("slug", "?")
+            for md in list(repo_abs.glob("*.md")) + list(repo_abs.glob("docs/*.md")):
+                try:
+                    text = md.read_text(errors="replace")
+                except OSError:
+                    continue
+                for url in _URL_RE.findall(text):
+                    url = url.rstrip(".,;:!?)]}>")
+                    if url and url not in url_pool:
+                        url_pool[url] = r.get("slug", "?")
+
+        url_classifications: dict[str, "URLClassification"] = {  # type: ignore[name-defined]
+            u: classify_url(u) for u in url_pool
+        }
+        # Stash high-confidence verdicts for post-LLM enforcement.
+        high_conf_urls = {
+            u: c for u, c in url_classifications.items() if c.confidence == "high"
+        }
+
+        if url_classifications:
+            url_lines = []
+            for u, c in sorted(url_classifications.items()):
+                tag = f"[{c.confidence}] kind={c.kind} download={c.should_download}"
+                url_lines.append(f"  - {u}\n      {tag}  ({c.reason})")
+            url_block = (
+                "## URL pre-classification (deterministic; trust [high] verbatim)\n"
+                "The scheduler scanned README/docs in cloned repos and classified "
+                "every URL via the rule-based classifier. For any URL marked "
+                "[high]: copy `kind` + `should_download` exactly into "
+                "`external_data_urls[*]`; the scheduler will BLOCK the pipeline "
+                "if you contradict a [high] verdict (a downloadable badge is a "
+                "common LLM hallucination this guards against). Only [low] entries "
+                "need your judgement.\n\n"
+                + "\n".join(url_lines)
+                + "\n"
+            )
+        else:
+            url_block = ""
 
         prompt = (
             f"Analyse the baseline package(s) for pipeline "
@@ -1948,9 +2067,12 @@ class ResearchScheduler:
             f"- Research Question: {pipeline.research_question}\n\n"
             f"## CODE_RECON output\n"
             f"{recon_summary}\n\n"
+            f"{strategy_block}\n"
+            f"{url_block}"
             f"## Instructions\n"
             f"Follow the workflow in your agent definition (baseline_analyzer.md). "
-            f"Use code-first strategy when repos are available; text_fallback otherwise. "
+            f"The strategy is fixed by the scheduler (above) — describe the "
+            f"facts, do not re-decide. "
             f"Read upstream_sources.yaml in the pipeline directory if present. "
             f"Write `baseline_analysis.yaml` validating against "
             f"`researchos.schemas.baseline_analysis.BaselineAnalysis`.\n"
@@ -1980,6 +2102,67 @@ class ResearchScheduler:
             )
             _write_failed_stub("schema validation failed on agent output")
             return True
+
+        # ── Post-LLM strategy enforcement ───────────────────────────
+        # The scheduler dictated `forced_strategy`; the LLM must honour
+        # it. A mismatch indicates the agent ignored the directive — BLOCK
+        # so the operator can audit, rather than letting an inconsistent
+        # baseline_analysis.yaml flow downstream into DATA_RECON.
+        if analysis.analysis_strategy != forced_strategy:
+            reason = (
+                f"strategy mismatch: scheduler forced '{forced_strategy}' "
+                f"based on data_shape scan, agent wrote "
+                f"'{analysis.analysis_strategy}'"
+            )
+            logger.warning("baseline_analyze: %s — BLOCKING pipeline", reason)
+            pipeline.stage = PipelineStage.BLOCKED
+            pipeline.last_error = f"baseline_analyze:{reason}"
+            self.state.save_pipeline(pipeline, enforce_contracts=False)
+            return True
+        if (
+            analysis.analysis_strategy == "code_primary"
+            and not any(r.dataset_paths for r in analysis.analyzed_repos)
+        ):
+            reason = (
+                "code_primary strategy with no dataset_paths populated; "
+                "data_shape scan found candidates but agent emitted none"
+            )
+            logger.warning("baseline_analyze: %s — BLOCKING pipeline", reason)
+            pipeline.stage = PipelineStage.BLOCKED
+            pipeline.last_error = f"baseline_analyze:{reason}"
+            self.state.save_pipeline(pipeline, enforce_contracts=False)
+            return True
+
+        # ── Post-LLM URL classification enforcement ─────────────────
+        # If LLM contradicts a high-confidence classifier verdict
+        # (e.g. wants to download a known shields.io badge), BLOCK.
+        # The classifier is the deterministic source of truth for
+        # well-known hosts; a mismatch points at LLM hallucination.
+        url_disputes: list[str] = []
+        for ext in analysis.external_data_urls:
+            verdict = high_conf_urls.get(ext.url)
+            if verdict is None:
+                continue
+            if (
+                ext.kind != verdict.kind
+                or ext.should_download != verdict.should_download
+            ):
+                url_disputes.append(
+                    f"{ext.url}: classifier=[{verdict.kind},dl={verdict.should_download}] "
+                    f"agent=[{ext.kind},dl={ext.should_download}]"
+                )
+        if url_disputes:
+            reason = (
+                f"URL classifier mismatch on {len(url_disputes)} high-confidence "
+                f"verdict(s): {'; '.join(url_disputes[:3])}"
+            )
+            logger.warning("baseline_analyze: %s — BLOCKING pipeline", reason)
+            pipeline.stage = PipelineStage.BLOCKED
+            pipeline.last_error = f"baseline_analyze:{reason[:300]}"
+            self.state.save_pipeline(pipeline, enforce_contracts=False)
+            return True
+            return True
+
         logger.info(
             "baseline_analyze: pipeline=%s strategy=%s status=%s repos=%d ext_urls=%d",
             pipeline.pipeline_id, analysis.analysis_strategy, analysis.status,
@@ -2926,13 +3109,40 @@ class ResearchScheduler:
 
     # ── Knowledge Miner & Proposal intake ─────────────────────────
 
+    def _is_focused_mode(self) -> bool:
+        """Inject defines a closed scope: PROPOSAL → FAST_FAIL → MAIN for the
+        user-given paper+proposal, nothing else. Once any ``user_inject`` /
+        ``user_inject_typed`` pipeline exists in artifacts/ the project is in
+        focused mode — the Miner stays silent and stale ``new_idea_*.yaml``
+        in ``knowledge/proposals/`` is not intaken either, regardless of the
+        inject pipeline's stage (active, COMPLETED, FAILED). To leave focused
+        mode the operator must remove the inject pipeline directories.
+        """
+        return any(
+            str(p.metadata.get("source", "")).startswith("user_inject")
+            for p in self.state.load_all_pipelines()
+        )
+
     async def _maybe_run_knowledge_miner(self) -> None:
-        """Run Knowledge Miner if there are no active pipelines and no pending proposals."""
-        # Check miner pause flag
+        """Run Knowledge Miner if there are no active pipelines and no pending proposals.
+
+        Gating order (cheap → expensive):
+          1. Global pause flag (operator override)
+          2. Focused mode: any user-injected pipeline on disk
+          3. single_run bookkeeping
+          4. Active-pipeline guard (autonomous mode)
+          5. Existing proposals / wiki-content prerequisites
+        """
+        # 1. Operator pause flag
         if (self.project_root / "runtime" / ".miner_paused").exists():
             return
 
-        # single_run mode: miner runs at most once. Set flag eagerly to
+        # 2. Focused mode: inject pipelines own the project scope.
+        if self._is_focused_mode():
+            return
+        pipelines = self.state.load_all_pipelines()
+
+        # 3. single_run mode: miner runs at most once. Set flag eagerly to
         # prevent a second run on the next tick before the first proposal
         # is consumed.
         if self.single_run:
@@ -2942,10 +3152,9 @@ class ResearchScheduler:
 
         import re
 
-        # single_run mode: skip the "no active pipelines" guard — we need
-        # the miner to run once regardless of existing pipeline state
+        # 4. single_run mode: skip the "no active pipelines" guard — we
+        # need the miner to run once regardless of existing pipeline state
         if not self.single_run:
-            pipelines = self.state.load_all_pipelines()
             active = [p for p in pipelines if p.stage not in (
                 PipelineStage.COMPLETED, PipelineStage.FAILED, PipelineStage.BLOCKED
             )]
@@ -3122,7 +3331,15 @@ class ResearchScheduler:
           - PROFESSOR_REVIEW → Professor LLM decides
           - BACKLOG → add to backlog for periodic re-evaluation
           - REJECT → archive permanently + record to wiki/failures
+
+        Focused mode: when an inject pipeline owns the project scope, even
+        stale ``new_idea_*.yaml`` left behind by a previous miner run must
+        not be intaken — they would spawn parallel pipelines outside the
+        inject's PROPOSAL → FAST_FAIL → MAIN scope.
         """
+        if self._is_focused_mode():
+            return
+
         import re
         proposals_dir = self.project_root / "knowledge" / "proposals"
         if not proposals_dir.exists():

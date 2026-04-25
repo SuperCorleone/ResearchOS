@@ -1,0 +1,10 @@
+pipeline_id: stacking_sas_uncertainty
+baseline_paper: ''
+analysis_strategy: code_primary
+analyzed_repos: []
+external_data_urls: []
+upstream_trusted_sources_used: []
+fallback_used: false
+status: failed
+notes: "baseline_analyzer fallback stub \u2014 schema validation failed on agent output.\
+  \ Agent raw output preserved at N/A."

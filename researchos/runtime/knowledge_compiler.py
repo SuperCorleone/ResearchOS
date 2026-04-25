@@ -340,8 +340,84 @@ def _slugify(text: str) -> str:
     return slug[:60]
 
 
+# ── Raw registry: explicit allowlist for compile_all_raw ─────────────
+#
+# Contract: only files registered with role ∈ {base_paper, related_work}
+# are auto-compiled by ``compile_all_raw``. Files dropped into raw/ without
+# registration (e.g. a proposal copy that strayed in) are silently skipped.
+# This makes the typed-inject "proposal NOT in wiki" contract enforced by
+# *presence* of a positive marker, not by *absence* of a file.
+
+RAW_REGISTRY_PATH = "runtime/raw_registry.yaml"
+
+_AUTO_COMPILE_ROLES = {"base_paper", "related_work"}
+
+
+def _load_raw_registry(project_root: Path) -> dict[str, str]:
+    path = project_root / RAW_REGISTRY_PATH
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        logger.warning("raw_registry.yaml unreadable; treating as empty")
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def register_raw_paper(
+    raw_file: Path,
+    role: str,
+    project_root: Path | None = None,
+) -> None:
+    """Record a raw/ file's role in ``runtime/raw_registry.yaml``.
+
+    Called by ``cmd_inject`` (typed and legacy modes) so that ``compile_all_raw``
+    knows which files are user-anointed papers vs. unrelated drops.
+    Idempotent: re-registering the same file with the same role is a no-op.
+    Re-registering with a different role wins.
+    """
+    root = project_root or Path(__file__).resolve().parent.parent.parent
+    registry = _load_raw_registry(root)
+    key = raw_file.name
+    if registry.get(key) == role:
+        return
+    registry[key] = role
+    path = root / RAW_REGISTRY_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(registry, default_flow_style=False, sort_keys=True))
+
+
+def _extract_title_from_body(text: str, fallback: str) -> str:
+    """Pull the first markdown ``# `` header (or the first non-empty line if it
+    looks like a title) from *text*. Falls back to *fallback* (filename stem).
+    """
+    if not text:
+        return fallback
+    for line in text.splitlines()[:60]:  # only scan the opening
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("# "):
+            return s[2:].strip()[:200] or fallback
+        # Heuristic: first non-empty line, length-bounded, no sentence-end punctuation.
+        if 5 < len(s) < 200 and s[-1] not in ".?!,;:":
+            return s
+        break
+    return fallback
+
+
 def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Path | None:
-    """Compile a single raw file (md, txt, or pdf) into a wiki page."""
+    """Compile a single raw file (md, txt, or pdf) into a wiki page.
+
+    Frontmatter contains only deterministic facts: title (from first header),
+    source, created, tags, code_refs. Heuristic extraction of RQs / metrics /
+    follow-up questions has been retired — those facts now flow exclusively
+    from the typed inject ``paper_spec_extractor`` agent into
+    ``pipeline_dir/paper_spec.yaml``.
+    """
     root = project_root or Path(__file__).resolve().parent.parent.parent
     wiki = root / "knowledge" / "wiki"
     ts = datetime.now(timezone.utc).isoformat()
@@ -369,18 +445,15 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
     if dest.exists():
         return None
 
+    title = _extract_title_from_body(text, fallback=stem)
     code_refs = extract_code_refs(text)
-    follow_up_questions = extract_follow_up_questions(text)
-    eval_protocol = extract_evaluation_protocol(text)
     content = _make_wiki_page(
-        title=stem,
+        title=title,
         tags=["raw-import", suffix.lstrip(".")],
         source=str(raw_file.relative_to(root)) if raw_file.is_relative_to(root) else str(raw_file),
         created=ts,
         body=text,
         code_refs=code_refs,
-        follow_up_questions=follow_up_questions,
-        evaluation_protocol=eval_protocol if eval_protocol.get("has_explicit_rqs") else None,
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
@@ -390,14 +463,25 @@ def compile_raw_to_wiki(raw_file: Path, project_root: Path | None = None) -> Pat
 
 
 def compile_all_raw(project_root: Path | None = None) -> list[Path]:
-    """Compile all files in /knowledge/raw/ into wiki pages."""
+    """Compile registered files in /knowledge/raw/ into wiki pages.
+
+    Files absent from ``runtime/raw_registry.yaml`` (or registered with a role
+    outside ``_AUTO_COMPILE_ROLES``) are silently skipped — this is what keeps
+    a stray proposal from polluting the wiki.
+    """
     root = project_root or Path(__file__).resolve().parent.parent.parent
     raw_dir = root / "knowledge" / "raw"
-    created = []
+    created: list[Path] = []
     if not raw_dir.exists():
+        return created
+    registry = _load_raw_registry(root)
+    if not registry:
         return created
     for f in sorted(raw_dir.iterdir()):
         if f.name.startswith("."):
+            continue
+        role = registry.get(f.name)
+        if role not in _AUTO_COMPILE_ROLES:
             continue
         page = compile_raw_to_wiki(f, root)
         if page:
@@ -412,26 +496,18 @@ def _make_wiki_page(
     created: str,
     body: str,
     code_refs: list[str] | None = None,
-    follow_up_questions: list[str] | None = None,
-    evaluation_protocol: dict | None = None,
 ) -> str:
     """Format a wiki page with YAML frontmatter.
 
-    When ``code_refs`` is non-empty, a ``code_refs:`` list is added to the
-    frontmatter. These URLs are consumed by the CODE_RECON step.
-
-    When ``evaluation_protocol`` is provided and contains explicit RQs it is
-    stored under the ``evaluation_protocol:`` frontmatter key so that
-    hypothesis_gen can read structured RQ/metric definitions directly without
-    relying on full-text BM25 search.
+    Frontmatter is intentionally minimal (title, tags, source, created,
+    code_refs). Structured paper facts (RQs, metrics, evaluation setup)
+    live in ``pipeline_dir/paper_spec.yaml`` produced by the typed-inject
+    ``paper_spec_extractor`` agent — kb_server / hypothesis_gen read those
+    directly. Wiki frontmatter no longer carries heuristic-extracted fields.
     """
     meta: dict = {"title": title, "tags": tags, "source": source, "created": created}
     if code_refs:
         meta["code_refs"] = list(code_refs)
-    if follow_up_questions:
-        meta["follow_up_questions"] = list(follow_up_questions)
-    if evaluation_protocol and evaluation_protocol.get("has_explicit_rqs"):
-        meta["evaluation_protocol"] = evaluation_protocol
     frontmatter = yaml.dump(meta, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n\n# {title}\n\n{body}\n"
 

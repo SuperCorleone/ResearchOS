@@ -1,0 +1,30 @@
+{
+  "concepts": [
+    {
+      "id": "C1",
+      "definition": "Train a meta-learner that maps the probability estimates from multiple base models to a final probability estimate used in the Analyze component.",
+      "math_formula": "$$\hat{y} = g(\hat{y}_1, \hat{y}_2, \ldots, \hat{y}_n)$$",
+      "code_implementation": "NOT_AVAILABLE",
+      "reference_papers": ["Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"],
+      "reference_codebases": []
+    },
+    {
+      "id": "C2",
+      "definition": "Compare prediction accuracy of stacking-based ensemble against Bayesian Model Averaging using the same dataset.",
+      "math_formula": "$$\text{Accuracy} = \frac{\text{Number of Correct Predictions}}{\text{Total Predictions}}$$",
+      "code_implementation": "NOT_AVAILABLE",
+      "reference_papers": ["Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"],
+      "reference_codebases": []
+    },
+    {
+      "id": "C3",
+      "definition": "Use optimized adaptation strategies leveraging model-averaged predictions, adjusted for stacking-based ensemble effectiveness.",
+      "math_formula": "",
+      "code_implementation": "NOT_AVAILABLE",
+      "reference_papers": ["Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"],
+      "reference_codebases": []
+    }
+  ],
+  "code_side_coverage": 0.0,
+  "code_recon_had_repos": true
+}

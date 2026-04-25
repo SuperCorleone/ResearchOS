@@ -28,6 +28,7 @@ from pathlib import Path
 
 import yaml
 
+from researchos.schemas.baseline_analysis import BaselineAnalysis
 from researchos.schemas.digest import (
     ConceptsDigest,
     HypothesisDigest,
@@ -239,6 +240,97 @@ def assert_baseline_honesty(
 
 
 # ---------------------------------------------------------------------------
+# 5. assert_strategy_actions_consistent
+# ---------------------------------------------------------------------------
+
+def assert_strategy_actions_consistent(
+    baseline: BaselineAnalysis,
+    data_manifest_path: Path | None = None,
+) -> None:
+    """Forbid the 'strategy chosen but no work done' anti-pattern.
+
+    Concrete failure mode this catches (BMA pipeline, 2026-04-25):
+      baseline_analysis.yaml: analysis_strategy=text_fallback
+      data_manifest.yaml:     executed_actions=[], total_files=0
+      → strategy claims a path was taken but no evidence on disk
+
+    Rules:
+      - analysis_strategy == 'code_primary' ⇒ at least one
+        analyzed_repos[*].dataset_paths entry; status MUST NOT be
+        'no_data_found'
+      - analysis_strategy in {'code_primary','external_primary','mixed'} ⇒
+        if data_manifest exists, executed_actions must be non-empty
+      - analysis_strategy == 'text_fallback' ⇒ fallback_used=True AND
+        notes is non-empty (one-line justification)
+    """
+
+    if baseline.analysis_strategy == "code_primary":
+        has_paths = any(r.dataset_paths for r in baseline.analyzed_repos)
+        if not has_paths:
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                "analysis_strategy='code_primary' but no "
+                "analyzed_repos[*].dataset_paths populated. The strategy "
+                "promises code-grounded data extraction; an empty result "
+                "set means the LLM picked the wrong strategy or skipped "
+                "the entry-point grep step.",
+                details={"strategy": baseline.analysis_strategy},
+            )
+        if baseline.status == "no_data_found":
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                "analysis_strategy='code_primary' is incompatible with "
+                "status='no_data_found'. If the repo truly has no data, "
+                "the strategy should be 'text_fallback'.",
+                details={"status": baseline.status},
+            )
+
+    if baseline.analysis_strategy == "text_fallback":
+        if not baseline.fallback_used:
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                "analysis_strategy='text_fallback' requires "
+                "fallback_used=true. Either set the flag or pick a "
+                "different strategy.",
+                details={"strategy": baseline.analysis_strategy},
+            )
+        if not baseline.notes.strip():
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                "analysis_strategy='text_fallback' requires a non-empty "
+                "notes field justifying why no code path was viable.",
+                details={"strategy": baseline.analysis_strategy},
+            )
+
+    if (
+        baseline.analysis_strategy in {"code_primary", "external_primary", "mixed"}
+        and data_manifest_path is not None
+        and data_manifest_path.exists()
+    ):
+        try:
+            manifest = yaml.safe_load(data_manifest_path.read_text()) or {}
+        except Exception as exc:
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                f"data_manifest.yaml unreadable: {exc}",
+                details={"path": str(data_manifest_path)},
+            ) from exc
+        actions = manifest.get("executed_actions", [])
+        if not actions:
+            raise ContractViolation(
+                "strategy_actions_consistent",
+                f"analysis_strategy='{baseline.analysis_strategy}' but "
+                f"data_manifest.executed_actions is empty. Strategy claims "
+                f"data was fetched/copied; the manifest disagrees. Either "
+                f"DATA_RECON silently failed or the strategy is wrong.",
+                details={
+                    "strategy": baseline.analysis_strategy,
+                    "manifest": str(data_manifest_path),
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration helper
 # ---------------------------------------------------------------------------
 
@@ -248,6 +340,7 @@ def enforce_all(
     plan: PlanDigest | None = None,
     concepts: ConceptsDigest | None = None,
     run: RunDigest | None = None,
+    baseline_analysis: BaselineAnalysis | None = None,
     data_manifest_path: Path | None = None,
 ) -> None:
     """Run every applicable guard given whatever digests are currently
@@ -268,3 +361,6 @@ def enforce_all(
 
     if run is not None and data_manifest_path is not None:
         assert_data_manifest_match(data_manifest_path, run)
+
+    if baseline_analysis is not None:
+        assert_strategy_actions_consistent(baseline_analysis, data_manifest_path)

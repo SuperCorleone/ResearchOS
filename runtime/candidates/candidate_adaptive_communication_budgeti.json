@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "adaptive_communication_budgeti",
+  "title": "Adaptive Communication Budgeting for Multi-Agent LLM Workflows",
+  "research_question": "Can a MAPE-K-inspired controller that dynamically allocates communication and deliberation budget across agents reduce latency and token cost while preserving or improving task success in multi-agent LLM workflows?",
+  "hypothesis": "Multi-agent workflows often over-communicate or over-deliberate because they use fixed interaction patterns; a runtime controller that monitors workflow signals and adaptively adjusts message frequency, debate depth, and verification effort will improve cost-quality tradeoffs over static orchestration baselines.",
+  "motivation": "The knowledge base shows repeated rejected ideas around routing, verification, task decomposition, memory, and Bayesian orchestration, suggesting this area is crowded. A clearer gap is communication-budget control: instead of proposing another new routing or decomposition policy, this direction reframes agent orchestration as a self-adaptive control problem focused on runtime allocation of deliberation resources. This is grounded by the self-adaptive systems evidence that model uncertainty and heterogeneous requirements should be handled inside a feedback loop, and it targets a practical failure mode in agentic systems: excessive coordination cost without proportional quality gains.",
+  "evidence": [
+    "failures/duplicate_ideas.md",
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-25T21:09:07.326149+00:00",
+  "status": "pending"
+}

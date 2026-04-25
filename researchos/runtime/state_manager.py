@@ -157,8 +157,14 @@ class StateManager:
         try:
             digests = self._load_step_digests(pdir)
             manifest = pdir / "data_manifest.yaml"
+            baseline_analysis_path = pdir / "baseline_analysis.yaml"
+            ba = None
+            if baseline_analysis_path.exists():
+                from researchos.schemas.baseline_analysis import load_baseline_analysis
+                ba = load_baseline_analysis(baseline_analysis_path)
             enforce_all(
                 **digests,
+                baseline_analysis=ba,
                 data_manifest_path=manifest if manifest.exists() else None,
             )
         except ContractViolation as cv:
