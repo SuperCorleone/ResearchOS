@@ -883,6 +883,84 @@ class Dispatcher:
                     f"Data is available in `data/raw/{pipeline.pipeline_id}/`. "
                     f"Use it directly — do NOT substitute with built-in loaders.\n"
                 )
+        # Inject data_manifest.yaml + baseline_analysis.yaml summary for DESIGN.
+        # exp_designer.md mandates filling plan_dataset.dataset_location and
+        # read_data_step from these artifacts; we surface the key fields right
+        # in the prompt rather than relying on the LLM to remember to file_read.
+        # The baseline_analysis context (with code-evidence per dataset path)
+        # gives DESIGN a much stronger signal than just "files exist".
+        if step == PipelineStep.DESIGN:
+            manifest_path = pdir / "data_manifest.yaml"
+            if manifest_path.exists():
+                try:
+                    mf = yaml.safe_load(manifest_path.read_text()) or {}
+                except Exception:
+                    mf = {}
+                status = mf.get("data_recon_status", "unknown")
+                files = mf.get("files", []) or []
+                file_lines = "\n".join(
+                    f"    - {f.get('path', '?')}  ({f.get('size_bytes', '?')} bytes"
+                    + (f", {f.get('rows')} rows" if f.get("rows") else "")
+                    + ")"
+                    for f in files[:20]
+                )
+                more = (
+                    f"\n    ... ({len(files) - 20} more files)" if len(files) > 20 else ""
+                )
+                data_notice += (
+                    f"\n## DATA_RECON Output (data_manifest.yaml)\n"
+                    f"DATA_RECON ran with status `{status}`. The following files "
+                    f"are available under `data/raw/{pipeline.pipeline_id}/`:\n"
+                    f"{file_lines}{more}\n"
+                    f"\nManifest fields: dataset_name="
+                    f"`{mf.get('dataset_name', '')}`, "
+                    f"source_url=`{mf.get('source_url', '')}`, "
+                    f"directory_hash=`{(mf.get('directory_hash') or '')[:30]}...`\n"
+                    f"\nYou MUST use this data — set `data.source: \"file\"`, "
+                    f"`plan_dataset.dataset_location: \"data/raw/{pipeline.pipeline_id}/\"`, "
+                    f"and reference real filenames in `read_data_step`.\n"
+                )
+
+            analysis_path = pdir / "baseline_analysis.yaml"
+            if analysis_path.exists():
+                try:
+                    ba = yaml.safe_load(analysis_path.read_text()) or {}
+                except Exception:
+                    ba = {}
+                strategy = ba.get("analysis_strategy", "unknown")
+                ba_status = ba.get("status", "unknown")
+                rows = []
+                for repo in ba.get("analyzed_repos", []) or []:
+                    role = repo.get("role", "")
+                    rows.append(f"  Repo `{repo.get('slug','?')}` — {role}")
+                    for ds in (repo.get("dataset_paths", []) or [])[:8]:
+                        rows.append(
+                            f"    · {ds.get('path','?')} "
+                            f"(kind={ds.get('kind','unknown')}) — {ds.get('purpose','')}"
+                        )
+                    calls = repo.get("code_data_calls", []) or []
+                    if calls:
+                        rows.append(
+                            f"    · evidence: {len(calls)} IO call(s) grepped from entry points"
+                        )
+                analyser_block = "\n".join(rows) if rows else "  (no analysed repos)"
+                ext_lines = []
+                for ext in (ba.get("external_data_urls", []) or [])[:5]:
+                    flag = "DOWNLOAD" if ext.get("should_download") else "SKIP"
+                    ext_lines.append(
+                        f"  · [{flag}] {ext.get('url','?')} "
+                        f"(kind={ext.get('kind','other')}) — {ext.get('reason','')}"
+                    )
+                ext_block = "\n".join(ext_lines) if ext_lines else "  (no external URLs)"
+                data_notice += (
+                    f"\n## BASELINE_ANALYZE Output (baseline_analysis.yaml)\n"
+                    f"strategy=`{strategy}` status=`{ba_status}` "
+                    f"fallback_used=`{ba.get('fallback_used', False)}`\n\n"
+                    f"Analysed repos:\n{analyser_block}\n\n"
+                    f"External URL decisions:\n{ext_block}\n\n"
+                    f"This is the LLM-grounded view of the baseline data — prefer it over "
+                    f"any tentative conclusions you might draw from paper text alone.\n"
+                )
 
         # Build reference paper context
         ref_notice = ""

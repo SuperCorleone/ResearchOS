@@ -1,5 +1,0 @@
-pipeline_id: "mitigating_model_uncertainty_i"
-decision: "pause"
-next_milestone: "paper"
-comment: "Milestones 1 and 2 show no experimental outputs, no results.json, no judge verdict, zero budget used, and no evidence that the proposed stacking approach has been implemented or evaluated against the prior BMA baseline. Knowledge-base retrieval confirms the main relevant prior work is the 2022 TUNE/BMA paper, which means novelty may exist only if there is credible empirical evidence that stacking improves robustness under model-selection uncertainty or concept drift. At present, the pipeline has not produced the minimum evidence needed to justify approval to paper, but the idea is not yet disproven; it is blocked by lack of execution rather than negative results. I am therefore pausing rather than killing the pipeline pending concrete experimental artifacts and comparative evaluation."
-created_at: "2026-04-24T18:00:00+00:00"

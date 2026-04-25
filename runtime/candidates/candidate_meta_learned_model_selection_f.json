@@ -1,0 +1,16 @@
+{
+  "pipeline_id": "meta_learned_model_selection_f",
+  "title": "Meta-Learned Model Selection for Heterogeneous-Goal Self-Adaptive AI Systems",
+  "research_question": "Can replacing Bayesian Model Averaging in the analyze stage of a MAPE-K loop with a stacking-based meta-learner improve prediction accuracy and downstream adaptation quality when self-adaptive AI systems must satisfy heterogeneous goals such as thresholds and optimization objectives?",
+  "hypothesis": "A stacking-based analyze module that learns context-dependent weights over heterogeneous predictive models will outperform Bayesian Model Averaging on both predictive accuracy and adaptation effectiveness under heterogeneous requirements, especially when no single candidate model is consistently correct.",
+  "motivation": "The knowledge base identifies model-selection uncertainty in self-adaptive systems as underexplored and explicitly flags future work on extending current BMA-based approaches to additional domains and heterogeneous requirements. This creates a concrete gap: existing MAPE-K analyze modules address uncertainty with BMA, but BMA assumes the true model is among candidates and uses posterior weighting rather than learned performance-based combination. A stacking-based meta-learner is a plausible next step because it can combine diverse models adaptively and may better support AI systems facing mixed threshold and optimization goals.",
+  "evidence": [
+    "concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md",
+    "concepts/research_proposal.md"
+  ],
+  "direction": "self-adaptive-systems",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T23:32:34.136144+00:00",
+  "status": "pending"
+}

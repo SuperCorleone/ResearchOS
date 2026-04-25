@@ -1,0 +1,50 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T23:33:06.485462+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Fixed sequential decomposition with the same agent set, prompts, and budget,
+    but a linear execution plan.
+  expected_signal: At least +3 percentage points success rate and at least 5% reduction
+    in both tokens and latency versus baseline.
+  failure_condition: If success-rate improvement is < 3 percentage points or if token
+    usage and latency are not both reduced by at least 5% relative to the sequential
+    baseline on the evaluation suite, the hypothesis is not supported.
+  hypothesis: On multi-agent workflows with partially independent subtasks, constraint-aware
+    partial-order decomposition yields higher task success and lower coordination
+    cost than fixed sequential decomposition.
+  metric: 'Primary: end-to-end success rate; Secondary: total token usage and wall-clock
+    latency.'
+  min_budget_ratio: 0.25
+gate_reasons:
+- total=12 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a constraint-aware partial-order task decomposition strategy
+    that constructs an explicit dependency graph over subtasks, resources, and execution
+    constraints so independent work can proceed in parallel while required ordering
+    is preserved.
+  problem_gap: Existing methods fail because they force multi-agent workflows into
+    rigid sequential decompositions or rely on lightweight adaptive controls without
+    explicitly representing dependency, resource, and parallel-execution constraints,
+    causing unnecessary coordination cost and avoidable failure propagation.
+  why_it_matters: Which improves end-to-end success rate and reduces token/latency
+    overhead under workflows with nontrivial dependency structure, shared resource
+    limits, and partially parallelizable subproblems.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: constraint_aware_partial_order
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a constraint-aware partial-order task decomposition strategy
+  improve end-to-end success rate and reduce coordination overhead in multi-agent
+  workflows compared with fixed sequential decomposition?
+retrieval_cache_key: f144d92f0a25a89a
+scores:
+  differentiation: 2
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Constraint-aware partial-order task decomposition for multi-agent workflows

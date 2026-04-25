@@ -59,6 +59,7 @@ agent_model_tiers:
   concept_extractor: T2      # legacy 1-pass; being replaced by 2-pass below
   concept_extract_paper: T2  # 2-pass: paper side (math + refs)
   concept_extract_code: T2   # 2-pass: code side (locators)
+  baseline_analyzer: T2      # code-first analysis of cloned baseline package (v5.3)
   # reporter removed — REPORT step is now rendered by researchos.core.publisher
   paper_auditor: T2
   vlm_reviewer: T2
@@ -111,10 +112,35 @@ steps:
 
   code_recon:
     # Shallow-clone reference codebases + static scan.
-    # Pure Python; no LLM. Runs only in MAIN, between DESIGN and CONCEPT_EXTRACT.
+    # Pure Python; no LLM. Runs only in MAIN, between DESIGN and BASELINE_ANALYZE.
     agent: code_recon
     output: code_recon.yaml
     timeout: 240
+    retries: 1
+    type: python
+
+  baseline_analyze:
+    # LLM, code-first analysis of cloned baseline package(s). Greps real IO
+    # calls (pd.read_csv, torch.load, wget, urllib.request.urlretrieve, …)
+    # in entry-point code to identify which files / external URLs the
+    # baseline actually uses. Output baseline_analysis.yaml is consumed by
+    # DATA_RECON without further interpretation. Replaces the v5.2
+    # heuristic tables in data_recon.py.
+    agent: baseline_analyzer
+    output: baseline_analysis.yaml
+    timeout: 360
+    retries: 2
+    type: llm
+
+  data_recon:
+    # Thin executor of baseline_analysis.yaml: copytree dataset_paths,
+    # urlretrieve external_data_urls flagged should_download=true, write
+    # data_manifest.yaml. NO heuristics, NO badge filter, NO data-host
+    # whitelist — the LLM-side analyser owns those decisions.
+    # Pure Python; no LLM. Idempotent (skip if manifest already success).
+    agent: data_recon
+    output: data_manifest.yaml
+    timeout: 360
     retries: 1
     type: python
 
@@ -239,7 +265,9 @@ stages:
     sequence:
       - hypothesis
       - design                 # includes integrated scientific self-review
-      - code_recon
+      - code_recon             # shallow-clone reference repos
+      - baseline_analyze       # LLM code-first: identify real datasets vs. badges/logs/plots
+      - data_recon             # pure-python executor: copy/download per baseline_analysis.yaml
       - concept_paper          # 2-pass concept extraction (paper side)
       - concept_code           # 2-pass concept extraction (code side)
       - code

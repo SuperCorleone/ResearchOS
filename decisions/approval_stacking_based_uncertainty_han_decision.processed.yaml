@@ -1,5 +1,0 @@
-pipeline_id: "stacking_based_uncertainty_han"
-decision: "pause"
-next_milestone: "paper"
-comment: "Pipeline has not produced experimental results, judge verdicts, or any evidence of execution beyond milestone scaffolding. Both milestone reports explicitly show results.json unavailable, no judge output, budget used at 0, and state indicates the pipeline remains at milestone/report stage with referenced artifacts not yet materialized. Knowledge-base review confirms the underlying BMA baseline is real prior work and the stacking idea is a plausible extension, but there is currently no empirical validation, comparative analysis, or risk evidence to justify approval to paper stage. Pause rather than kill because the research direction may still be promising once actual experiments against the BMA baseline are completed."
-created_at: "2026-04-24T00:00:00+00:00"

@@ -145,7 +145,9 @@ class TestRunCodeRecon:
         # weights.pth must be pruned.
         clone_root = project_root / repo["path"]
         assert not (clone_root / "weights.pth").exists()
-        assert "cifar" in " ".join(repo["dataset_hints"]).lower()
+        # v5.3: dataset_hints field removed — README dataset hint scraping moved to
+        # the BASELINE_ANALYZE LLM step, which can read code semantics not just keyword lines.
+        assert "dataset_hints" not in repo
 
         # code_recon.yaml was written next to state.
         out_path = pdir / "code_recon.yaml"
@@ -346,10 +348,21 @@ class TestCodeReconRouting:
         key = (PipelineStage.MAIN, PipelineStep.DESIGN)
         assert _NEXT_STEP[key] == PipelineStep.CODE_RECON
 
-    def test_code_recon_routes_to_concept_extract(self):
+    def test_code_recon_routes_through_baseline_then_data(self):
+        """v5.3: CODE_RECON → BASELINE_ANALYZE → DATA_RECON → CONCEPT_EXTRACT."""
         from researchos.runtime.scheduler import _NEXT_STEP
-        key = (PipelineStage.MAIN, PipelineStep.CODE_RECON)
-        assert _NEXT_STEP[key] == PipelineStep.CONCEPT_EXTRACT
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CODE_RECON)]
+            == PipelineStep.BASELINE_ANALYZE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.BASELINE_ANALYZE)]
+            == PipelineStep.DATA_RECON
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.DATA_RECON)]
+            == PipelineStep.CONCEPT_EXTRACT
+        )
 
     def test_fast_fail_does_not_route_to_code_recon(self):
         from researchos.runtime.scheduler import _NEXT_STEP

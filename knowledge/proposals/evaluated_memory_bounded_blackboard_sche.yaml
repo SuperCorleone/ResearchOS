@@ -1,0 +1,47 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T23:34:24.761921+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Always-communicate shared blackboard that writes all intermediate artifacts
+    to the shared workspace.
+  expected_signal: At least 5% improvement in success-per-1K tokens with non-inferior
+    task success (<=2% absolute drop) and measurable latency reduction.
+  failure_condition: Disproved if success-per-1K tokens improves by less than 5% over
+    baseline, or if task success drops by more than 2% absolute, or if latency does
+    not improve.
+  hypothesis: On complex multi-agent tasks, a utility-ranked memory-bounded blackboard
+    scheduler achieves higher success-per-token than an always-communicate shared-workspace
+    baseline while maintaining no worse than 2% absolute task success.
+  metric: 'Primary: success-per-1K tokens; secondary: absolute task success rate and
+    end-to-end latency.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose a memory-bounded blackboard scheduler that ranks intermediate
+    artifacts by estimated utility and persists only the highest-value shared state
+    under a strict memory budget.
+  problem_gap: Existing methods fail because they either communicate too much intermediate
+    state or rely on fixed coordination patterns, wasting context and tokens on low-value
+    information when communication budgets are tight.
+  why_it_matters: Which improves task success-per-token and latency under constrained
+    communication, context-window, and multi-agent coordination budgets.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: memory_bounded_blackboard_sche
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a memory-bounded blackboard scheduler that writes only utility-ranked
+  intermediate state to a shared workspace reduce communication cost while maintaining
+  or improving task success in multi-agent workflows?
+retrieval_cache_key: 2e11063a808b1891
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Memory-Bounded Blackboard Scheduling for Multi-Agent Workflows

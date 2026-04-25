@@ -1,0 +1,48 @@
+direction: agentic-workflow-optimization
+evaluated_at: '2026-04-24T23:33:34.384420+00:00'
+evaluator_model: ''
+falsification:
+  baseline: Standard multi-agent workflow execution with full message passing of uncompressed
+    intermediate reasoning traces between agents.
+  expected_signal: At least 30% lower communication cost and latency with no more
+    than 2 percentage point absolute degradation in task success.
+  failure_condition: If the summarization method fails to achieve at least 30% reduction
+    in communication tokens or latency, or if task success drops by more than 2 percentage
+    points absolute versus baseline, the hypothesis is disproved.
+  hypothesis: Compared with passing full inter-agent reasoning traces, adaptive budgeted
+    state summaries can reduce total communication tokens and workflow latency by
+    at least 30% while preserving task success within a 2 percentage point absolute
+    drop across representative multi-agent workflow tasks.
+  metric: 'Primary: task success rate; Secondary: total communication tokens and end-to-end
+    latency per workflow.'
+  min_budget_ratio: 0.2
+gate_reasons:
+- total=13 >= 9
+gate_result: pass
+innovation:
+  our_delta: We propose an adaptive summarization layer that compresses inter-agent
+    messages into budgeted state summaries while preserving uncertainty- and decision-relevant
+    information needed for downstream coordination.
+  problem_gap: Existing methods fail because they mainly optimize which agent communicates
+    or when communication occurs, while still transmitting verbose reasoning traces
+    instead of compact, decision-critical workflow state.
+  why_it_matters: Which improves task success–cost efficiency and end-to-end latency
+    under constrained communication budgets in multi-agent orchestration.
+kb_duplicates: []
+kb_related:
+- concepts/taming_model_uncertainty_in_self_adaptive_systems_using_baye.md
+proposal_id: budgeted_state_summaries_for_c
+re_eval_count: 0
+repeat_degree: low
+research_question: Can a workflow controller that adaptively compresses inter-agent
+  messages into budgeted state summaries maintain task success while reducing communication
+  cost and latency in multi-agent orchestration?
+retrieval_cache_key: a4599c4aa738216c
+scores:
+  differentiation: 3
+  falsifiability: 3
+  feasibility: 2
+  novelty: 2
+  significance: 3
+similar_papers: []
+title: Budgeted State Summaries for Communication-Efficient Multi-Agent Workflows

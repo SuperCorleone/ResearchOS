@@ -150,3 +150,21 @@ This page tracks proposals that were rejected by the Topic Evaluator due to high
 - **Gate Result**: reject
 - **Reasons**: 5-axis quick gate total=5/10 < 7 (reject short-circuit)
 - **Rejected At**: 2026-04-24T18:53:14.849329+00:00
+
+## Uncertainty-Triggered Escalation for Multi-Agent Workflows
+- **ID**: uncertainty_triggered_escalati
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=6/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-24T23:33:54.543111+00:00
+
+## Adaptive Memory Compression for Multi-Agent Workflows
+- **ID**: adaptive_memory_compression_fo
+- **Direction**: agentic-workflow-optimization
+- **Repeat Degree**: low
+- **Score**: 0/15
+- **Gate Result**: reject
+- **Reasons**: 5-axis quick gate total=5/10 < 7 (reject short-circuit)
+- **Rejected At**: 2026-04-25T11:44:55.044266+00:00

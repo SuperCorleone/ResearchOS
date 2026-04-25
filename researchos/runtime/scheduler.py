@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import yaml
+
 if TYPE_CHECKING:
     from researchos.runtime.branch_manager import BranchRunner
 
@@ -72,7 +74,9 @@ _NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None]
     (PipelineStage.MAIN, PipelineStep.ALIGNMENT_VALIDATOR): PipelineStep.HYPOTHESIS,
     (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
     (PipelineStage.MAIN, PipelineStep.DESIGN): PipelineStep.CODE_RECON,
-    (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.CONCEPT_EXTRACT,
+    (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.BASELINE_ANALYZE,
+    (PipelineStage.MAIN, PipelineStep.BASELINE_ANALYZE): PipelineStep.DATA_RECON,
+    (PipelineStage.MAIN, PipelineStep.DATA_RECON): PipelineStep.CONCEPT_EXTRACT,
     (PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT): PipelineStep.CODE,
     (PipelineStage.MAIN, PipelineStep.CODE): PipelineStep.CODE_PREFLIGHT,
     (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT): PipelineStep.RUN,
@@ -102,6 +106,8 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     # DESIGN_REVIEW retired 2026-04 (scientific review is now exp_designer's
     # own self-review pass; structural checks stay in design_checks.py).
     PipelineStep.CODE_RECON: "code_recon.yaml",
+    PipelineStep.BASELINE_ANALYZE: "baseline_analysis.yaml",
+    PipelineStep.DATA_RECON: "data_manifest.yaml",
     PipelineStep.CONCEPT_EXTRACT: "concepts.yaml",
     PipelineStep.CONCEPT_PAPER: "concepts_paper.digest.json",
     PipelineStep.CONCEPT_CODE: "concepts.digest.json",
@@ -133,6 +139,18 @@ try:  # code-reference reconnaissance
 except ImportError:  # pragma: no cover
     _run_code_recon_fn = None  # type: ignore[assignment]
     logger.info("code_recon module not available; CODE_RECON will SKIP")
+
+try:  # data-reference reconnaissance + auto-download
+    from researchos.runtime.data_recon import run_data_recon as _run_data_recon_fn  # noqa: F401
+except ImportError:  # pragma: no cover — module always present, guard is defensive
+    _run_data_recon_fn = None  # type: ignore[assignment]
+    logger.info("data_recon module not available; DATA_RECON will SKIP")
+
+try:  # lineage view (Layer 2): rebuild artifacts/pipeline_<id>/lineage.json
+    from researchos.runtime.lineage import write_pipeline_lineage as _write_lineage_fn  # noqa: F401
+except ImportError:  # pragma: no cover
+    _write_lineage_fn = None  # type: ignore[assignment]
+    logger.info("lineage module not available; lineage.json will not be rebuilt")
 
 try:  # baseline metric contract registry
     from researchos.runtime import baseline_registry as _baseline_registry  # noqa: F401
@@ -265,10 +283,16 @@ class ResearchScheduler:
             (main_stage, PipelineStep.PROPOSAL_SPEC.value): PipelineStep.ALIGNMENT.value,
             (main_stage, PipelineStep.ALIGNMENT.value): PipelineStep.ALIGNMENT_VALIDATOR.value,
             (main_stage, PipelineStep.ALIGNMENT_VALIDATOR.value): PipelineStep.HYPOTHESIS.value,
-            # DESIGN -> CODE_RECON -> CONCEPT_EXTRACT -> CODE
+            # DESIGN -> CODE_RECON -> BASELINE_ANALYZE -> DATA_RECON -> CONCEPT_EXTRACT -> CODE
             # (DESIGN_REVIEW step retired 2026-04; exp_designer self-reviews.)
+            # (BASELINE_ANALYZE inserted v5.3 between CODE_RECON and DATA_RECON:
+            #  LLM analyses cloned baseline package code-first, identifies real
+            #  data files vs. badges/logs/plots; replaces the v5.2 hardcoded
+            #  heuristic tables in data_recon.py.)
             (main_stage, PipelineStep.DESIGN.value): PipelineStep.CODE_RECON.value,
-            (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
+            (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.BASELINE_ANALYZE.value,
+            (main_stage, PipelineStep.BASELINE_ANALYZE.value): PipelineStep.DATA_RECON.value,
+            (main_stage, PipelineStep.DATA_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
             (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
             # RUN -> RESULTS_REVERIFY -> CRITIC -> JUDGE -> REPORT
             (main_stage, PipelineStep.RUN.value): PipelineStep.RESULTS_REVERIFY.value,
@@ -1309,6 +1333,7 @@ class ResearchScheduler:
                 if artifact_name:
                     pipeline.artifacts[next_step.value] = artifact_name
                 self.state.save_pipeline(pipeline)
+                self._rebuild_lineage(pipeline)
                 self.state.append_log(
                     f"Step completed (code): {next_step.value}",
                     pipeline.pipeline_id,
@@ -1335,6 +1360,7 @@ class ResearchScheduler:
                     artifact_name = f"milestone_{pipeline.milestone_count + 1}.md"
                 pipeline.artifacts[next_step.value] = artifact_name
             self.state.save_pipeline(pipeline)
+            self._rebuild_lineage(pipeline)
             self.state.append_log(
                 f"Step dispatched: {next_step.value}", pipeline.pipeline_id
             )
@@ -1406,6 +1432,14 @@ class ResearchScheduler:
         # CODE_RECON — pure-Python shallow clone + static scan.
         if step == PipelineStep.CODE_RECON:
             return self._run_code_recon(pipeline, pdir)
+
+        # BASELINE_ANALYZE — LLM, code-first analysis of cloned baseline package.
+        if step == PipelineStep.BASELINE_ANALYZE:
+            return await self._run_baseline_analyze(pipeline, pdir)
+
+        # DATA_RECON — pure-Python executor of baseline_analysis.yaml.
+        if step == PipelineStep.DATA_RECON:
+            return self._run_data_recon(pipeline, pdir)
 
         # CONCEPT_EXTRACT — Stream C agent, but custom prompt so we keep
         # control over artifact placement.
@@ -1604,6 +1638,210 @@ class ResearchScheduler:
                 )
         return True
 
+    def _rebuild_lineage(self, pipeline: PipelineState) -> None:
+        """Best-effort post-step rebuild of artifacts/pipeline_<id>/lineage.json.
+
+        Called after every successful step. Failure is logged and swallowed —
+        the lineage view is derived (no source-of-truth role) and a stale
+        lineage.json is strictly better than blocking pipeline progress.
+
+        Skipped in simulate mode (the pipeline writes synthetic stubs that
+        wouldn't produce a meaningful graph).
+        """
+        if self.simulate or _write_lineage_fn is None:
+            return
+        pdir = (
+            self.project_root / "artifacts" / f"pipeline_{pipeline.pipeline_id}"
+        )
+        if not pdir.exists():
+            return
+        try:
+            _write_lineage_fn(pdir, self.project_root)
+        except Exception:
+            logger.exception(
+                "lineage rebuild failed for pipeline %s (non-fatal)",
+                pipeline.pipeline_id,
+            )
+
+    async def _run_baseline_analyze(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Dispatch baseline_analyzer LLM agent — writes baseline_analysis.yaml.
+
+        The agent reads code_recon.yaml + cloned repos + paper_spec, then
+        greps entry-point code for real IO calls (pd.read_csv, torch.load,
+        wget, …) to identify which files / URLs the baseline actually uses.
+        Output is consumed verbatim by DATA_RECON.
+
+        On any failure (agent missing, validation failure, no repos), write
+        a status=failed stub so DATA_RECON sees a known shape and writes
+        an empty manifest — pipeline continues, downstream sees the gap.
+        """
+        analysis_path = pdir / "baseline_analysis.yaml"
+        raw_sidecar_path = pdir / "baseline_analysis.agent_raw.yaml"
+        from researchos.schemas.baseline_analysis import BaselineAnalysis, load_baseline_analysis
+
+        def _write_failed_stub(reason: str) -> None:
+            # Preserve the agent's actual output (if any) so the next debug
+            # run can see what the LLM tried to write. Without this, the stub
+            # below silently overwrites — losing all evidence of the failure
+            # mode (wrong field names, partial yaml, hallucinated structure).
+            if analysis_path.exists():
+                try:
+                    raw_sidecar_path.write_text(
+                        analysis_path.read_text(errors="replace")
+                    )
+                    logger.info(
+                        "baseline_analyze: preserved agent raw output to %s",
+                        raw_sidecar_path.name,
+                    )
+                except OSError:
+                    logger.warning(
+                        "baseline_analyze: failed to preserve agent raw output",
+                        exc_info=True,
+                    )
+            stub = BaselineAnalysis(
+                pipeline_id=pipeline.pipeline_id,
+                analysis_strategy="code_primary",
+                status="failed",
+                notes=(
+                    f"baseline_analyzer fallback stub — {reason}. "
+                    f"Agent raw output preserved at "
+                    f"{raw_sidecar_path.name if raw_sidecar_path.exists() else 'N/A'}."
+                ),
+            )
+            analysis_path.write_text(
+                yaml.safe_dump(stub.model_dump(), sort_keys=False)
+            )
+
+        if self.simulate:
+            pdir.mkdir(parents=True, exist_ok=True)
+            stub = BaselineAnalysis(
+                pipeline_id=pipeline.pipeline_id,
+                analysis_strategy="code_primary",
+                status="no_data_found",
+                notes="simulate mode — no LLM call, no analysis performed",
+            )
+            analysis_path.write_text(
+                yaml.safe_dump(stub.model_dump(), sort_keys=False)
+            )
+            return True
+
+        # Inject code_recon.yaml summary into the prompt so the LLM doesn't
+        # have to remember to file_read it.
+        recon_path = pdir / "code_recon.yaml"
+        recon_summary = "(code_recon.yaml not found — text_fallback strategy expected)"
+        if recon_path.exists():
+            try:
+                recon = yaml.safe_load(recon_path.read_text()) or {}
+                ok_repos = [
+                    r for r in recon.get("repos", [])
+                    if r.get("status") in ("ok", "cached")
+                ]
+                if not ok_repos:
+                    recon_summary = (
+                        "code_recon.yaml present but no repos with status ok/cached. "
+                        "Use text_fallback strategy."
+                    )
+                else:
+                    lines = [
+                        f"  - slug={r['slug']}, status={r['status']}, "
+                        f"path={r.get('path','?')}, "
+                        f"entry_points={r.get('entry_points', [])}"
+                        for r in ok_repos
+                    ]
+                    recon_summary = (
+                        "Cloned repos available for analysis (paths relative to project root):\n"
+                        + "\n".join(lines)
+                    )
+            except Exception:
+                recon_summary = "code_recon.yaml exists but failed to parse"
+
+        prompt = (
+            f"Analyse the baseline package(s) for pipeline "
+            f"{pipeline.pipeline_id} and write `baseline_analysis.yaml`.\n\n"
+            f"## Pipeline\n"
+            f"- Title: {pipeline.title}\n"
+            f"- Research Question: {pipeline.research_question}\n\n"
+            f"## CODE_RECON output\n"
+            f"{recon_summary}\n\n"
+            f"## Instructions\n"
+            f"Follow the workflow in your agent definition (baseline_analyzer.md). "
+            f"Use code-first strategy when repos are available; text_fallback otherwise. "
+            f"Read upstream_sources.yaml in the pipeline directory if present. "
+            f"Write `baseline_analysis.yaml` validating against "
+            f"`researchos.schemas.baseline_analysis.BaselineAnalysis`.\n"
+        )
+        try:
+            result = await self.dispatcher.dispatch_via_executor(
+                "baseline_analyzer", prompt, pipeline.pipeline_id
+            )
+        except Exception:
+            logger.exception("baseline_analyze dispatch failed")
+            _write_failed_stub("dispatch raised exception")
+            return True
+        if not result.get("success"):
+            logger.warning(
+                "baseline_analyze failed: %s",
+                (result.get("output") or "")[:200],
+            )
+            if not analysis_path.exists():
+                _write_failed_stub("agent run failed and wrote no output")
+            return True
+        # Validate the agent's output against the schema. If invalid, replace
+        # with a failed stub so DATA_RECON gets a known shape.
+        analysis = load_baseline_analysis(analysis_path)
+        if analysis is None:
+            logger.warning(
+                "baseline_analyze: output failed BaselineAnalysis schema validation"
+            )
+            _write_failed_stub("schema validation failed on agent output")
+            return True
+        logger.info(
+            "baseline_analyze: pipeline=%s strategy=%s status=%s repos=%d ext_urls=%d",
+            pipeline.pipeline_id, analysis.analysis_strategy, analysis.status,
+            len(analysis.analyzed_repos), len(analysis.external_data_urls),
+        )
+        return True
+
+    def _run_data_recon(
+        self, pipeline: PipelineState, pdir: Path
+    ) -> bool:
+        """Discover dataset URLs (paper + code_recon hints) and download them.
+
+        Pure Python, no LLM. Never raises: on any failure we write a stub
+        manifest with ``data_recon_status: error`` so DESIGN can still run.
+        """
+        manifest_path = pdir / "data_manifest.yaml"
+        if self.simulate or _run_data_recon_fn is None:
+            pdir.mkdir(parents=True, exist_ok=True)
+            if not manifest_path.exists():
+                manifest_path.write_text(
+                    "# data_recon simulate/stub — module unavailable or simulate mode\n"
+                    f"pipeline_id: {pipeline.pipeline_id}\n"
+                    "data_recon_status: skipped\n"
+                    "discovered_urls: []\n"
+                    "downloaded: []\n"
+                )
+            return True
+        try:
+            _run_data_recon_fn(pdir, self.project_root)
+        except Exception:
+            logger.exception(
+                "data_recon failed for pipeline %s; writing stub manifest",
+                pipeline.pipeline_id,
+            )
+            pdir.mkdir(parents=True, exist_ok=True)
+            if not manifest_path.exists():
+                manifest_path.write_text(
+                    "# data_recon errored; pipeline advances without dataset manifest\n"
+                    f"pipeline_id: {pipeline.pipeline_id}\n"
+                    "data_recon_status: error\n"
+                    "discovered_urls: []\n"
+                    "downloaded: []\n"
+                )
+        return True
+
     async def _run_concept_extract(
         self, pipeline: PipelineState, pdir: Path
     ) -> bool:
@@ -1654,6 +1892,19 @@ class ResearchScheduler:
                     "concepts: []\n"
                 )
             return True
+        # Guardrail: LLMs occasionally leak source-repo URLs into
+        # ``code_implementation``, which violates the AtomicConcept schema and
+        # would BLOCK CODE_PREFLIGHT downstream. Coerce in-place to
+        # NOT_AVAILABLE so the pipeline keeps moving.
+        from researchos.schemas.concept import sanitize_concepts_yaml
+        sanitize_report = sanitize_concepts_yaml(pdir / "concepts.yaml")
+        if sanitize_report["sanitized"]:
+            logger.info(
+                "concept_extract: sanitized %d invalid code_implementation "
+                "entries in %s",
+                len(sanitize_report["sanitized"]),
+                pipeline.pipeline_id,
+            )
         return True
 
     def _run_results_reverify(

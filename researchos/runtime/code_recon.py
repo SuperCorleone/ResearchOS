@@ -5,6 +5,13 @@ Pure Python, no LLM. Clones the reference codebases hinted at by a paper
 ``experiment_plan.yaml::reference_codebases`` list, then produces a
 ``code_recon.yaml`` that the ``concept_extractor`` agent consumes.
 
+The evidence-ref → wiki bridge uses the same ``_slugify`` rule as
+``knowledge_compiler.compile_raw_to_wiki`` (lowercase, non-alnum → ``_``,
+truncated to 60 chars). Without this, evidence_refs whose ``path_or_url``
+points at a long PDF filename never match the slugified wiki page name and
+the wiki's ``code_refs:`` frontmatter is silently dropped — which was the
+direct cause of empty ``repos: []`` in the v5.1 stacking pipeline test.
+
 Design constraints (read-only, safe defaults):
 
 - **Never execute code** from the cloned repository. We only shell out to
@@ -22,6 +29,7 @@ idempotent: re-running overwrites the report.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,7 +37,7 @@ from typing import Iterable
 
 import yaml
 
-from researchos.runtime.knowledge_compiler import extract_code_refs
+from researchos.runtime.knowledge_compiler import _slugify, extract_code_refs
 
 logger = logging.getLogger(__name__)
 
@@ -176,50 +184,6 @@ def _detect_entry_points(repo: Path, limit: int = 5) -> list[str]:
     return found
 
 
-def _detect_dataset_hints(repo: Path) -> list[str]:
-    """Scan README + common config files for dataset download hints.
-
-    We return a small list of raw lines (max 10) that look like they
-    reference a dataset URL, an S3 bucket, or a ``torchvision.datasets``
-    / ``hf_hub_download`` call. This is a hint for the concept_extractor,
-    not a decisive signal.
-    """
-    hints: list[str] = []
-    needles = (
-        "dataset", "data_url", "download", "s3://", "gs://",
-        "torchvision.datasets", "hf_hub_download", "load_dataset",
-        "https://zenodo", "https://huggingface.co/datasets",
-        "http://yann.lecun.com", "cifar", "imagenet", "coco",
-    )
-    readme = _find_first(repo, _README_NAMES)
-    if readme is not None:
-        try:
-            for line in readme.read_text(errors="replace").splitlines():
-                low = line.lower()
-                if any(n in low for n in needles) and len(line.strip()) < 300:
-                    hints.append(line.strip())
-                if len(hints) >= 10:
-                    break
-        except OSError:
-            pass
-    # Also scan a few common config files.
-    for name in ("requirements.txt", "pyproject.toml", "Makefile", "setup.py"):
-        cfg = repo / name
-        if cfg.exists() and cfg.is_file():
-            try:
-                for line in cfg.read_text(errors="replace").splitlines():
-                    low = line.lower()
-                    if any(n in low for n in needles[:10]) and len(line.strip()) < 300:
-                        hints.append(f"[{name}] {line.strip()}")
-                    if len(hints) >= 10:
-                        break
-            except OSError:
-                continue
-        if len(hints) >= 10:
-            break
-    return hints
-
-
 def _detect_license(repo: Path) -> str:
     lic = _find_first(repo, _LICENSE_NAMES)
     if lic is None:
@@ -275,47 +239,65 @@ def gather_urls_for_pipeline(pipeline_dir: Path, project_root: Path) -> list[str
             elif isinstance(item, dict) and item.get("url"):
                 _push(item["url"])
 
-    # 2. state.json / evidence_refs
+    # 2. state.json / evidence_refs — parse once, reuse for both passes.
     state_path = pipeline_dir / "state.json"
+    state: dict = {}
     if state_path.exists():
         try:
             import json
             state = json.loads(state_path.read_text())
         except Exception:
             state = {}
-        for ref in state.get("evidence_refs", []) or []:
-            if isinstance(ref, str):
-                for u in extract_code_refs(ref):
-                    _push(u)
-            elif isinstance(ref, dict):
-                for field in ("url", "repo", "code_url"):
-                    val = ref.get(field)
-                    if isinstance(val, str):
-                        _push(val)
-                # Also scan any string field for URLs.
-                for val in ref.values():
-                    if isinstance(val, str):
-                        for u in extract_code_refs(val):
-                            _push(u)
+
+    for ref in state.get("evidence_refs", []) or []:
+        if isinstance(ref, str):
+            for u in extract_code_refs(ref):
+                _push(u)
+        elif isinstance(ref, dict):
+            # url/repo/code_url are URL-by-name → push directly.
+            for field in ("url", "repo", "code_url"):
+                val = ref.get(field)
+                if isinstance(val, str):
+                    _push(val)
+            # path_or_url can be a local path OR a URL — only push when it
+            # actually starts with http(s):// or git@. Otherwise the local
+            # PDF path leaks in and crashes _shallow_clone downstream.
+            por = ref.get("path_or_url")
+            if isinstance(por, str) and re.match(r"^(https?://|git@)", por):
+                _push(por)
+            # Scan every string field for embedded URLs as a backstop. This
+            # also catches code-host URLs that happen to live in path_or_url.
+            for val in ref.values():
+                if isinstance(val, str):
+                    for u in extract_code_refs(val):
+                        _push(u)
 
     # 3. Wiki pages whose source matches an evidence_ref filename stem.
     wiki = project_root / "knowledge" / "wiki"
-    if state_path.exists() and wiki.exists():
-        try:
-            import json
-            state = json.loads(state_path.read_text())
-        except Exception:
-            state = {}
-        stems: set[str] = set()
+    if wiki.exists() and state.get("evidence_refs"):
+        # Build both raw and slugified stems. ``compile_raw_to_wiki`` writes
+        # pages under ``_slugify(stem)`` (lowercase, non-alnum→_, trunc 60),
+        # so we must compare with the same rule — not raw lowercase.
+        raw_stems: set[str] = set()
+        slug_stems: set[str] = set()
+
+        def _record_stem(text: str) -> None:
+            stem = Path(text).stem
+            if not stem:
+                return
+            raw_stems.add(stem.lower())
+            slug_stems.add(_slugify(stem))
+
         for ref in state.get("evidence_refs", []) or []:
             if isinstance(ref, str):
-                stems.add(Path(ref).stem.lower())
+                _record_stem(ref)
             elif isinstance(ref, dict):
-                for field in ("path", "file", "source"):
+                for field in ("path", "file", "source", "path_or_url"):
                     val = ref.get(field)
                     if isinstance(val, str):
-                        stems.add(Path(val).stem.lower())
-        if stems:
+                        _record_stem(val)
+
+        if raw_stems or slug_stems:
             for page in wiki.rglob("*.md"):
                 try:
                     head = page.read_text(errors="replace")[:4000]
@@ -323,7 +305,18 @@ def gather_urls_for_pipeline(pipeline_dir: Path, project_root: Path) -> list[str
                     continue
                 if "code_refs:" not in head:
                     continue
-                if not any(stem in head.lower() for stem in stems):
+                page_stem = page.stem.lower()
+                # Match if (a) wiki filename's slug starts with one of our
+                # slugged stems (slugify truncates at 60 chars, so equality
+                # is too strict), or (b) the raw stem still appears in the
+                # page head text (covers wikis written from a title).
+                slug_match = any(
+                    page_stem.startswith(s) or s.startswith(page_stem)
+                    for s in slug_stems if s
+                )
+                head_lower = head.lower()
+                text_match = any(s in head_lower for s in raw_stems if s)
+                if not (slug_match or text_match):
                     continue
                 try:
                     fm_end = head.index("---", 3)
@@ -333,6 +326,42 @@ def gather_urls_for_pipeline(pipeline_dir: Path, project_root: Path) -> list[str
                 for u in fm.get("code_refs", []) or []:
                     if isinstance(u, str):
                         _push(u)
+
+    # 4. Direct content scan of locally-extracted markdown (base_paper.md,
+    #    proposal.md, …). Cmd_inject converts the input PDF to markdown and
+    #    writes evidence_refs::path_or_url pointing at this file — its stem
+    #    ("base_paper") is generic, so the wiki bridge in step 3 can't match
+    #    it back to the slugified wiki page. The PDF body, however, contains
+    #    the same code-host URLs the wiki frontmatter would carry. Reading
+    #    the markdown directly recovers them.
+    candidate_local_md: list[Path] = []
+    for ref in state.get("evidence_refs", []) or []:
+        if not isinstance(ref, dict):
+            continue
+        por = ref.get("path_or_url") or ref.get("path") or ""
+        if not isinstance(por, str) or not por:
+            continue
+        if por.startswith(("http://", "https://", "git@")):
+            continue  # remote — handled by step 2
+        local = Path(por)
+        if not local.is_absolute():
+            local = (project_root / local).resolve()
+        if local.suffix.lower() in (".md", ".txt") and local.is_file():
+            candidate_local_md.append(local)
+    # Always include the standard slots even when not in evidence_refs (older
+    # ingest paths may not have populated typed refs).
+    for fallback_name in ("base_paper.md", "proposal.md"):
+        candidate = pipeline_dir / fallback_name
+        if candidate.is_file() and candidate not in candidate_local_md:
+            candidate_local_md.append(candidate)
+
+    for md_path in candidate_local_md:
+        try:
+            text = md_path.read_text(errors="replace")
+        except OSError:
+            continue
+        for u in extract_code_refs(text):
+            _push(u)
 
     return urls
 
@@ -394,7 +423,8 @@ def run_code_recon(
 
         row["commit_sha"] = _head_commit(dest)
         row["entry_points"] = _detect_entry_points(dest)
-        row["dataset_hints"] = _detect_dataset_hints(dest)
+        # Dataset hints (v5.2 README scraping) removed in v5.3 — the
+        # baseline_analyzer LLM step does this with code-first grounding.
         row["license"] = _detect_license(dest)
         report["repos"].append(row)
 

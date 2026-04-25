@@ -45,7 +45,13 @@ class TestPipelineStepEnum:
 
 class TestStepRouting:
     def test_main_design_goes_to_code_recon(self):
-        """MAIN chain post-refactor: DESIGN → CODE_RECON → CONCEPT_EXTRACT → CODE."""
+        """MAIN chain v5.3: DESIGN → CODE_RECON → BASELINE_ANALYZE → DATA_RECON
+        → CONCEPT_EXTRACT → CODE.
+
+        BASELINE_ANALYZE (LLM, code-first) inserted v5.3 between CODE_RECON and
+        DATA_RECON. It analyses cloned baseline package code to identify real
+        datasets vs. badges/logs/plots — replaces the v5.2 hardcoded heuristics.
+        """
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
         assert (
@@ -54,6 +60,14 @@ class TestStepRouting:
         )
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CODE_RECON)]
+            == PipelineStep.BASELINE_ANALYZE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.BASELINE_ANALYZE)]
+            == PipelineStep.DATA_RECON
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.DATA_RECON)]
             == PipelineStep.CONCEPT_EXTRACT
         )
         assert (

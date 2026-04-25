@@ -1,6 +1,0 @@
-comment: '[AUTO-GATE] FAST_FAIL auto-gate: verdict is INCONCLUSIVE with ITERATE recommendation
-  and all 6 key metrics are FAIL. Pipeline blocked to prevent token waste in MAIN
-  stage.'
-created_at: '2026-04-24T08:42:17.238520+00:00'
-decision: pause
-pipeline_id: mitigating_model_uncertainty_i

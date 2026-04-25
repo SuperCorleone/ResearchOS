@@ -42,10 +42,11 @@
 │  PROPOSAL → BASELINE_CONFIRM → FAST_FAIL → [AUTO-GATE] → MAIN        │
 │            → MILESTONE → PAPER → COMPLETED                           │
 │                                                                       │
-│  MAIN 阶段（2026-04-25 新增）：                                        │
+│  MAIN 阶段（v5.3 update）：                                            │
 │    PAPER_SPEC → PROPOSAL_SPEC → ALIGNMENT → ALIGNMENT_VALIDATOR       │
-│      → HYPOTHESIS → DESIGN → CODE_RECON → CONCEPT_PAPER               │
-│      → CONCEPT_CODE → CODE → CODE_PREFLIGHT → RUN → ...               │
+│      → HYPOTHESIS → DESIGN → CODE_RECON → BASELINE_ANALYZE            │
+│      → DATA_RECON → CONCEPT_PAPER → CONCEPT_CODE                      │
+│      → CODE → CODE_PREFLIGHT → RUN → ...                              │
 │                                                                       │
 │  Professor 仍是决策边界的 LLM；但所有 HITL gate（pre-MAIN /           │
 │  milestone-N / pre-publish）在 2026-04 refactor 中移除，改由 typed     │
@@ -167,6 +168,8 @@ REQUIRED PATTERNS（contract 存在时）：
           → [AUTO-GATE] 全 FAIL + INCONCLUSIVE → 自动 PAUSE
         → MAIN（完整质量链）
           → HYPOTHESIS → DESIGN（含 Self-Review）→ CODE_RECON
+            → BASELINE_ANALYZE（LLM code-first 分析复现包：grep IO 调用辨识真数据）
+            → DATA_RECON（薄执行器：照 baseline_analysis.yaml 复制+下载）
             → CONCEPT_PAPER + CONCEPT_CODE（2-pass concept extraction）
             → CODE（按 concept.id 逐项映射）→ CODE_PREFLIGHT（BLOCK 缺项）
             → RUN → RESULTS_REVERIFY（独立子进程重跑比对）
@@ -253,10 +256,300 @@ pipeline stage=BLOCKED + `ContractViolation` 异常向上冒泡。
 
 条件触发：`vlm_reviewer`（有 PNG/JPG 时）、`figure_composer`（有 visualization_plan 时）。
 
-**纯 Python step**（无 LLM）：`alignment_validator`（18 项检查）、`code_recon`、`baseline_confirm`、`results_reverify`、`report`（publisher 渲染）。
+**纯 Python step**（无 LLM）：`alignment_validator`（18 项检查）、`code_recon`、`data_recon`、`baseline_confirm`、`results_reverify`、`report`（publisher 渲染）。
+
+## 自动数据与代码发现（CODE_RECON → BASELINE_ANALYZE → DATA_RECON）
+
+ResearchOS 的核心承诺是 **"用户只交论文 + 提案，剩下的都是系统自己找"**。
+v5.3 把这条流水线分成 **三段职责清晰的 step**：Python 做克隆和 IO，LLM 做语义判断。
+**用户从不需要往 `data/raw/<id>/` 里手动放任何文件**。
+
+> **设计原则（v5.3 重设计）**：凡是"这东西是不是数据 / 是不是 baseline / 是不是装饰"
+> 这类语义判断，**全部交给 LLM**；硬编码 host whitelist / 后缀黑名单 / 目录命名启发
+> 式都已删除。Python 只负责确定性 IO + manifest 生成。
+>
+> 关键洞见：**有代码库时必须用代码分析为主**，远比从论文文本扫描 URL 优越——
+> 代码里的 `pd.read_csv()` / `torch.load()` / `wget` 调用就是 baseline 实际用了什么数据
+> 的真相。论文文本可能列了 5 个数据集但实际只用 1 个；badge SVG 永远不会出现在
+> `pd.read_csv` 的参数里。文本扫描只在 *无代码可分析* 时作为 fallback。
+
+### Step 1: CODE_RECON （pure Python）
+
+`researchos/runtime/code_recon.py` —— 把论文 / proposal / wiki frontmatter 里的
+所有代码托管 URL 摸出来，浅克隆到 `scratch/<id>/code_refs/<owner>__<repo>/`。
+
+URL 来源（优先级降序）：
+
+1. `experiment_plan.yaml::reference_codebases`（如已显式列出）
+2. `state.json::evidence_refs[*]` 字段：`url` / `repo` / `code_url` / `path_or_url`
+3. wiki 页面 frontmatter 里的 `code_refs:` —— 通过 evidence_ref 的 stem 经
+   `_slugify()` 标准化后匹配到 `knowledge/wiki/concepts/<slug>.md`
+
+匹配 GitHub / GitLab / Bitbucket / HuggingFace Hub / Codeberg。Shallow clone
+（`--depth=1 --single-branch`），500 MB 上限，下载后立刻 prune 掉
+`.pth/.bin/.zip/.parquet/...` 等大型权重以节省 scratch 空间。
+
+CODE_RECON v5.3 **不再扫 README 推 dataset_hints**（v5.2 的启发式被删）——这件事
+现在由 BASELINE_ANALYZE 用 LLM 做，更准。
+
+### Step 2: BASELINE_ANALYZE （LLM, code-first） — v5.3 新增
+
+`researchos/agent_defs/baseline_analyzer.md` + 输出 schema
+`researchos/schemas/baseline_analysis.py::BaselineAnalysis`。读取 CODE_RECON
+克隆好的仓库，**先 grep 入口代码里的真实 IO 调用**（`pd.read_csv` /
+`np.load` / `torch.load` / `urllib.request.urlretrieve` / `wget` /
+`hf_hub_download` / 等），从中反推 baseline 实际用到的文件和外部 URL，
+再做语义分类。
+
+输出 `baseline_analysis.yaml`：
+
+```yaml
+analysis_strategy: code_primary       # 或 text_fallback / upstream_trusted / mixed
+analyzed_repos:
+  - slug: matteocamilli__bma-package
+    role: "Complete replication package for the BMA paper"
+    entry_points: [bma_adaptation.py, bma_generator.py]
+    code_data_calls:                  # grep 出的真凭实据
+      - {file: bma_adaptation.py, lineno: 87,
+         call_text: "pd.read_csv('data/training_rescueRobot_25600_64.csv')",
+         resolved_path: data/training_rescueRobot_25600_64.csv}
+    dataset_paths:                    # 要 copy 的 (有上面的 call 作为证据)
+      - {path: data/training_rescueRobot_25600_64.csv, kind: training,
+         purpose: "Loaded by bma_adaptation.py at L87 to fit BMA models."}
+    auxiliary_paths:                  # 显式 skip
+      - {path: plots/, reason: "post-hoc visualisations"}
+      - {path: logs/,  reason: "stale run logs"}
+external_data_urls:
+  - {url: "...zenodo.org/badge/...svg", should_download: false,
+     kind: decorative_badge, reason: "DOI shield SVG, not data"}
+```
+
+**策略选择**：
+
+| 输入 | strategy | 说明 |
+|---|---|---|
+| 至少有一个 `status ∈ {ok,cached}` 的 clone repo | `code_primary` | 默认；grep 入口代码 |
+| 没有 clone（CODE_RECON repos:[]） | `text_fallback` | 退到论文文本扫描；`fallback_used: true` |
+| 存在 `upstream_sources.yaml` 且有 `confidence: trusted` | `upstream_trusted` 或 `mixed` | 上游标注最高优先级（见下） |
+
+### Step 3: DATA_RECON （pure Python, thin executor）
+
+`researchos/runtime/data_recon.py` v5.3 重写为 **薄执行器**——零启发式、零白名单、
+零目录猜测。完全照 `baseline_analysis.yaml` 执行：
+
+- 对每个 `analyzed_repos[*].dataset_paths[*]`：从
+  `scratch/<id>/code_refs/<slug>/<path>` `copytree` 到
+  `data/raw/<id>/<slug>/<path>`
+- 对每个 `external_data_urls[*]` 中 `should_download: true` 的：
+  `urlretrieve` 到 `data/raw/<id>/`
+- 生成 `data_manifest.yaml`（每个文件 SHA256 + `directory_hash`）
+
+URL 下载预算：单 pipeline 500 MB 上限，单文件 90 秒超时。
+
+**幂等**：`data_manifest.yaml` 已存在且 `data_recon_status ∈ {success, partial, cached}`
+则跳过整步。删 manifest 即可强制重跑。
+
+**baseline_analysis 缺失或 `status: failed` 时**：写
+`data_recon_status: no_baseline_analysis` 或 `baseline_analyzer_failed` 的 stub
+manifest，pipeline 不阻塞继续推进。下游 DESIGN 会看到这个状态并据此决定是否
+退到 `synthetic` 数据（必须在 `risk_notes` 中说明）。
+
+### Upstream Trusted Sources 接口（v5.3 预留，待启用）
+
+未来版本会加上游学术研究 agent，可以预先从 paper / 官方补充材料 / 仓库列表中
+找到高置信度的数据 / 代码源，标注好 confidence 后写到
+`artifacts/pipeline_<id>/upstream_sources.yaml`：
+
+```yaml
+pipeline_id: my_pipe
+sources:
+  - kind: dataset_url
+    url: "https://zenodo.org/record/12345/files/main.zip"
+    confidence: trusted          # trusted | high | medium
+    annotated_by: literature_researcher_v2
+    annotation: "Official dataset cited in §4.2 of the supplementary material"
+```
+
+`baseline_analyzer` 见到此文件时：`trusted` 条目 **直接 verbatim 透传** 进
+`baseline_analysis.yaml`（不重新评分），`high` 条目作为强提示加入证据池，
+`medium` 条目按常规证据规则处理。Schema 见
+`researchos/schemas/baseline_analysis.py::UpstreamSources`。
+
+### DESIGN 如何消费
+
+dispatcher 在 DESIGN 步的 prompt 里 **同时** 注入 `data_manifest.yaml` 和
+`baseline_analysis.yaml` 摘要——后者带 code-evidence per dataset path，比单纯
+"文件存在" 强得多。`exp_designer` 强制：
+
+- `data.source: "file"`
+- `plan_dataset.dataset_location: "data/raw/<pipeline_id>/"`
+- `plan_dataset.read_data_step` 必须引用 manifest `files[]` 里真实的文件名
+- `data.consistency_requirement.reference_paper` 取自 `paper_spec.yaml` 标题
+
+manifest 不存在或 `data_recon_status` 表示无数据时才允许 `synthetic`。
+
+### CONCEPT 守门
+
+LLM 偶尔会把仓库 URL 直接写进 `concepts.yaml::code_implementation`（schema 只允许
+`<file>::<func>` / `<slug>::<path>::L<a>-L<b>` / `NOT_AVAILABLE`），CODE_PREFLIGHT
+就会 BLOCK。`scheduler._run_concept_extract` 在 agent 写盘后调用
+`schemas/concept.py::sanitize_concepts_yaml` 自动把 URL 之类的非法值降级为
+`NOT_AVAILABLE` 并 WARN 日志。
+
+### v5.2 → v5.3 重设计的来龙去脉
+
+v5.2 在 DATA_RECON 内部用四张硬编码表 (`_BADGE_FRAGMENTS`、`_DATA_HOSTS`、
+`_DATA_EXTENSIONS`、`_CLONE_DATA_DIRS`) 做"是不是数据"的判断。BMA case 暴露两个
+反模式：
+
+- Zenodo badge SVG `zenodo.org/badge/452358696.svg` 命中 host whitelist 被当数据
+  下载（实际是 1 KB 装饰图片）
+- 假设 baseline 的数据一定在 `data/` 子目录——对 BMA 巧合成立，对 ROS / 自定义
+  layout 的 repo 全错
+
+**v5.3 一刀切**：黑白名单全删；判断改由 `baseline_analyzer` LLM 看代码做，DATA_RECON
+退化成 yaml 解释器。LLM 看 `pd.read_csv('data/x.csv')` 一行就知道 `data/x.csv`
+是真数据；它永远不会"看到 Zenodo badge URL 然后误判为数据"，因为 badge 不会出现在
+任何 IO 调用的参数里。
 
 REPORT 步骤不再有 agent — `researchos/core/publisher.py::render_milestone` 从
 digests 确定性渲染 milestone_N.md（零 LLM）。
+
+## 研究产物图谱（lineage.json）
+
+每条 pipeline 产生的所有 artifact —— ref papers / wiki / code repos / data files /
+concepts / decisions / milestones —— 不再孤立。一份**派生视图**
+`artifacts/pipeline_<id>/lineage.json` 把它们用一张有向图串起来，scheduler
+**每完成一个 step 就重建一次**，永远反映当前真实状态。
+
+> **设计原则**：lineage 是**派生视图，永远不是真理之源**。每条 edge 的真实信息
+> 都已在某个 yaml/json 里；这个模块只做 join。`lineage.json` 任何时候都可以
+> 删掉重生成，丢失它不丢任何研究信息。
+
+### 节点类型（NodeKind）
+
+| kind | 来源 | 例子 |
+|---|---|---|
+| `pipeline` | state.json | 这个 pipeline 本身（根节点） |
+| `paper` | evidence_refs + knowledge/wiki | Taming BMA paper（PDF + 编译后 wiki 页） |
+| `proposal` | evidence_refs (role=proposal) | 用户提案文本 |
+| `code_repo` | code_recon.yaml | matteocamilli/bma-package |
+| `dataset_file` | baseline_analysis.yaml + data_manifest.yaml | training_rescueRobot_25600_64.csv（含 sha256） |
+| `dataset_url` | baseline_analysis.yaml::external_data_urls | Zenodo badge URL（标 should_download=false） |
+| `concept` | concepts.yaml | C2 = "Bayesian Model Averaging" |
+| `step` | state.json::artifacts + workflow_config | step:hypothesis / step:design / ... |
+| `decision` | decisions/<pid>_*.yaml | Professor approve/pause/kill |
+| `milestone_report` | milestone_N.md | milestone 1, milestone 2 |
+| `paper_draft` | paper/<pid>_*.tex | 最终论文草稿 |
+
+### 边关系（RelKind）
+
+| rel | 语义 | 例子 |
+|---|---|---|
+| `derived_from` | 派生关系 | pipeline `derived_from` paper |
+| `references` | 引用关系 | paper `references` code_repo |
+| `produces` | 产出关系 | step:data_recon `produces` dataset_file |
+| `consumes` | 消费关系 | step:design `consumes` data_manifest.yaml |
+| `ships` | 内含关系 | code_repo `ships` dataset_file（仓库内带的数据） |
+| `selects` | 选择关系（带证据） | step:baseline_analyze `selects` dataset_file（证据：grep 出的 IO 调用文件 + 行号） |
+| `defined_in` | 概念→出处 | concept:C2 `defined_in` paper |
+| `implemented_in` | 概念→代码 | concept:C2 `implemented_in` `<file>::<func>` |
+| `next_step` | 流程顺序 | step:hypothesis `next_step` step:design |
+| `applies_to` | 决策对象 | decision:approval_X `applies_to` pipeline |
+| `evaluates` | 评判关系 | step:judge `evaluates` step:run |
+| `tested_with` | 实验—数据 | step:run `tested_with` dataset_file |
+| `cites` | 报告→概念 | milestone `cites` concept |
+
+### 节点 ID 约定（为未来跨 pipeline 合并预留）
+
+跨 pipeline 通用的节点用**内容哈希**：
+- `paper:<sha256(filename)[:12]>` → 同一论文在多 pipeline 中 ID 一致
+- `code_repo:<owner>__<repo>` → 同 GitHub 仓库 ID 一致
+- `dataset_file:<sha256(content)[:12]>` 或 fallback `dataset_file:p<sha(path)>`
+
+Pipeline 局部的节点带 pipeline_id 前缀：
+- `concept:<pid>:<concept_id>`
+- `step:<pid>:<step_name>`
+- `decision:<pid>:<decision_filename>`
+
+未来 Layer 3（项目级 `runtime/research_graph.json`）就能把多条 pipeline 的 lineage
+按节点 ID 自动 merge —— "BMA paper 在哪几条 pipeline 中被用过" 就是查
+`paper:2c67b7b1bfa7` 的入边。
+
+### 重建时机
+
+Scheduler 在每个 step 成功后调一次 `lineage.write_pipeline_lineage(pdir, root)`：
+- specialised step（CODE_RECON / DATA_RECON / BASELINE_ANALYZE / ALIGNMENT_VALIDATOR / ...）
+  完成后
+- 标准 LLM step 完成后
+
+失败被吞掉（`logger.exception` 留痕但不阻塞 pipeline）。simulate 模式下跳过。
+
+实测开销：每次重建 ~10-50 ms（无 LLM、纯 yaml 读），相比一次 step 几秒到几分钟可忽略。
+
+### CLI 用法
+
+```bash
+# 摘要：节点数 / 边数 / 各类节点统计
+researchos lineage <pipeline_id>
+
+# 列出某类节点的所有实例（含 attrs）
+researchos lineage <pid> --kind dataset_file
+researchos lineage <pid> --kind concept
+
+# 完整 JSON
+researchos lineage <pid> --format json > lineage.json
+
+# Mermaid 图（可直接粘到 markdown）
+researchos lineage <pid> --format mermaid
+
+# 调试：哪些 extractor 跑了，找到了什么
+researchos lineage <pid> --diagnostics
+```
+
+### 实测样例（BMA pipeline）
+
+```
+$ researchos lineage stacking_based_uncertainty_han
+Pipeline: stacking_based_uncertainty_han
+Nodes: 74  Edges: 44
+
+Node counts by kind:
+  dataset_file         39   (含 4 个 baseline 实际用的 + 35 个 manifest 列出的)
+  step                 14
+  decision              7
+  concept               6
+  paper                 2
+  dataset_url           2
+  milestone_report      2
+  pipeline              1
+  code_repo             1
+
+Edge counts by relation:
+  next_step            13   (workflow ordering)
+  produces              9   (step → artifact)
+  applies_to            7   (decision → pipeline)
+  defined_in            6   (concept → paper)
+  ships                 4   (repo → dataset)
+  derived_from          2   (pipeline → paper/proposal)
+  references            2   (paper → code_repo)
+  evaluates             1   (judge → run)
+```
+
+可以直接回答："C2 这个 BMA 概念定义来自哪？"——查 `concept:<pid>:C2` 的
+`defined_in` 出边，回到 `paper:<bma>`；"BMA paper 提供了哪些数据？"——
+`paper:<bma> -references-> code_repo:matteocamilli__bma-package -ships-> dataset_file:*`。
+
+### 与 Layer 1 / Layer 3 的关系
+
+- **Layer 1（artifact 自带 provenance 头）**：未来增量做。每个新写的 yaml/json
+  在头部加 `provenance: {pipeline_id, step, producer, inputs[], created_at,
+  content_hash}` 块，方便 lineage 直接读而不必反向解析。**当前不需要**——
+  Layer 2 反向解析已能覆盖 90% 边。
+- **Layer 3（项目级 `runtime/research_graph.json`）**：把所有 pipeline 的
+  lineage 按节点 ID merge 成一张全局图，回答跨 pipeline 问题（"哪些概念在多
+  条 pipeline 复用"、"BMA paper 总共支持过多少 hypothesis"）。设计已就位
+  （ID 系统、edge 语义跨 pipeline 一致），**实现按需**。
 
 ## 原子概念 ↔ 代码双向映射
 

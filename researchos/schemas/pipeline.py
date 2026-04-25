@@ -37,6 +37,8 @@ class PipelineStep(str, Enum):
     # DESIGN_REVIEW retired (2026-04): exp_designer now runs its own
     # scientific self-review; structural checks remain in design_checks.py.
     CODE_RECON = "code_recon"  # shallow clone + static scan of reference codebases
+    BASELINE_ANALYZE = "baseline_analyze"  # LLM: code-first analysis of cloned baseline package
+    DATA_RECON = "data_recon"  # thin executor: copy dataset_paths / download external URLs from baseline_analysis.yaml
     CONCEPT_EXTRACT = "concept_extract"  # atomic concept decomposition (legacy 1-pass)
     CONCEPT_PAPER = "concept_paper"  # 2-pass: paper side (math + refs)
     CONCEPT_CODE = "concept_code"  # 2-pass: code side (locators)

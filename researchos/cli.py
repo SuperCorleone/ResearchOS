@@ -190,6 +190,54 @@ def cmd_kill(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lineage(args: argparse.Namespace) -> int:
+    """Render the lineage graph for a pipeline (json | mermaid | summary)."""
+    import json
+    from researchos.runtime.lineage import build_pipeline_lineage, to_mermaid
+    pdir = _project_root() / "artifacts" / f"pipeline_{args.pipeline_id}"
+    if not pdir.exists():
+        print(f"No pipeline dir: {pdir}", file=sys.stderr)
+        return 1
+    lineage = build_pipeline_lineage(pdir, _project_root())
+
+    if args.format == "mermaid":
+        print(to_mermaid(lineage))
+        return 0
+    if args.format == "json":
+        print(json.dumps(lineage.model_dump(), indent=2))
+        return 0
+    # summary: human-readable counts + filterable node listing
+    from collections import Counter
+    print(f"Pipeline: {lineage.pipeline_id}")
+    print(f"Generated: {lineage.generated_at}")
+    print(f"Nodes: {len(lineage.nodes)}  Edges: {len(lineage.edges)}")
+    print()
+    kinds = Counter(n.kind for n in lineage.nodes)
+    print("Node counts by kind:")
+    for k, v in sorted(kinds.items(), key=lambda x: -x[1]):
+        print(f"  {k:20s} {v}")
+    print()
+    rels = Counter(e.rel for e in lineage.edges)
+    print("Edge counts by relation:")
+    for r, v in sorted(rels.items(), key=lambda x: -x[1]):
+        print(f"  {r:20s} {v}")
+    if args.kind:
+        print()
+        print(f"Nodes of kind={args.kind!r}:")
+        for n in lineage.nodes:
+            if n.kind == args.kind:
+                print(f"  {n.id}  →  {n.label}")
+                for k, v in sorted(n.attrs.items()):
+                    if isinstance(v, (str, int, float, bool)) and v != "":
+                        print(f"      {k}: {v}")
+    if args.diagnostics:
+        print()
+        print("Extraction log:")
+        for line in lineage.extraction_log:
+            print(f"  · {line}")
+    return 0
+
+
 def cmd_tweak(args: argparse.Namespace) -> int:
     """Local implementation — appends to user_directives.yaml without
     needing the whole scheduler stack."""
@@ -340,6 +388,26 @@ def _build_parser() -> argparse.ArgumentParser:
     tweak.add_argument("pipeline_id")
     tweak.add_argument("--directive", required=True)
     tweak.set_defaults(func=cmd_tweak)
+
+    lineage = sub.add_parser(
+        "lineage",
+        help="Render the pipeline's lineage graph (joins paper/code/data/concept/decision)",
+    )
+    lineage.add_argument("pipeline_id")
+    lineage.add_argument(
+        "--format", choices=("summary", "json", "mermaid"), default="summary",
+        help="Output format. summary = counts + optional --kind listing.",
+    )
+    lineage.add_argument(
+        "--kind", default=None,
+        help="When --format=summary, list every node of this kind "
+             "(paper / code_repo / dataset_file / concept / step / decision …)",
+    )
+    lineage.add_argument(
+        "--diagnostics", action="store_true",
+        help="Print per-extractor diagnostics (helpful when edges are missing).",
+    )
+    lineage.set_defaults(func=cmd_lineage)
 
     return p
 

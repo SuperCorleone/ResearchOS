@@ -1,0 +1,15 @@
+{
+  "pipeline_id": "memory_bounded_blackboard_sche",
+  "title": "Memory-Bounded Blackboard Scheduling for Multi-Agent Workflows",
+  "research_question": "Can a memory-bounded blackboard scheduler that writes only utility-ranked intermediate state to a shared workspace reduce communication cost while maintaining or improving task success in multi-agent workflows?",
+  "hypothesis": "Compared with always-communicate and fixed-topology orchestration baselines, a scheduler that adaptively selects which intermediate artifacts enter a shared blackboard under a strict memory budget will improve success-per-token and latency on complex multi-agent tasks by suppressing low-value communication without removing useful coordination.",
+  "motivation": "The knowledge base shows repeated rejections of ideas centered on uncertainty routing, escalation, preference-conditioned replanning, and communication gating for multi-agent workflows, indicating that this space is active but many existing proposals overlap too much. A clearer gap is budgeted shared-state management: how agents should coordinate when communication and context are scarce. This proposal shifts from generic gating or escalation to a concrete orchestration mechanism—a memory-bounded blackboard that ranks and persists only high-utility intermediate results. That makes the question falsifiable, practically relevant for LLM agent systems with context-window and cost constraints, and distinct from previously rejected workflow ideas.",
+  "evidence": [
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T23:34:24.764904+00:00",
+  "status": "pending"
+}

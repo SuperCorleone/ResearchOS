@@ -1,0 +1,15 @@
+{
+  "pipeline_id": "token_budgeted_blackboard_coor",
+  "title": "Token-Budgeted Blackboard Coordination for Multi-Agent Workflows",
+  "research_question": "Can a token-budgeted blackboard memory with selective publish/subscribe rules reduce communication overhead in multi-agent workflows without harming task success on decomposition-heavy AI tasks?",
+  "hypothesis": "Replacing broad peer-to-peer message exchange with a shared blackboard that enforces token budgets and relevance-based publishing will lower latency and token cost while maintaining or improving end-task accuracy by reducing redundant coordination chatter.",
+  "motivation": "The knowledge base shows repeated rejected ideas around uncertainty-aware scheduling, adaptive replanning, and communication gating in multi-agent workflows, suggesting the space is active but crowded. A clear gap is a simpler systems-level intervention focused on coordination substrate design rather than yet another routing or gating heuristic. Because several communication-pruning and gating variants were already rejected, a blackboard-style coordination mechanism offers a distinct, testable alternative: instead of deciding whether agents should talk, it restructures how they share intermediate state under explicit token constraints. This directly targets a likely bottleneck in agentic workflow optimization—coordination overhead during task decomposition—while avoiding overlap with prior rejected proposals.",
+  "evidence": [
+    "failures/duplicate_ideas.md"
+  ],
+  "direction": "agentic-workflow-optimization",
+  "innovation_type": "",
+  "budget_request": 20000,
+  "created_at": "2026-04-24T23:32:03.007652+00:00",
+  "status": "pending"
+}
