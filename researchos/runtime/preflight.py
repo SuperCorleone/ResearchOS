@@ -23,6 +23,8 @@ import logging
 import re
 from pathlib import Path
 
+from researchos.schemas.baseline_diagnose import BaselineReuseCheck
+
 import yaml
 
 from researchos.runtime.design_checks import check_four_slot_plan
@@ -1215,20 +1217,20 @@ def _check_baseline_reuse(pipeline_dir: Path) -> dict:
     """
     analysis_path = pipeline_dir / "baseline_analysis.yaml"
     if not analysis_path.exists():
-        return {
-            "passed": True,
-            "case": "skipped",
-            "reasons": ["baseline_analysis.yaml absent — baseline reuse check skipped"],
-        }
+        return BaselineReuseCheck(
+            passed=True,
+            case="skipped",
+            reasons=["baseline_analysis.yaml absent — baseline reuse check skipped"],
+        ).model_dump()
 
     try:
         analysis = yaml.safe_load(analysis_path.read_text()) or {}
     except Exception as exc:
-        return {
-            "passed": True,
-            "case": "skipped",
-            "reasons": [f"baseline_analysis.yaml unreadable ({exc}) — skipped"],
-        }
+        return BaselineReuseCheck(
+            passed=True,
+            case="skipped",
+            reasons=[f"baseline_analysis.yaml unreadable ({exc}) — skipped"],
+        ).model_dump()
 
     confidence_threshold = _load_confidence_threshold(pipeline_dir)
 
@@ -1244,7 +1246,7 @@ def _check_baseline_reuse(pipeline_dir: Path) -> dict:
 
     # Case C: low confidence or package not acquired → no enforcement
     if confidence < confidence_threshold or not package_acquired:
-        return {"passed": True, "case": "C", "reasons": []}
+        return BaselineReuseCheck(passed=True, case="C", reasons=[]).model_dump()
 
     # Determine whether this is a cross-language port
     plan_path = pipeline_dir / "experiment_plan.yaml"
@@ -1280,7 +1282,9 @@ def _check_baseline_reuse(pipeline_dir: Path) -> dict:
                 "under pipeline directory"
             )
 
-        return {"passed": not reasons, "case": "B", "reasons": reasons}
+        return BaselineReuseCheck(
+            passed=not reasons, case="B", reasons=reasons
+        ).model_dump()
 
     else:
         # Case A: same language — must find 'COPIED FROM:' in at least one baseline file
@@ -1315,4 +1319,6 @@ def _check_baseline_reuse(pipeline_dir: Path) -> dict:
                 "copied baseline code"
             )
 
-        return {"passed": not reasons, "case": "A", "reasons": reasons}
+        return BaselineReuseCheck(
+            passed=not reasons, case="A", reasons=reasons
+        ).model_dump()

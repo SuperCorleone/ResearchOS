@@ -11,6 +11,15 @@ from researchos.schemas.budget import BudgetState
 from researchos.schemas.artifact import ArtifactManifest, ResultsArtifact
 from researchos.schemas.concept import AdvisorVerdict, AtomicConcept
 from researchos.schemas.cost import CostRecord, CostReport
+from researchos.schemas.baseline_diagnose import (
+    BaselineDiagnoseResult,
+    BaselineReuseCheck,
+    DataHashCheck,
+    DiagnoseChecks,
+    HashDiff,
+    HyperparamDiff,
+    HyperparameterCheck,
+)
 from researchos.schemas.evaluation import (
     EvaluationScores,
     FalsificationDesign,
@@ -44,4 +53,11 @@ __all__ = [
     "TopicEvaluation",
     "CostRecord",
     "CostReport",
+    "BaselineDiagnoseResult",
+    "BaselineReuseCheck",
+    "DataHashCheck",
+    "DiagnoseChecks",
+    "HashDiff",
+    "HyperparamDiff",
+    "HyperparameterCheck",
 ]

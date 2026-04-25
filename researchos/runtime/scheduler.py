@@ -140,6 +140,14 @@ except ImportError:  # pragma: no cover
     _baseline_diagnose_fn = None  # type: ignore[assignment]
     logger.info("baseline_diagnose module not available; BASELINE_DIAGNOSE will be a no-op")
 
+# Pydantic schema for the diagnose return shape. Used for defensive
+# model_validate() at the consume site, so producer/consumer drift is caught
+# loudly rather than absorbed into a "everything looks like a dict" no-op.
+try:
+    from researchos.schemas.baseline_diagnose import BaselineDiagnoseResult  # noqa: F401
+except ImportError:  # pragma: no cover
+    BaselineDiagnoseResult = None  # type: ignore[assignment]
+
 try:  # code-reference reconnaissance
     from researchos.runtime.code_recon import run_code_recon as _run_code_recon_fn  # noqa: F401
 except ImportError:  # pragma: no cover
@@ -2415,13 +2423,28 @@ class ResearchScheduler:
                 pass
             return stub
         try:
-            return _baseline_diagnose_fn(pdir) or {}
+            raw = _baseline_diagnose_fn(pdir) or {}
         except Exception:
             logger.exception(
                 "baseline_diagnose.diagnose() crashed for pipeline %s",
                 pipeline.pipeline_id,
             )
             return {"verdict": "escalate_to_l2", "fixer_directives": []}
+
+        # Defensive contract validation. Catches producer/consumer drift
+        # immediately rather than absorbing it into "looks like a dict" no-ops.
+        if BaselineDiagnoseResult is not None:
+            try:
+                validated = BaselineDiagnoseResult.model_validate(raw)
+                return validated.model_dump(exclude_none=True)
+            except Exception as exc:
+                logger.error(
+                    "baseline_diagnose returned shape that fails BaselineDiagnoseResult "
+                    "schema for pipeline %s: %s. Falling back to escalate_to_l2.",
+                    pipeline.pipeline_id, exc,
+                )
+                return {"verdict": "escalate_to_l2", "fixer_directives": []}
+        return raw
 
     def _write_kill_flag_wiki(self, pipeline: "PipelineState") -> None:
         """Write a failure wiki entry when critic emits KILL_FLAG."""

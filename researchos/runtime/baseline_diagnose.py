@@ -31,6 +31,15 @@ from typing import Any
 
 import yaml
 
+from researchos.schemas.baseline_diagnose import (
+    BaselineDiagnoseResult,
+    DataHashCheck,
+    DiagnoseChecks,
+    HashDiff,
+    HyperparamDiff,
+    HyperparameterCheck,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,23 +95,21 @@ def _compare_data_hashes(pipeline_dir: Path) -> dict:
         except Exception:
             pass
 
-    diffs: list[dict] = []
+    diffs: list[HashDiff] = []
     for fpath, expected_sha in expected_hashes.items():
         actual_sha = actual_hashes.get(fpath)
         if actual_sha != expected_sha:
-            diffs.append({
-                "file": fpath,
-                "expected": expected_sha,
-                "actual": actual_sha,
-            })
+            diffs.append(HashDiff(
+                file=fpath,
+                expected=expected_sha,
+                actual=actual_sha,
+            ))
 
     if diffs:
-        result["passed"] = False
-        result["diff"] = diffs
         # If we can name exactly which files differ, the fix is clear: re-download
         # or re-hash.  Mark auto_fixable so the fixer can generate a directive.
-        result["auto_fixable"] = True
-    return result
+        return DataHashCheck(passed=False, diff=diffs, auto_fixable=True).model_dump()
+    return DataHashCheck(passed=True, diff=[], auto_fixable=False).model_dump()
 
 
 def _compare_hyperparameters(pipeline_dir: Path) -> dict:
@@ -157,11 +164,11 @@ def _compare_hyperparameters(pipeline_dir: Path) -> dict:
     if not actual_params:
         return result
 
-    diffs: list[dict] = []
+    diffs: list[HyperparamDiff] = []
     for param, expected_val in paper_params.items():
         actual_val = actual_params.get(param)
         if actual_val is None:
-            diffs.append({"param": param, "expected": expected_val, "actual": None})
+            diffs.append(HyperparamDiff(param=param, expected=expected_val, actual=None))
             continue
         # Numeric tolerance
         try:
@@ -172,12 +179,11 @@ def _compare_hyperparameters(pipeline_dir: Path) -> dict:
         # String equality fallback
         if str(actual_val) == str(expected_val):
             continue
-        diffs.append({"param": param, "expected": expected_val, "actual": actual_val})
+        diffs.append(HyperparamDiff(param=param, expected=expected_val, actual=actual_val))
 
     if diffs:
-        result["passed"] = False
-        result["diff"] = diffs
-    return result
+        return HyperparameterCheck(passed=False, diff=diffs).model_dump()
+    return HyperparameterCheck(passed=True, diff=[]).model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -214,19 +220,19 @@ def diagnose(pipeline_dir: Path) -> dict:
     # Guard: missing or malformed baseline_analysis.yaml
     analysis_path = pipeline_dir / "baseline_analysis.yaml"
     if not analysis_path.exists():
-        stub = {
-            "verdict": "escalate_to_l2",
-            "reason": "baseline_analysis.yaml unavailable",
-        }
+        stub = BaselineDiagnoseResult(
+            verdict="escalate_to_l2",
+            reason="baseline_analysis.yaml unavailable",
+        ).model_dump(exclude_none=True)
         out_path.write_text(json.dumps(stub, indent=2))
         return stub
     try:
         yaml.safe_load(analysis_path.read_text())
     except Exception as exc:
-        stub = {
-            "verdict": "escalate_to_l2",
-            "reason": f"baseline_analysis.yaml malformed: {exc}",
-        }
+        stub = BaselineDiagnoseResult(
+            verdict="escalate_to_l2",
+            reason=f"baseline_analysis.yaml malformed: {exc}",
+        ).model_dump(exclude_none=True)
         out_path.write_text(json.dumps(stub, indent=2))
         return stub
 
@@ -263,14 +269,21 @@ def diagnose(pipeline_dir: Path) -> dict:
     else:
         verdict = "escalate_to_l2"
 
-    report = {
-        "verdict": verdict,
-        "fixer_directives": fixer_directives,
-        "checks": {
-            "data_hashes": hash_check,
-            "hyperparameters": hp_check,
-        },
-    }
+    # Build via Pydantic so the contract with consumers is enforced at the
+    # producer site. Tests + scheduler still see a plain dict via model_dump().
+    # Note: full form uses default model_dump() (not exclude_none) because
+    # HashDiff.actual=None is a meaningful "file missing from manifest" signal
+    # that must survive the round-trip. Stub form (no checks) uses exclude
+    # to keep optional top-level fields out.
+    result = BaselineDiagnoseResult(
+        verdict=verdict,  # type: ignore[arg-type]
+        fixer_directives=fixer_directives,
+        checks=DiagnoseChecks(
+            data_hashes=DataHashCheck(**hash_check),
+            hyperparameters=HyperparameterCheck(**hp_check),
+        ),
+    )
+    report = result.model_dump(exclude={"reason", "note"})
 
     out_path.write_text(json.dumps(report, indent=2))
     logger.info(
