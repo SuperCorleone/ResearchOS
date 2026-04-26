@@ -767,6 +767,117 @@ def _cmd_continue_deprecated_body(args: argparse.Namespace) -> None:
 # ── inject ─────────────────────────────────────────────────────
 
 
+def _auto_derive_title_question(
+    proposal_path: "Path | None",
+    base_paper_path: "Path",
+) -> tuple[str, str, dict[str, str]]:
+    """Best-effort heuristic extraction for typed inject naming.
+
+    Returned ``title`` / ``question`` are placeholders to seed
+    ``PipelineDefinition`` and the pipeline_id slug. The authoritative
+    structured proposal lives in ``proposal_spec.yaml``, written by the
+    ``proposal_spec_extractor`` LLM step downstream — the values here are
+    not relied upon by any later step beyond display / id derivation.
+
+    Returns:
+        (title, question, sources) where ``sources`` records the origin
+        per field (e.g. ``{"title": "auto:proposal_h1",
+        "question": "auto:rq_grep"}``) for audit. If extraction fails,
+        falls back to ``base_paper`` filename stem and a placeholder.
+    """
+    import re
+
+    sources: dict[str, str] = {}
+    title: str | None = None
+    question: str | None = None
+
+    def _read(path: "Path | None") -> str:
+        if path is None or not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    proposal_text = _read(proposal_path)
+    base_text = _read(base_paper_path) if base_paper_path.suffix.lower() in (".md", ".txt") else ""
+
+    # ── Title ────────────────────────────────────────────────────────
+    # Prefer proposal H1 → proposal first non-trivial line → base_paper H1
+    # → base_paper filename stem.
+    for text, src_proposal_h1, src_first_line, src_proposal_pdf_first_line in (
+        (proposal_text, "auto:proposal_h1", "auto:proposal_first_line", None),
+        (base_text, "auto:base_paper_h1", "auto:base_paper_first_line", None),
+    ):
+        if not text:
+            continue
+        for line in text.splitlines()[:80]:
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("# "):
+                title = s[2:].strip()[:200]
+                sources["title"] = src_proposal_h1
+                break
+            if 5 < len(s) < 200 and s[-1] not in ".?!,;:":
+                title = s[:200]
+                sources["title"] = src_first_line
+                break
+        if title:
+            break
+
+    if not title:
+        stem = base_paper_path.stem.replace("_", " ").replace("-", " ").strip()
+        title = stem[:200] or "untitled-inject"
+        sources["title"] = "auto:base_paper_stem"
+
+    # ── Research question ────────────────────────────────────────────
+    # 1) Explicit RQ markers in proposal/base.
+    # 2) First sentence ending in '?'.
+    # 3) Placeholder (proposal_spec_extractor will overwrite later).
+    rq_patterns = (
+        r"(?im)^\s*(?:RQ\d?\s*[:.\-]\s*|Research\s+Question\s*[:.\-]\s*)(.+?)(?:\n|$)",
+        r"(?im)^\s*(?:We\s+(?:ask|investigate|examine|study|address)\s*[:.\-]?\s*)(.+?)(?:\n|$)",
+        r"(?im)^\s*(?:Hypothesis\s*[:.\-]\s*)(.+?)(?:\n|$)",
+        r"(?im)^\s*(?:Question\s*[:.\-]\s*)(.+?)(?:\n|$)",
+    )
+    for text in (proposal_text, base_text):
+        if not text:
+            continue
+        for pat in rq_patterns:
+            m = re.search(pat, text)
+            if m:
+                cand = m.group(1).strip().rstrip(".")
+                if 10 < len(cand) < 500:
+                    question = cand
+                    sources["question"] = "auto:rq_grep"
+                    break
+        if question:
+            break
+
+    if not question:
+        for text in (proposal_text, base_text):
+            if not text:
+                continue
+            for line in text.splitlines():
+                s = line.strip()
+                if s.endswith("?") and 15 < len(s) < 500:
+                    question = s
+                    sources["question"] = "auto:question_mark"
+                    break
+            if question:
+                break
+
+    if not question:
+        question = (
+            "(placeholder — proposal_spec_extractor will derive structured "
+            "research_questions[] from base_paper.md / proposal.md)"
+        )
+        sources["question"] = "placeholder"
+
+    return title, question, sources
+
+
 def cmd_inject(args: argparse.Namespace) -> None:
     """Inject user-provided papers (and optional proposal) into the system.
 
@@ -812,20 +923,6 @@ def cmd_inject(args: argparse.Namespace) -> None:
 
     # ── TYPED MODE ──────────────────────────────────────────────────────────
     if base_paper:
-        if not args.title or not args.question:
-            print(
-                "  ERROR: --base-paper requires --title and --question.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        pipeline_id = args.id or _slugify(args.title)
-        pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
-        if pdir.exists():
-            print(f"  ERROR: Pipeline '{pipeline_id}' already exists.", file=sys.stderr)
-            sys.exit(1)
-        pdir.mkdir(parents=True, exist_ok=True)
-
         # 1. Validate base_paper. Inject is dedicated and isolated:
         # the file goes ONLY into pipeline_<id>/, never knowledge/raw/ or
         # the global wiki. Downstream KB retrieval is constrained to
@@ -834,6 +931,32 @@ def cmd_inject(args: argparse.Namespace) -> None:
         if not base_src.exists():
             print(f"  ERROR: Base paper not found: {base_paper}", file=sys.stderr)
             sys.exit(1)
+
+        # 1b. Auto-derive title / question from the supplied materials when
+        # the user didn't pass them explicitly. Typed inject's promise is
+        # "give me materials, I'll figure out naming" — the authoritative
+        # structured proposal is produced later by ``proposal_spec_extractor``.
+        proposal_src_for_derive = Path(proposal_path) if proposal_path else None
+        title = args.title
+        question = args.question
+        auto_sources: dict[str, str] = {}
+        if not title or not question:
+            d_title, d_question, auto_sources = _auto_derive_title_question(
+                proposal_src_for_derive, base_src
+            )
+            if not title:
+                title = d_title
+                print(f"  Auto-derived title: {title!r}  (source: {auto_sources['title']})")
+            if not question:
+                question = d_question
+                print(f"  Auto-derived question: {question!r}  (source: {auto_sources['question']})")
+
+        pipeline_id = args.id or _slugify(title)
+        pdir = ARTIFACTS_DIR / f"pipeline_{pipeline_id}"
+        if pdir.exists():
+            print(f"  ERROR: Pipeline '{pipeline_id}' already exists.", file=sys.stderr)
+            sys.exit(1)
+        pdir.mkdir(parents=True, exist_ok=True)
 
         # 2. Write base_paper to pipeline dir (convert PDF→md text if PDF).
         base_paper_dest = pdir / "base_paper.md"
@@ -874,11 +997,15 @@ def cmd_inject(args: argparse.Namespace) -> None:
         for rw in related_work:
             refs.append(TypedEvidenceRef(role="related_work", path_or_url=rw))
 
-        # 5. Save PipelineDefinition.
+        # 5. Save PipelineDefinition. ``title`` / ``research_question`` are
+        # the user-supplied values when present, else auto-derived
+        # placeholders (the authoritative structured proposal lives in
+        # ``proposal_spec.yaml`` which the proposal_spec_extractor LLM step
+        # produces from base_paper.md + proposal.md inside the pipeline).
         pipeline_def = PipelineDefinition(
             pipeline_id=pipeline_id,
-            title=args.title,
-            research_question=args.question,
+            title=title,
+            research_question=question,
             budget_request=args.budget,
             source="user_inject_typed",
             evidence_refs=refs,
@@ -1578,8 +1705,21 @@ def main() -> None:
     # inject
     p_inject = subparsers.add_parser("inject", help="Inject papers (+ optional proposal) into the system")
     p_inject.add_argument("papers", nargs="+", help="Paper files (PDF, MD, TXT) to import")
-    p_inject.add_argument("--title", help="Proposal title (creates pipeline directly, skips Miner)")
-    p_inject.add_argument("--question", help="Research question (required with --title)")
+    p_inject.add_argument(
+        "--title",
+        help=(
+            "Optional proposal title for pipeline_id. Typed mode auto-derives "
+            "from proposal H1 / base_paper stem when omitted."
+        ),
+    )
+    p_inject.add_argument(
+        "--question",
+        help=(
+            "Optional research question. Typed mode auto-derives from "
+            "proposal/base_paper RQ markers when omitted; the authoritative "
+            "structured proposal is produced by proposal_spec_extractor."
+        ),
+    )
     p_inject.add_argument("--id", help="Pipeline ID (auto-generated from title if omitted)")
     p_inject.add_argument("--budget", type=int, default=20000, help="Budget in credits (default 20000)")
 

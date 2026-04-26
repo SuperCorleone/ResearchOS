@@ -95,14 +95,33 @@
 ### Typed inject 模式
 
 ```bash
+# 最小调用（推荐）：只给材料，title / question 自动派生
 researchos inject \
   --base-paper paper.pdf \
   --proposal proposal.md \
   --ref-code https://github.com/owner/repo \
-  --title "..." --question "..." --budget 20000
+  --budget 20000
+
+# 显式覆盖（可选）
+researchos inject \
+  --base-paper paper.pdf --proposal proposal.md \
+  --title "STACK-SAS" --question "Does X reduce uncertainty?"
 ```
 
 每个文件按 role 分类：`base_paper` / `proposal` / `ref_code` / `related_work`。
+
+**title / question 自动派生（2026-04-26）**：typed inject 不再硬性要求 `--title` / `--question`。给材料就行，CLI 用启发式从 `proposal.md` / `base_paper.md` 抽取占位值（仅用于命名 + `pipeline_id`）：
+
+| 字段 | 来源优先级 | 失败回退 |
+|---|---|---|
+| `title` | proposal H1 → proposal 首行非句子 → base_paper H1 → base_paper 文件名 stem | `untitled-inject` |
+| `question` | proposal `RQ:` / `Research Question:` / `Hypothesis:` / `We ask/study:` 等正则 → 任意以 `?` 结尾的句子 | `(placeholder — proposal_spec_extractor will derive...)` |
+
+抽到的来源会打印到 stdout（`auto:proposal_h1` / `auto:rq_grep` / `auto:base_paper_stem` / `placeholder` 五种），不满意可显式传 `--title` / `--question` 覆盖。
+
+**派生只是占位**：pipeline 内的 `proposal_spec_extractor` LLM step 才是 research_questions / change_type / new_components 的权威来源——它写 `proposal_spec.yaml`，下游 design / hypothesis 步骤都消费它。CLI 抽取从不被 routing 后续依赖。
+
+`create` 命令（手动提案模式）依然保留 `--title` / `--question` 硬性必填——那是无材料场景，无从派生。
 
 **完全隔离（2026-04-26 重构）**：typed inject 是 ResearchOS 的一条独立轨道。base_paper + proposal 只入 pipeline 自己的目录，**不**与系统其他 raw / wiki / pipeline 共享任何状态：
 
@@ -357,6 +376,23 @@ URL 来源（优先级降序）：
 
 CODE_RECON v5.3 **不再扫 README 推 dataset_hints**（v5.2 的启发式被删）——这件事
 现在由 BASELINE_ANALYZE 用 LLM 做，更准。
+
+**入口检测（2026-04-26 加强）**：`_detect_entry_points` 三层兜底，避免非常规命名仓库
+（如 BMA 的 `bma_adaptation.py` / `bma_generator.py`）出现 `entry_points: []` 让
+LLM 无所适从：
+
+1. 命中 `_ENTRY_POINT_NAMES` 白名单（`train.py / main.py / run.py / experiment.py / inference.py / eval.py / benchmark.py`）—— 全树搜
+2. 顶层 `*.py` 含 `if __name__ == "__main__":` 块 —— 抓"按方法命名的入口脚本"
+3. 顶层任意 `*.py` 兜底 —— 库式仓库无 CLI 入口时也至少给 LLM 目标可 grep
+
+排除 `tests/ test/ .git/ build/ dist/ docs/ doc/ node_modules/ site-packages/ venv/`
+等段。`limit=10`。
+
+**data_shape 持久化（2026-04-26 新增）**：`run_code_recon` 现在把
+`data_shape.scan_repo_for_data` 的结果（top 20 命中 + 总数）写进 `code_recon.yaml`
+的 `repos[*].data_shape_hits` / `data_shape_hit_count` 字段，原本只在 scheduler 内存里
+喂 LLM prompt。好处：(a) artifact 自包含，无需重扫；(b) lineage / alignment_validator
+可直接消费；(c) 出问题时 audit 能看到当时 LLM 拿到的数据清单。
 
 ### Step 2: BASELINE_ANALYZE （LLM, code-first） — v5.3 新增
 

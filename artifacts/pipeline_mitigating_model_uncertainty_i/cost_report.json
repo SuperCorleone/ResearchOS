@@ -1,0 +1,106 @@
+{
+  "pipeline_id": "mitigating_model_uncertainty_i",
+  "records": [
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "hypothesis_gen",
+      "agent_name": "hypothesis_gen",
+      "model_name": "gpt-5.4",
+      "input_tokens": 58513,
+      "output_tokens": 2300,
+      "total_tokens": 60813,
+      "credits_used": 61,
+      "duration_seconds": 51.16,
+      "timestamp": "2026-04-26T12:00:13.255965+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "exp_designer",
+      "agent_name": "exp_designer",
+      "model_name": "gpt-5.4",
+      "input_tokens": 48866,
+      "output_tokens": 3878,
+      "total_tokens": 52744,
+      "credits_used": 53,
+      "duration_seconds": 59.93,
+      "timestamp": "2026-04-26T12:01:15.246465+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "concept_extract_paper",
+      "agent_name": "concept_extract_paper",
+      "model_name": "gpt-4o",
+      "input_tokens": 47916,
+      "output_tokens": 1487,
+      "total_tokens": 49403,
+      "credits_used": 50,
+      "duration_seconds": 20.58,
+      "timestamp": "2026-04-26T13:01:30.268910+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "concept_extract_code",
+      "agent_name": "concept_extract_code",
+      "model_name": "gpt-4o",
+      "input_tokens": 57282,
+      "output_tokens": 1946,
+      "total_tokens": 59228,
+      "credits_used": 60,
+      "duration_seconds": 21.54,
+      "timestamp": "2026-04-26T13:01:56.857864+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "coder",
+      "agent_name": "coder",
+      "model_name": "gpt-5.4",
+      "input_tokens": 234320,
+      "output_tokens": 9077,
+      "total_tokens": 243397,
+      "credits_used": 244,
+      "duration_seconds": 141.3,
+      "timestamp": "2026-04-26T13:04:23.220934+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "experiment_runner",
+      "agent_name": "experiment_runner",
+      "model_name": "o4-mini",
+      "input_tokens": 281753,
+      "output_tokens": 18038,
+      "total_tokens": 299791,
+      "credits_used": 300,
+      "duration_seconds": 143.3,
+      "timestamp": "2026-04-26T13:06:56.670489+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "judge",
+      "agent_name": "judge",
+      "model_name": "gpt-5.4",
+      "input_tokens": 18112,
+      "output_tokens": 538,
+      "total_tokens": 18650,
+      "credits_used": 19,
+      "duration_seconds": 10.42,
+      "timestamp": "2026-04-26T13:07:17.187729+00:00"
+    },
+    {
+      "pipeline_id": "mitigating_model_uncertainty_i",
+      "step_name": "professor",
+      "agent_name": "professor",
+      "model_name": "gpt-5.4",
+      "input_tokens": 10972,
+      "output_tokens": 956,
+      "total_tokens": 11928,
+      "credits_used": 12,
+      "duration_seconds": 17.43,
+      "timestamp": "2026-04-26T13:07:34.664178+00:00"
+    }
+  ],
+  "total_input_tokens": 757734,
+  "total_output_tokens": 38220,
+  "total_tokens": 795954,
+  "total_credits": 799,
+  "total_duration_seconds": 465.66
+}

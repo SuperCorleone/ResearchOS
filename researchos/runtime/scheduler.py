@@ -1273,7 +1273,12 @@ class ResearchScheduler:
             # Branches will be scheduled in subsequent ticks via _schedule_branch_steps
             return
 
-        # Idempotent: check if output artifact already exists
+        # Idempotent: check if output artifact already exists.
+        # Trust gate (2026-04-26): an artifact whose internal `status` field
+        # marks it as a skeleton / failed / pending stub does NOT count as
+        # "completed" — the underlying step never ran successfully and
+        # treating it as done lets fabricated state flow downstream.
+        # See _is_artifact_complete() for the per-step rules.
         expected_output = self.workflow.get_step_output(next_step.value) or STEP_ARTIFACT.get(next_step)
         if expected_output:
             expected = (
@@ -1282,13 +1287,19 @@ class ResearchScheduler:
                 / f"pipeline_{pipeline.pipeline_id}"
                 / expected_output
             )
-            if expected.exists():
+            if expected.exists() and self._is_artifact_complete(next_step, expected):
                 logger.info(
                     "Artifact %s already exists, advancing", expected.name
                 )
                 pipeline.step = next_step
                 self.state.save_pipeline(pipeline)
                 return
+            elif expected.exists():
+                logger.info(
+                    "Artifact %s exists but marks as incomplete/skeleton — "
+                    "re-running step %s",
+                    expected.name, next_step.value,
+                )
 
         # ── Change 4B: inject baseline confidence brief before DESIGN ───────
         # Written as a sidecar file (design_baseline_brief.txt) so the
@@ -1357,6 +1368,51 @@ class ResearchScheduler:
                 self.state.append_log(
                     f"Data pre-flight: {compliance['reason']}", pipeline.pipeline_id
                 )
+
+        # Pre-flight (2026-04-26): RUN must NOT execute when code_preflight
+        # already determined no experiment code exists. The previous
+        # behaviour let experiment_runner produce plausible-looking metrics
+        # against synthetic/no code, masking the real failure as a
+        # successful run — see pipeline_mitigating_model_uncertainty_i for
+        # the failure mode (precision=0.65 on 924 rows of duplicated
+        # validation data, with code_patch.diff containing no real BMA or
+        # stacking implementation).
+        if next_step == PipelineStep.RUN:
+            preflight_path = (
+                self.project_root
+                / "artifacts"
+                / f"pipeline_{pipeline.pipeline_id}"
+                / "preflight_report.json"
+            )
+            if preflight_path.exists():
+                try:
+                    import json as _json
+                    pf = _json.loads(preflight_path.read_text())
+                except Exception:
+                    pf = {}
+                code_found_failed = any(
+                    isinstance(i, dict) and i.get("check") == "code_found"
+                    for i in pf.get("issues", []) or []
+                )
+                if code_found_failed:
+                    pipeline.stage = PipelineStage.BLOCKED
+                    pipeline.last_error = (
+                        "run_preflight_gate: code_preflight reports no "
+                        "experiment code found — refusing to dispatch RUN. "
+                        "Either re-run CODE step or fix code_patch.diff "
+                        "to include the experiment implementation."
+                    )
+                    self.state.save_pipeline(pipeline)
+                    self.state.append_log(
+                        "RUN gate: BLOCKED — preflight says no experiment code, "
+                        "would have produced fabricated metrics",
+                        pipeline.pipeline_id,
+                    )
+                    logger.warning(
+                        "RUN preflight gate BLOCKED pipeline %s: no experiment code",
+                        pipeline.pipeline_id,
+                    )
+                    return
 
         # ── Wave 2: code-only / specialised step handlers ────────────
         # These steps bypass the generic agent dispatch: they either run
@@ -1974,6 +2030,70 @@ class ResearchScheduler:
 
         forced_strategy = _decide_strategy(recon_repos, hits_by_slug)
 
+        # ── Pre-populate dataset_paths for code_primary ─────────────────
+        # When data-shape files exist, write a skeleton with dataset_paths
+        # already populated so the LLM only needs to verify + add code_data_calls
+        # evidence. This prevents the repeated "LLM ignores directive, outputs
+        # empty analyzed_repos" failure mode.
+        if forced_strategy == "code_primary" and not analysis_path.exists():
+            from researchos.schemas.baseline_analysis import AnalyzedRepo, DatasetPath
+
+            skeleton_repos: list[AnalyzedRepo] = []
+            for r in ok_repos:
+                slug = r.get("slug", "?")
+                entry_pts = r.get("entry_points", [])
+                hits = hits_by_slug.get(slug, [])
+                if not hits:
+                    continue
+                dp_entries: list[DatasetPath] = []
+                for h in hits:
+                    kind = "unknown"
+                    if "train" in h.path.lower():
+                        kind = "training"
+                    elif "val" in h.path.lower():
+                        kind = "validation"
+                    elif "test" in h.path.lower():
+                        kind = "test"
+                    dp_entries.append(
+                        DatasetPath(
+                            path=h.path,
+                            kind=kind,
+                            purpose=f"Data-shape hit ({h.tier}): {h.reason}. Verify presence in entry-point code and add code_data_calls evidence.",
+                        )
+                    )
+                skeleton_repos.append(
+                    AnalyzedRepo(
+                        slug=slug,
+                        entry_points=entry_pts,
+                        code_data_calls=[],
+                        dataset_paths=dp_entries,
+                        auxiliary_paths=[],
+                    )
+                )
+            if skeleton_repos:
+                skeleton = BaselineAnalysis(
+                    pipeline_id=pipeline.pipeline_id,
+                    analysis_strategy="code_primary",
+                    status="pending_verification",
+                    analyzed_repos=skeleton_repos,
+                    fallback_used=False,
+                    notes=(
+                        "SCHEDULER PRE-POPULATED dataset_paths from data_shape_hits. "
+                        "Your job: grep entry-point code for IO calls, populate "
+                        "code_data_calls for each DatasetPath, mark auxiliary_paths, "
+                        "classify external URLs, then set status=success. "
+                        "DO NOT clear dataset_paths — they are verified ground truth."
+                    ),
+                )
+                analysis_path.write_text(
+                    yaml.safe_dump(skeleton.model_dump(), sort_keys=False)
+                )
+                logger.info(
+                    "baseline_analyze: pre-populated %d repos, %d dataset_paths",
+                    len(skeleton_repos),
+                    sum(len(r.dataset_paths) for r in skeleton_repos),
+                )
+
         # Build the recon summary block (now also surfaces data-shape hits).
         if not recon_path.exists():
             recon_summary = "(code_recon.yaml not found)"
@@ -2114,12 +2234,23 @@ class ResearchScheduler:
             _write_failed_stub("dispatch raised exception")
             return True
         if not result.get("success"):
+            # Trust gate (2026-04-26): a failed LLM dispatch must NOT leave
+            # the pre-LLM skeleton (status=pending_verification) on disk
+            # masquerading as a successful baseline_analysis. Always overwrite
+            # with a failed stub so DATA_RECON sees the truth and downstream
+            # steps don't trust unverified dataset_paths.
+            # Pre-fix this check was guarded by `not analysis_path.exists()`,
+            # which silently passed the skeleton through when LLM dispatch
+            # returned success=False — see pipeline_mitigating_model_uncertainty_i
+            # for the failure mode.
             logger.warning(
-                "baseline_analyze failed: %s",
+                "baseline_analyze: LLM dispatch failed: %s",
                 (result.get("output") or "")[:200],
             )
-            if not analysis_path.exists():
-                _write_failed_stub("agent run failed and wrote no output")
+            _write_failed_stub(
+                "agent dispatch returned success=false; "
+                "pre-LLM skeleton overwritten to prevent unverified flow downstream"
+            )
             return True
         # Validate the agent's output against the schema. If invalid, replace
         # with a failed stub so DATA_RECON gets a known shape.
@@ -2129,6 +2260,19 @@ class ResearchScheduler:
                 "baseline_analyze: output failed BaselineAnalysis schema validation"
             )
             _write_failed_stub("schema validation failed on agent output")
+            return True
+        # Sanity: if LLM succeeded but left status as the pre-LLM skeleton
+        # marker, treat that as failure — the agent ignored the directive
+        # to verify and update status.
+        if analysis.status == "pending_verification":
+            logger.warning(
+                "baseline_analyze: agent returned with status='pending_verification' — "
+                "skeleton was not verified, overwriting with failed stub"
+            )
+            _write_failed_stub(
+                "agent left status=pending_verification without verifying; "
+                "the LLM was supposed to add code_data_calls evidence and set status=success"
+            )
             return True
 
         # ── Post-LLM strategy enforcement ───────────────────────────
@@ -2496,6 +2640,46 @@ class ResearchScheduler:
         "code_patch.diff",        # code
         "preflight_report.json",  # code_preflight
     )
+
+    # Status values that mean "this artifact is a stub / unverified placeholder
+    # and should NOT count as a completed step". When the artifact-exists
+    # short-circuit at scheduler.py:1276 sees one of these, it re-runs the step
+    # rather than blindly advancing.
+    _SKELETON_STATUS_VALUES: frozenset[str] = frozenset({
+        "failed",                  # generic failed stub
+        "pending_verification",    # baseline_analyze pre-LLM skeleton
+        "no_data_found",           # baseline_analyze simulate stub
+        "no_baseline_analysis",    # data_recon stub when baseline_analysis missing
+        "baseline_analyzer_failed",  # data_recon stub when baseline_analyze failed
+    })
+
+    def _is_artifact_complete(self, step: PipelineStep, artifact_path: Path) -> bool:
+        """Return True iff *artifact_path* represents a successfully completed step.
+
+        For typed artifacts that carry a top-level ``status`` field (currently
+        ``baseline_analysis.yaml`` and ``data_manifest.yaml``), the file
+        existing on disk is necessary but not sufficient — the step's own
+        verdict must mark it as a real result, not a skeleton/failed stub.
+        For everything else, file presence is enough (legacy behaviour).
+        """
+        # Only typed-status artifacts need the deeper check.
+        if step not in (PipelineStep.BASELINE_ANALYZE, PipelineStep.DATA_RECON):
+            return True
+        try:
+            data = yaml.safe_load(artifact_path.read_text()) or {}
+        except Exception:
+            # Unreadable → treat as incomplete (force re-run).
+            return False
+        if not isinstance(data, dict):
+            return False
+        # baseline_analysis.yaml uses ``status``; data_manifest.yaml uses
+        # ``data_recon_status`` for stub markers.
+        status = data.get("status") or data.get("data_recon_status")
+        if status is None:
+            # No status field at all → assume legacy / hand-edited artifact;
+            # trust file presence (don't break working pipelines).
+            return True
+        return status not in self._SKELETON_STATUS_VALUES
 
     def _maybe_skip_main_prefix(self, pipeline: "PipelineState") -> None:
         """If all RUN prerequisites already exist, jump MAIN straight to RUN.

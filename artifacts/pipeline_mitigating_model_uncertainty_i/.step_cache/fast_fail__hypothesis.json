@@ -1,0 +1,13 @@
+{
+  "step": "hypothesis",
+  "stage": "fast_fail",
+  "status": "completed",
+  "result": {
+    "agent": "hypothesis_gen",
+    "tokens_used": 60813,
+    "artifacts_written": [
+      "hypothesis.md"
+    ]
+  },
+  "cached_at": 1777204813.256845
+}

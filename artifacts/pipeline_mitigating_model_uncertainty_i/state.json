@@ -1,0 +1,52 @@
+{
+  "pipeline_id": "mitigating_model_uncertainty_i",
+  "title": "Mitigating Model Uncertainty in Self-Adaptive Systems",
+  "research_question": "How can stacking-based ensemble methods replace Bayesian Model Averaging in the MAPE-K loop to better handle model uncertainty in self-adaptive systems?",
+  "stage": "blocked",
+  "step": "awaiting_human_pivot",
+  "retry_count": 0,
+  "max_retries": 3,
+  "last_error": "",
+  "artifacts": {
+    "paper_spec": "paper_spec.yaml",
+    "proposal_spec": "proposal_spec.yaml",
+    "alignment": "alignment_contract.yaml",
+    "alignment_validator": "alignment_validation_report.json",
+    "hypothesis": "hypothesis.md",
+    "design": "experiment_plan.yaml",
+    "code_recon": "code_recon.yaml",
+    "baseline_analyze": "baseline_analysis.yaml",
+    "data_recon": "data_manifest.yaml",
+    "concept_paper": "concepts_paper.digest.json",
+    "concept_code": "concepts.digest.json",
+    "code": "code_patch.diff",
+    "code_preflight": "preflight_report.json",
+    "run": "results.json",
+    "results_reverify": "reverify_report.json",
+    "judge": "judge_verdict.json"
+  },
+  "priority": 0,
+  "budget_allocated": 20000,
+  "budget_used": 847,
+  "milestone_count": 0,
+  "created_at": "2026-04-26T11:59:07.000647+00:00",
+  "updated_at": "2026-04-26T13:07:34.663084+00:00",
+  "metadata": {
+    "source": "user_inject_typed",
+    "run_mode": "fast_fail"
+  },
+  "evidence_refs": [
+    {
+      "role": "base_paper",
+      "path_or_url": "/Users/adukopun/Documents/ClaudeCodeWorkspace/ResearchOS/artifacts/pipeline_mitigating_model_uncertainty_i/base_paper.md",
+      "sha256": null
+    },
+    {
+      "role": "proposal",
+      "path_or_url": "/Users/adukopun/Documents/ClaudeCodeWorkspace/ResearchOS/artifacts/pipeline_mitigating_model_uncertainty_i/proposal.md",
+      "sha256": null
+    }
+  ],
+  "active_branch_count": 0,
+  "selected_branch": null
+}

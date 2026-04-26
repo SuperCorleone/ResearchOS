@@ -64,12 +64,16 @@ gen_code_tree_structure(repo.path, max_depth=4)
 
 Identify entry points. In priority order:
 1. Files explicitly listed in `code_recon.yaml::repos[*].entry_points`
-2. Conventional names at repo root: `train.py`, `main.py`, `run.py`,
-   `experiment.py`, `bma_adaptation.py`-style task scripts, top-level
-   `*.py` whose name matches the paper's method
-3. Files referenced from README's "How to reproduce" / "Usage" section
+   — CODE_RECON now uses a 3-layer detector (conventional names →
+   top-level `*.py` with `__main__` block → bare top-level `*.py`)
+   so this list typically already covers `bma_adaptation.py`-style
+   task scripts. Trust it as the primary source.
+2. README's "How to reproduce" / "Usage" section — only when (1) is
+   empty or obviously incomplete (e.g. excludes a script the README
+   explicitly walks through).
 
-Cap entry-point set at ~5 files per repo to bound your work.
+Cap entry-point set at **~10 files per repo** to bound your work
+(matches CODE_RECON's `_detect_entry_points(limit=10)`).
 
 ### Step 2 — Grep IO calls in entry points
 

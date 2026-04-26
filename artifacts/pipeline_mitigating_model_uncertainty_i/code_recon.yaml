@@ -1,0 +1,34 @@
+pipeline_id: mitigating_model_uncertainty_i
+max_repo_bytes: 524288000
+repos:
+- url: https://github.com/matteocamilli/bma-package
+  slug: matteocamilli__bma-package
+  path: scratch/mitigating_model_uncertainty_i/code_refs/matteocamilli__bma-package
+  status: cached
+  pruned_bytes: 0
+  size_bytes: 46880295
+  commit_sha: 3739706acbcaa6fc68f78dcd1e1140a4c7301b4a
+  entry_points:
+  - bma_generator.py
+  - bma_generator_synth.py
+  - bma_adaptation.py
+  - bma_cost.py
+  - bma_prec_recall.py
+  data_shape_hits:
+  - path: data/cost_input.csv
+    tier: high
+    reason: under conventional data dir (data)
+  - path: data/training_rescueRobot_12800_9.csv
+    tier: high
+    reason: under conventional data dir (data)
+  - path: data/training_rescueRobot_25600_64.csv
+    tier: high
+    reason: under conventional data dir (data)
+  - path: data/training_rescueRobot_450.csv
+    tier: high
+    reason: under conventional data dir (data)
+  - path: data/validation_rescueRobot_450.csv
+    tier: high
+    reason: under conventional data dir (data)
+  data_shape_hit_count: 5
+  license: MIT License

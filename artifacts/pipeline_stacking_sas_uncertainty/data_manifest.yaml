@@ -1,8 +1,0 @@
-data_recon_status: baseline_analyzer_failed
-executed_actions: []
-files: []
-generated_at: '2026-04-25T21:05:08.480523+00:00'
-pipeline_id: stacking_sas_uncertainty
-reason: baseline_analyzer fallback stub — schema validation failed on agent output.
-  Agent raw output preserved at N/A.
-total_files: 0

@@ -344,8 +344,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "Read by HYPOTHESIS when in scope."
         ),
     )
-    inject.add_argument("--title", help="Proposal title (required in typed mode; skips miner)")
-    inject.add_argument("--question", help="Research question (required with --title)")
+    inject.add_argument(
+        "--title",
+        help=(
+            "Optional. Typed inject auto-derives from proposal H1 / "
+            "base_paper stem when omitted (used for pipeline_id only)."
+        ),
+    )
+    inject.add_argument(
+        "--question",
+        help=(
+            "Optional. Typed inject auto-derives from proposal/base_paper "
+            "RQ markers when omitted; the authoritative research_questions "
+            "are produced by proposal_spec_extractor downstream."
+        ),
+    )
     inject.add_argument("--id", help="Pipeline ID (auto from title if omitted)")
     inject.add_argument("--budget", type=int, default=20000)
     inject.set_defaults(func=cmd_inject)

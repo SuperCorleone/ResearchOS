@@ -1,13 +1,10 @@
 {
   "total_credits": 100000,
   "allocations": {
-    "stacking_sas_uncertainty": 20000
+    "mitigating_model_uncertainty_i": 20000
   },
   "usage": {
-    "_system_miner": 2103,
-    "_system_quick_gate": 69,
-    "_system_evaluator": 56,
-    "stacking_sas_uncertainty": 191
+    "mitigating_model_uncertainty_i": 847
   },
   "reserve": 50000
 }

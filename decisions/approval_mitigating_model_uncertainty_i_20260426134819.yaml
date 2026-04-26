@@ -1,0 +1,18 @@
+comment: |
+  Re-unblock after Tier-B structural fixes (2026-04-26):
+  (1) scheduler.py:1276 artifact-exists short-circuit now checks status field —
+      skeleton/failed/pending_verification artifacts no longer count as completed.
+  (2) _run_baseline_analyze:2191 LLM-failure path now ALWAYS overwrites the
+      pre-LLM skeleton with a failed stub instead of silently passing it
+      downstream. Previously the skeleton's dataset_paths flowed unverified
+      into data_recon, masking the real failure.
+  (3) RUN step now BLOCKs when preflight_report.code_found=False, preventing
+      experiment_runner from producing fabricated metrics on no-code state.
+  Cleared stale artifacts from previous run (skeleton-poisoned data_manifest,
+  fake results.json with 924 duplicated rows, no-code code_patch.diff). Pipeline
+  must now restart from baseline_analyze and either succeed properly or BLOCK
+  loudly — no more silent advance-with-fabrication.
+created_at: '2026-04-26T13:48:19.000000+00:00'
+decision: approve
+next_milestone: M2
+pipeline_id: mitigating_model_uncertainty_i

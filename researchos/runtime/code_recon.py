@@ -340,22 +340,99 @@ def _find_first(repo: Path, names: Iterable[str]) -> Path | None:
     return None
 
 
-def _detect_entry_points(repo: Path, limit: int = 5) -> list[str]:
-    """Return relative paths of plausible entry-point scripts."""
+_ENTRY_SKIP_SEGMENTS: tuple[str, ...] = (
+    "site-packages/", "/.venv/", "/venv/", "/__pycache__/",
+    "/tests/", "/test/", "/.git/", "/build/", "/dist/",
+    "/node_modules/", "/docs/", "/doc/",
+)
+
+
+def _is_skipped_path(rel_str: str) -> bool:
+    """Tests/build/venv segments do not count as entry points."""
+    if rel_str.startswith("tests/") or rel_str.startswith("test/"):
+        return True
+    return any(seg in rel_str for seg in _ENTRY_SKIP_SEGMENTS)
+
+
+def _has_main_block(path: Path) -> bool:
+    """True if the file contains an ``if __name__ == "__main__":`` block.
+
+    Read in binary + replace to avoid choking on encodings; cap at 256 KB
+    to keep us out of huge generated files.
+    """
+    try:
+        with path.open("rb") as fh:
+            blob = fh.read(256 * 1024)
+    except OSError:
+        return False
+    text = blob.decode("utf-8", errors="replace")
+    # Tolerate whitespace and quote variants.
+    return bool(re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]", text))
+
+
+def _detect_entry_points(repo: Path, limit: int = 10) -> list[str]:
+    """Return relative paths of plausible entry-point scripts.
+
+    Detection is layered (priority order, dedup on first occurrence):
+
+    1. Files matching the conventional names (``train.py`` / ``main.py`` /
+       …) anywhere in the tree — original v5.3 behaviour.
+    2. Top-level ``*.py`` files containing an ``if __name__ == "__main__":``
+       block. Catches packages whose entry script is named after the
+       method (e.g. BMA's ``bma_adaptation.py``). Without this we returned
+       ``[]`` for any non-conventional repo and the BASELINE_ANALYZE LLM
+       had nothing to grep — see pipeline_mitigating_model_uncertainty_i.
+    3. Bare top-level ``*.py`` fallback. Last-resort hint so the LLM has
+       *something* to grep when no main block is present (e.g. library
+       repos without a CLI entry).
+    """
     found: list[str] = []
+    seen: set[str] = set()
+
+    def _push(rel_str: str) -> None:
+        if rel_str in seen or _is_skipped_path(rel_str):
+            return
+        seen.add(rel_str)
+        found.append(rel_str)
+
+    # Layer 1: conventional names (full-tree).
     for name in _ENTRY_POINT_NAMES:
         for candidate in repo.rglob(name):
             try:
                 rel = candidate.relative_to(repo)
             except ValueError:
                 continue
-            # Skip venv / site-packages / test fixtures.
-            rel_str = str(rel)
-            if any(seg in rel_str for seg in ("site-packages/", "/.venv/", "/venv/", "/__pycache__/")):
-                continue
-            found.append(rel_str)
+            _push(str(rel))
             if len(found) >= limit:
                 return found
+
+    # Layer 2: top-level *.py with `if __name__ == "__main__":` block.
+    main_block_hits: list[str] = []
+    bare_hits: list[str] = []
+    try:
+        top_level_py = sorted(p for p in repo.glob("*.py") if p.is_file())
+    except OSError:
+        top_level_py = []
+    for candidate in top_level_py:
+        rel_str = candidate.name  # top-level → no dir prefix
+        if rel_str in seen or _is_skipped_path(rel_str):
+            continue
+        if _has_main_block(candidate):
+            main_block_hits.append(rel_str)
+        else:
+            bare_hits.append(rel_str)
+
+    for rel_str in main_block_hits:
+        _push(rel_str)
+        if len(found) >= limit:
+            return found
+
+    # Layer 3: bare top-level *.py fallback.
+    for rel_str in bare_hits:
+        _push(rel_str)
+        if len(found) >= limit:
+            return found
+
     return found
 
 
@@ -609,6 +686,22 @@ def run_code_recon(
         row["entry_points"] = _detect_entry_points(dest)
         # Dataset hints (v5.2 README scraping) removed in v5.3 — the
         # baseline_analyzer LLM step does this with code-first grounding.
+        # v5.4: persist data_shape scan into the artifact so downstream
+        # consumers (alignment_validator, lineage, debug review) don't
+        # have to re-scan the clone — and so an auditor can see what the
+        # baseline_analyzer LLM was given without reading scheduler logs.
+        try:
+            from researchos.utils.data_shape import scan_repo_for_data
+            hits = scan_repo_for_data(dest)
+            row["data_shape_hits"] = [
+                {"path": h.path, "tier": h.tier, "reason": h.reason}
+                for h in hits[:20]
+            ]
+            row["data_shape_hit_count"] = len(hits)
+        except Exception:
+            logger.debug("data_shape scan failed for %s", dest, exc_info=True)
+            row["data_shape_hits"] = []
+            row["data_shape_hit_count"] = 0
         row["license"] = _detect_license(dest)
         report["repos"].append(row)
 

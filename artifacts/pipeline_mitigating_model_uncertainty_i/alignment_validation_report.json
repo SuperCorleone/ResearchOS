@@ -1,0 +1,15 @@
+{
+  "verdict": "PASS",
+  "summary": {
+    "PASS": 1,
+    "WARN": 0,
+    "ERROR": 0
+  },
+  "checks": [
+    {
+      "check": "alignment_workflow.applicable",
+      "severity": "PASS",
+      "detail": "skipped: legacy pipeline (no contract)"
+    }
+  ]
+}

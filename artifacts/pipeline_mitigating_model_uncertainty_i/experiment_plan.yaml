@@ -1,0 +1,215 @@
+requires_code: true
+baseline:
+  name: "Bayesian Model Averaging (BMA) analyze-component combiner"
+  metric_values:
+    precision: null
+    recall: null
+    f1: null
+  source: "Camilli et al., SEAMS 2022 — Figure 7 (a/b/c) reports precision, recall, F1 for BMA estimate vs 8 logistic candidates on rescueRobot validation set (450 obs). Numerical BMA cell values to be re-instantiated by faithful replication."
+  notes: "Paper RQ1 (prediction accuracy) is evaluated via classical metrics precision, recall, F1 (Sec 5.2.1, Figure 7). Numeric BMA values recovered from the replication package after baseline_diagnose; null here means 'pending baseline rerun', not 'placeholder floor'."
+metric_alignment:
+  source_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  rq_coverage:
+    RQ1:
+      paper_metric: ["precision", "recall", "f1"]
+      plan_metric: ["precision", "recall", "f1"]
+      in_scope: true
+      implementation_note: "Paper Sec 5.2.1 + Figure 7 reports precision/recall/F1 on rescueRobot validation set (450 obs). Compute the same three metrics for both BMA and stacking arms on the identical preprocessing/split/candidate-pool from the bma-package replication."
+    RQ2:
+      paper_metric: "adaptation_effectiveness"
+      plan_metric: "adaptation_effectiveness"
+      in_scope: false
+      implementation_note: "Requires full MAPE-K planning-loop simulation infrastructure (Sec 5.2.2). Out of scope for the analyze-component-only swap experiment."
+    RQ3:
+      paper_metric: "runtime_cost_seconds"
+      plan_metric: "runtime_cost_seconds"
+      in_scope: false
+      implementation_note: "Paper Sec 5.2.3 measures BMA estimate compute time vs sample size and candidate-pool dimensionality. Out of scope until RQ1 is verified; will surface as fit_time_seconds on the analyze step if measured incidentally."
+  out_of_scope_rqs:
+    - id: "RQ2"
+      reason: "Exact metric definition and full planning-loop protocol are not recoverable from the current artifact set."
+    - id: "RQ3"
+      reason: "No exact metric name or computational-overhead protocol was recovered from the available knowledge-base excerpt."
+data:
+  source: "file"
+  dataset_name: "Robotics-domain dataset from Camilli et al. SEAMS 2022"
+  version: "reference-paper version (to be resolved from repository/paper)"
+  license: "unknown"
+  description: "Use only the original robotics-domain dataset supplied or referenced by the base paper/repository. No synthetic substitute is permitted."
+  consistency_requirement:
+    reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+    must_match: ["dataset_version", "train_test_split", "preprocessing_pipeline", "candidate_model_pool"]
+    verification: "Verify loaded files and split definitions against the reference repository/paper before training; abort if only substitute or synthetic data are available."
+  risk_notes:
+    - "data_manifest.yaml is absent, so exact filenames and sample count are not yet available. Coder must first recover the original paper dataset/repository files."
+    - "License is unknown from current artifacts; usage must be confirmed before redistribution."
+reference_code:
+  papers:
+    - title: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+      repo_url: "https://doi.org/10.1145/3524844.3528056"
+      repo_status: "unknown"
+      reusable_components: ["BMA analyze-component baseline if source code is recoverable", "dataset loaders if repository is recoverable", "candidate-model construction pipeline if repository is recoverable"]
+      must_modify: ["replace only the BMA combiner with stacking meta-learner", "preserve candidate-model pool and evaluation protocol", "add out-of-fold meta-feature generation for stacking"]
+      build_on_top: true
+      reason: "Fairness requires faithful reproduction of the paper's BMA baseline before swapping the combiner."
+  strategy: "fork_and_extend"
+reference_methodology:
+  paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+  model_space: "Same candidate-model pool as the reference paper; exact composition must be extracted from the full paper/repository and must not be simplified."
+  algorithms: ["Bayesian Model Averaging baseline", "Stacking ensemble replacement over the same base models"]
+  evaluation_metrics: ["precision", "recall", "f1"]
+  cv_strategy: "Use the reference paper's original train/test protocol exactly; if the paper uses rolling/temporal evaluation, retain it rather than random reshuffling."
+  data_files: ["Original robotics-domain dataset files from the reference artifact set; exact filenames pending data recovery"]
+  key_implementation_details: ["Preserve same preprocessing pipeline", "Preserve same base learners/candidate models", "Generate stacking meta-features strictly out-of-fold to avoid leakage", "Compare only combiner change for the primary BMA-vs-stacking experiment"]
+proposed_method:
+  what_is_new: "Replace the BMA combiner in the analyze component with a stacking meta-learner trained on out-of-fold predictions from the same candidate base models."
+  what_is_borrowed: "The paper's dataset, preprocessing, split protocol, candidate-model pool, and BMA baseline implementation."
+  why_improvement_expected: "Stacking can learn combination weights from predictive performance rather than posterior model evidence and can outperform BMA when no single true model exists in the candidate set or when model performance varies across regimes."
+plan_dataset:
+  dataset_description: "Reference-paper replication dataset: the robotics-domain dataset used by Camilli et al. for analyze-component evaluation in self-adaptive systems. Because data_manifest.yaml is absent, the exact file list, count, and source URL are not yet materialized in the pipeline. The experiment must load the original paper dataset only, preserve its original preprocessing and split protocol, and block execution if the original files cannot be recovered."
+  dataset_location: "data/raw/mitigating_model_uncertainty_i/"
+  task_definition: "Predict the target quality/performance variable used by the paper's analyze component from the same runtime/context features and candidate-model outputs used in the TUNE robotics exemplar; then compare BMA versus stacking on the paper's exact prediction-error metric."
+  read_data_step: |
+    1. Inspect recovered reference files under data/raw/mitigating_model_uncertainty_i/.
+    2. Load only files documented by the base paper/repository for the robotics exemplar (e.g., CSV/ARFF/log exports from the original artifact package).
+    3. Parse feature columns, target column, and any pre-defined split identifiers exactly as specified by the reference implementation.
+    4. If no original dataset files are present, stop with an error rather than synthesizing data.
+  data_preprocessing_step: |
+    Reproduce the paper's preprocessing pipeline exactly: preserve variable definitions, missing-value handling, normalization/standardization, ordering, and any temporal/windowing logic from the reference artifact. For stacking, generate level-1 training data only from out-of-fold level-0 predictions on the training partition to avoid target leakage.
+  data_dataloader_step: |
+    Respect the paper's original split protocol. If the dataset is temporally ordered or generated by adaptation episodes, keep episode/time ordering intact and do not random-shuffle across boundaries. For fast_fail, load the first available reference split slice that preserves ordering/stratification constraints and run one seed; for main, run the full reference dataset and all configured seeds.
+  name: "Robotics-domain reference dataset"
+  source: "file"
+  license: "unknown"
+  preprocessing:
+    - "Match the paper's original feature engineering and scaling exactly"
+    - "Construct out-of-fold base-model predictions for the stacking meta-learner only on training data"
+    - "Do not alter candidate-model inputs between BMA and stacking arms"
+  split:
+    strategy: "temporal"
+    ratio: "reference-paper-defined"
+    seed: 42
+    risk_notes: "Likely leakage risk if adaptation episodes or time steps are randomly shuffled; prefer temporal or paper-defined episode split until exact protocol is recovered."
+  sample_count: null
+  consistency_requirement:
+    reference_paper: "Taming Model Uncertainty in Self-adaptive Systems Using Bayesian Model Averaging"
+    must_match: ["dataset_version", "train_test_split"]
+plan_model:
+  model_input: "tabular matrix[n_samples, n_features + n_base_predictions] float64 derived from the paper's robotics dataset and candidate-model outputs"
+  model_output: "vector[n_samples] float64 predictions for the same target variable used by the paper's analyze component"
+  key_components:
+    - "Reference-paper candidate base models"
+    - "Bayesian Model Averaging combiner baseline"
+    - "Stacking meta-learner trained on out-of-fold base predictions"
+  family: "ensemble"
+  architecture: "Two-arm comparison: (A) faithful BMA combiner over the reference candidate-model pool; (B) stacking combiner over the same pool using a simple regularized meta-learner such as ridge regression for fast_fail, with optional expanded meta-learner search in main if resource parity is preserved."
+  parameters: "N/A"
+  hyperparameters:
+    - name: "meta_learner"
+      values: ["ridge_regression"]
+    - name: "stacking_cv_folds"
+      values: ["5"]
+    - name: "ridge_alpha"
+      values: ["0.1", "1.0", "10.0"]
+  reference_implementation: "unknown"
+plan_training:
+  training_pipeline: "Train or recover the reference candidate base models using the paper's exact protocol on the original training split. For the BMA arm, compute posterior/model-evidence-based combination weights exactly as in the reference implementation. For the stacking arm, generate K-fold out-of-fold predictions from the same trained base models on the training split, fit a regularized meta-learner on these out-of-fold predictions, then refit base models on the full training split before final test inference. Keep every factor except the combiner fixed across arms."
+  loss_function: "Primary optimization target is the paper's original prediction loss/metric; if the exact metric is unavailable during coding, use squared error only as an internal training loss while still reporting the paper metric once extracted."
+  optimizer: "Closed-form or deterministic solver for linear/ridge meta-learner; baseline BMA uses reference-paper estimation procedure"
+  training_configurations:
+    epochs_or_steps: 1
+    batch_size: 32
+    learning_rate: 0.001
+    schedule: "none"
+    seeds: [42, 123, 456]
+    num_runs: 3
+  monitor_and_logging:
+    metrics_logged:
+      - "training_loss"
+      - "validation_prediction_error"
+      - "fit_time_seconds"
+    log_frequency: "every fold and final train/test evaluation"
+    checkpoint_strategy: "best_val_loss"
+  hardware: "CPU"
+  estimated_runtime: "15-30 minutes fast_fail once reference data/code are recovered"
+  estimated_cost_credits: 300
+  measurement_type: "estimated"
+  confound_controls:
+    initialization: "Use identical seeds across arms; deterministic solver where possible."
+    hyperparam_search: "Minimal identical search budget across methods; BMA gets no extra search beyond paper protocol, stacking gets only ridge_alpha sweep in fast_fail."
+    data_split: "Fixed reference-paper split; same folds/seeds for both arms."
+    hardware_noise: "Run both arms on the same machine and log wall-clock time; use repeated runs to summarize variability."
+plan_testing:
+  test_metric:
+    - name: "precision"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+      threshold: 0.05
+    - name: "recall"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+      threshold: 0.05
+    - name: "f1"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+      threshold: 0.05
+  test_data: "Held-out reference-paper test split from the original robotics dataset under data/raw/mitigating_model_uncertainty_i/matteocamilli__bma-package/data/validation_rescueRobot_450.csv (450 obs)."
+  test_code: "experiments/evaluate_stacking_vs_bma.py::compute_paper_metrics computes precision/recall/f1 on the recovered reference validation split"
+  metrics:
+    - name: "precision"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+    - name: "recall"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+    - name: "f1"
+      paper_rq: "RQ1"
+      direction: "higher_better"
+    - name: "fit_time_seconds"
+      paper_rq: "RQ3"
+      direction: "lower_better"
+  statistical_tests:
+    - name: "paired bootstrap"
+      purpose: "Estimate whether stacking's improvement over BMA on per-case prediction error is directionally stable once the exact paper metric is available"
+      report: ["effect_size", "test_statistic", "p_value", "ci_95"]
+  baselines:
+    - name: "Bayesian Model Averaging (reference baseline)"
+      why_chosen: "Strongest directly relevant baseline because it is the exact method from the paper being improved upon."
+      resource_parity: "Same data, same base-model pool, same preprocessing, same splits, same hardware; only the combiner changes."
+    - name: "Best single candidate model"
+      why_chosen: "Trivial/anchoring baseline to show whether any ensemble is necessary."
+      resource_parity: "Uses same training split and feature set; fewer parameters than ensemble, so report alongside but interpret primarily against BMA."
+  ablation:
+    - component: "stacking meta-learner"
+      replacement: "remove"
+      purpose: "Tests whether gains disappear when the new combiner is removed, isolating the effect of stacking."
+  success_criteria:
+    - "Stacking improves f1 by at least 0.05 absolute over the faithfully reproduced BMA baseline on the rescueRobot validation split (450 obs)."
+    - "Stacking matches or improves precision and recall vs BMA on the same split (no Pareto regression on either component metric)."
+    - "The stacking arm outperforms or matches BMA on f1 in at least 2 of 3 seeds in fast_fail."
+    - "The ablation removing stacking collapses f1 toward the BMA baseline, supporting mechanism attribution."
+  failure_conditions:
+    - "Original paper dataset or split protocol cannot be recovered; experiment is blocked rather than substituted."
+    - "Stacking improves f1 by less than 0.05 absolute over BMA."
+    - "Observed gains vanish when out-of-fold leakage protections are enforced."
+scale_profile:
+  fast_fail:
+    data_slice: "first_reference_split_slice_preserving_temporal_order"
+    seeds: [42]
+    baselines: ["primary"]
+    ablations: false
+  main:
+    data_slice: "all"
+    seeds: [42, 7, 13, 21, 99]
+    baselines: "all"
+    ablations: true
+risks:
+  - severity: high
+    issue: "No data_manifest.yaml or baseline_analysis.yaml is present, and the exact paper metric names/numeric baseline values are not recoverable from current artifacts."
+    mitigation: "Before coding, recover the reference repository/dataset and extract the exact evaluation metrics from the full paper; abort if faithful replication assets remain unavailable."
+  - severity: medium
+    issue: "Stacking can overfit if meta-features are generated on in-fold predictions or if the dataset is small."
+    mitigation: "Use strictly out-of-fold prediction generation for meta-training and keep a simple regularized meta-learner in fast_fail."
+  - severity: medium
+    issue: "Potential unfair comparison if stacking changes the candidate-model pool instead of only the combiner."
+    mitigation: "Lock the base-model set to the reference paper's candidate-model pool and isolate the combiner as the only experimental variable."
