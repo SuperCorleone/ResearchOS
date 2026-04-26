@@ -349,7 +349,8 @@ class TestCodeReconRouting:
         assert _NEXT_STEP[key] == PipelineStep.CODE_RECON
 
     def test_code_recon_routes_through_baseline_then_data(self):
-        """v5.3: CODE_RECON → BASELINE_ANALYZE → DATA_RECON → CONCEPT_EXTRACT."""
+        """2026-04-26 canonical: CODE_RECON → BASELINE_ANALYZE → DATA_RECON
+        → CONCEPT_PAPER (then CONCEPT_CODE → CODE)."""
         from researchos.runtime.scheduler import _NEXT_STEP
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CODE_RECON)]
@@ -361,17 +362,21 @@ class TestCodeReconRouting:
         )
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.DATA_RECON)]
-            == PipelineStep.CONCEPT_EXTRACT
+            == PipelineStep.CONCEPT_PAPER
         )
 
-    def test_fast_fail_does_not_route_to_code_recon(self):
+    def test_fast_fail_includes_code_recon(self):
+        """2026-04-26 canonical: FAST_FAIL is the rich research path
+        (not the lean shortcut). It runs the full DESIGN → CODE_RECON →
+        BASELINE_ANALYZE → DATA_RECON → CONCEPT_PAPER → CONCEPT_CODE
+        backbone, lightening only the RUN budget (via scale_profile)
+        and the terminal layer (no results_reverify / figure_compose).
+        """
         from researchos.runtime.scheduler import _NEXT_STEP
-        for key, val in _NEXT_STEP.items():
-            stage, _step = key
-            if stage == PipelineStage.FAST_FAIL:
-                assert val != PipelineStep.CODE_RECON, (
-                    f"FAST_FAIL must skip CODE_RECON, but got edge {key} -> {val}"
-                )
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.DESIGN)]
+            == PipelineStep.CODE_RECON
+        )
 
 
 if __name__ == "__main__":

@@ -42,7 +42,8 @@ _SECTION_TEMPLATES: dict[str, str] = {
     ),
     "related_work": (
         "Write Related Work. Contextualise within existing literature. "
-        "Use ONLY citations from evidence_refs and knowledge/raw/. "
+        "Use ONLY citations from this pipeline's evidence_refs (typed inject) "
+        "or knowledge/raw/ (legacy pipelines). Do not invent references. "
         "Group by theme, not chronologically."
     ),
     "method": (

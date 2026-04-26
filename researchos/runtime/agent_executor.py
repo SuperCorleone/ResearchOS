@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from researchos.mcp_servers.kb_server import search_wiki
+from researchos.mcp_servers.kb_server import search_pipeline_dir, search_wiki
 from researchos.runtime.hooks import (
     record_budget_usage,
     validate_artifact_write,
@@ -324,6 +324,32 @@ class AgentExecutor:
             return resolved
         return None
 
+    @staticmethod
+    def _is_inject_pipeline(pipeline_dir: Path) -> bool:
+        """Detect a ``user_inject`` pipeline by reading its state.json.
+
+        Inject pipelines are scoped: their KB retrieval is constrained to
+        ``pipeline_dir`` only (see kb_retrieve dispatch). Detection is
+        based on the canonical metadata key set at inject time —
+        ``metadata.source`` starts with ``user_inject`` (typed or legacy).
+
+        Returns False if state.json is missing or unreadable, which means
+        the pipeline hasn't been promoted yet — kb_retrieve still falls
+        back to the global wiki path in that case (a no-op for early
+        inject runs since base_paper.md / proposal.md live alongside
+        state.json under the same pipeline_dir, but state.json is the
+        authoritative inject signal).
+        """
+        state_path = pipeline_dir / "state.json"
+        if not state_path.exists():
+            return False
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        source = (data.get("metadata") or {}).get("source", "")
+        return isinstance(source, str) and source.startswith("user_inject")
+
     def _execute_python(self, code: str, timeout: int = 120) -> str:
         """Run Python code via the configured execution backend.
 
@@ -499,7 +525,16 @@ class AgentExecutor:
             if cache_key in self._kb_cache:
                 result = self._kb_cache[cache_key]
             else:
-                result = search_wiki(query, max_results, max_tokens)
+                # Inject-dedicated path: user_inject pipelines retrieve only
+                # from their own pipeline_dir. The global wiki is invisible
+                # to them — base_paper.md, proposal.md and per-step
+                # artifacts are the entire KB scope.
+                if self._is_inject_pipeline(pipeline_dir):
+                    result = search_pipeline_dir(
+                        query, pipeline_dir, max_results, max_tokens
+                    )
+                else:
+                    result = search_wiki(query, max_results, max_tokens)
                 if isinstance(result, str):
                     self._kb_cache[cache_key] = result
             return (self._truncate_tool_output(result), None)

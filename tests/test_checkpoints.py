@@ -23,10 +23,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ── Pipeline Step enum ───────────────────────────────────────────
 
 class TestPipelineStepEnum:
-    def test_design_review_retired(self):
-        """DESIGN_REVIEW enum was removed in the 2026-04 refactor."""
-        from researchos.schemas.pipeline import PipelineStep
-        assert not hasattr(PipelineStep, "DESIGN_REVIEW")
+    def test_design_review_unrouted(self):
+        """DESIGN_REVIEW step was retired in the 2026-04 refactor.
+
+        The enum entry is kept for backward compat with old state.json
+        files, but the step is no longer routed in either MAIN or
+        FAST_FAIL — exp_designer now does its own self-review.
+        """
+        from researchos.runtime.scheduler import _NEXT_STEP
+        from researchos.schemas.pipeline import PipelineStage, PipelineStep
+        # DESIGN_REVIEW is not the destination of any active edge.
+        assert PipelineStep.DESIGN_REVIEW not in _NEXT_STEP.values()
+        # And there is no edge OUT of DESIGN_REVIEW in either stage.
+        assert (PipelineStage.MAIN, PipelineStep.DESIGN_REVIEW) not in _NEXT_STEP
+        assert (PipelineStage.FAST_FAIL, PipelineStep.DESIGN_REVIEW) not in _NEXT_STEP
 
     def test_code_preflight_exists(self):
         from researchos.schemas.pipeline import PipelineStep
@@ -45,12 +55,12 @@ class TestPipelineStepEnum:
 
 class TestStepRouting:
     def test_main_design_goes_to_code_recon(self):
-        """MAIN chain v5.3: DESIGN → CODE_RECON → BASELINE_ANALYZE → DATA_RECON
-        → CONCEPT_EXTRACT → CODE.
+        """MAIN chain (2026-04-26 canonical): DESIGN → CODE_RECON →
+        BASELINE_ANALYZE → DATA_RECON → CONCEPT_PAPER → CONCEPT_CODE → CODE.
 
-        BASELINE_ANALYZE (LLM, code-first) inserted v5.3 between CODE_RECON and
-        DATA_RECON. It analyses cloned baseline package code to identify real
-        datasets vs. badges/logs/plots — replaces the v5.2 hardcoded heuristics.
+        2-pass concept extraction (CONCEPT_PAPER + CONCEPT_CODE) replaces
+        the legacy 1-pass CONCEPT_EXTRACT step. BASELINE_ANALYZE (LLM,
+        code-first) sits between CODE_RECON and DATA_RECON.
         """
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
@@ -68,10 +78,14 @@ class TestStepRouting:
         )
         assert (
             _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.DATA_RECON)]
-            == PipelineStep.CONCEPT_EXTRACT
+            == PipelineStep.CONCEPT_PAPER
         )
         assert (
-            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT)]
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CONCEPT_PAPER)]
+            == PipelineStep.CONCEPT_CODE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.CONCEPT_CODE)]
             == PipelineStep.CODE
         )
 
@@ -87,12 +101,27 @@ class TestStepRouting:
         key = (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT)
         assert _NEXT_STEP[key] == PipelineStep.RUN
 
-    def test_fast_fail_no_review(self):
+    def test_fast_fail_runs_full_research_backbone(self):
+        """FAST_FAIL (2026-04-26 canonical) shares the research backbone
+        with MAIN — including CODE_PREFLIGHT. The lighter terminal layer
+        (no results_reverify, no figure_compose) is the only divergence;
+        RUN itself is reduced via the scale_profile.fast_fail budget that
+        exp_designer writes into experiment_plan.yaml.
+        """
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        # FAST_FAIL: CODE → RUN directly (no preflight)
-        key = (PipelineStage.FAST_FAIL, PipelineStep.CODE)
-        assert _NEXT_STEP[key] == PipelineStep.RUN
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.CODE)]
+            == PipelineStep.CODE_PREFLIGHT
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.CODE_PREFLIGHT)]
+            == PipelineStep.RUN
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.RUN)]
+            == PipelineStep.JUDGE
+        )
 
     def test_step_artifact_covers_active_steps(self):
         from researchos.runtime.scheduler import STEP_ARTIFACT

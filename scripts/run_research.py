@@ -163,6 +163,67 @@ async def _run_ticks(
             await asyncio.sleep(0.1 if scheduler.simulate else scheduler.interval)
 
 
+async def _run_inject_ticks(
+    scheduler: ResearchScheduler,
+    pipeline_id: str,
+    max_ticks: int = 200,
+) -> str | None:
+    """Drive a single inject pipeline to terminal state.
+
+    Inject is self-driving by design: this is invoked inline from
+    ``cmd_inject`` after writing ``runtime/pipelines/new_<id>.json``.
+    The scheduler ticks until the target pipeline reaches COMPLETED,
+    FAILED, or BLOCKED (the last covers fast_fail auto-gate pauses
+    and other human-input gates — inject hands control back to the
+    user at that point).
+
+    ``max_ticks`` is a safety bound; returns the final stage value
+    on terminal exit, or None if max_ticks is exhausted first.
+    """
+    sm = scheduler.state
+    terminal = (
+        PipelineStage.COMPLETED,
+        PipelineStage.FAILED,
+        PipelineStage.BLOCKED,
+    )
+
+    for tick_num in range(1, max_ticks + 1):
+        print(f"\n  --- Tick {tick_num}/{max_ticks} ---")
+        try:
+            await scheduler.tick()
+        except Exception as e:
+            print(f"  ERROR in tick: {e}")
+
+        ours = next(
+            (p for p in sm.load_all_pipelines() if p.pipeline_id == pipeline_id),
+            None,
+        )
+        if ours is None:
+            print(f"  (waiting for pipeline {pipeline_id} to be promoted from runtime/pipelines/)")
+        else:
+            status = f"  [{ours.pipeline_id}] stage={ours.stage.value}"
+            if ours.step:
+                status += f" step={ours.step.value}"
+            if ours.last_error:
+                status += f" error={ours.last_error}"
+            print(status)
+            if ours.stage in terminal:
+                print(
+                    f"\n  Inject pipeline '{pipeline_id}' reached terminal stage: "
+                    f"{ours.stage.value}"
+                )
+                return ours.stage.value
+
+        if tick_num < max_ticks:
+            await asyncio.sleep(0.1 if scheduler.simulate else scheduler.interval)
+
+    print(
+        f"\n  Inject reached max_ticks={max_ticks} without terminal state. "
+        f"Resume with: python scripts/run_research.py run autonomous --max-ticks 50"
+    )
+    return None
+
+
 def _pending_requests():
     """Yield pending decision request files."""
     DECISIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -710,13 +771,23 @@ def cmd_inject(args: argparse.Namespace) -> None:
     """Inject user-provided papers (and optional proposal) into the system.
 
     Typed mode (preferred): --base-paper is set.
-        base_paper → knowledge/raw/ + wiki + pipeline_dir/base_paper.md
-        proposal   → pipeline_dir/proposal.md only (NOT wiki)
+        base_paper → pipeline_dir/base_paper.md ONLY (NOT knowledge/raw, NOT wiki)
+        proposal   → pipeline_dir/proposal.md ONLY (NOT wiki)
         ref_code   → recorded in evidence_refs (not cloned here)
+
+        Inject is dedicated and isolated by design: the injected paper +
+        proposal define the entire scope of the pipeline. No global wiki /
+        raw side-effects, and downstream KB retrieval is constrained to
+        pipeline_<id>/ files (see ``agent_executor`` inject branch).
+
+        The command is also self-driving — once the PipelineDefinition is
+        written, the scheduler is started inline and ticks until the
+        pipeline reaches a terminal stage (COMPLETED / FAILED / BLOCKED).
 
     Legacy mode (deprecated): positional 'papers' list is used.
         Papers → compile to wiki → Knowledge Miner discovers topic → pipeline
         Add --title + --question to skip Miner and create pipeline directly.
+        Legacy mode keeps the old global-wiki behaviour for back-compat.
     """
     import shutil
     from researchos.runtime.knowledge_compiler import (
@@ -755,26 +826,14 @@ def cmd_inject(args: argparse.Namespace) -> None:
             sys.exit(1)
         pdir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Copy base_paper to knowledge/raw/ and compile to wiki.
-        raw_dir = PROJECT_ROOT / "knowledge" / "raw"
-        raw_dir.mkdir(parents=True, exist_ok=True)
+        # 1. Validate base_paper. Inject is dedicated and isolated:
+        # the file goes ONLY into pipeline_<id>/, never knowledge/raw/ or
+        # the global wiki. Downstream KB retrieval is constrained to
+        # pipeline_<id>/ files (see agent_executor.py inject branch).
         base_src = Path(base_paper)
         if not base_src.exists():
             print(f"  ERROR: Base paper not found: {base_paper}", file=sys.stderr)
             sys.exit(1)
-        base_raw_dest = raw_dir / base_src.name
-        if base_raw_dest.exists():
-            print(f"  Skip copy to raw (already exists): {base_src.name}")
-        else:
-            shutil.copy2(base_src, base_raw_dest)
-            print(f"  Imported to knowledge/raw/: {base_src.name}")
-
-        register_raw_paper(base_raw_dest, "base_paper", PROJECT_ROOT)
-        page = compile_raw_to_wiki(base_raw_dest, PROJECT_ROOT)
-        if page:
-            print(f"  Compiled to wiki: {page.name}")
-        else:
-            print(f"  Wiki page already exists or skipped for: {base_src.name}")
 
         # 2. Write base_paper to pipeline dir (convert PDF→md text if PDF).
         base_paper_dest = pdir / "base_paper.md"
@@ -830,7 +889,22 @@ def cmd_inject(args: argparse.Namespace) -> None:
 
         print(f"\n  Pipeline proposal created (typed mode): {pipeline_id}")
         print(f"  Saved to: {out_path.relative_to(PROJECT_ROOT)}")
-        print(f"\n  Next: python scripts/run_research.py run autonomous --max-ticks 50")
+
+        # 6. Self-drive: start the scheduler inline and tick until the
+        # injected pipeline reaches a terminal stage. Inject is one
+        # self-contained command — no follow-up `run autonomous` needed.
+        print(f"\n  Starting inject self-drive (single_run mode, target={pipeline_id})...")
+        scheduler = ResearchScheduler(
+            PROJECT_ROOT,
+            interval_seconds=2,
+            backend="auto",
+            auto_professor=True,
+            auto_select=True,
+            human_review=False,
+            simulate=False,
+            single_run=True,
+        )
+        asyncio.run(_run_inject_ticks(scheduler, pipeline_id, max_ticks=200))
         return
 
     # ── LEGACY MODE ─────────────────────────────────────────────────────────

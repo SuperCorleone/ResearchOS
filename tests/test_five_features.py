@@ -89,25 +89,61 @@ class TestInterrogationProtocol:
         from researchos.schemas.pipeline import PipelineStep
         assert PipelineStep.INTERROGATION.value == "interrogation"
 
-    def test_main_critic_goes_to_experiment_analysis(self):
-        # After 2026-04 refactor: CRITIC → EXPERIMENT_ANALYSIS → INTERROGATION.
-        # (Soon to be replaced by CRITIC-merge-into-JUDGE in Phase 1.)
+    def test_critic_interrogation_experiment_analysis_unrouted(self):
+        """2026-04-26 refactor: critic / experiment_analysis / interrogation
+        are no longer scheduled as standalone steps. Their concerns are
+        merged into the JUDGE step (per ``agent_defs/judge.md`` — judge
+        agent reads results.json directly and produces a unified
+        verdict that covers reasoning, ablations, and adversarial probes).
+        """
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        key = (PipelineStage.MAIN, PipelineStep.CRITIC)
-        assert _NEXT_STEP[key] == PipelineStep.EXPERIMENT_ANALYSIS
+        for stage in (PipelineStage.MAIN, PipelineStage.FAST_FAIL):
+            for step in (
+                PipelineStep.CRITIC,
+                PipelineStep.EXPERIMENT_ANALYSIS,
+                PipelineStep.INTERROGATION,
+            ):
+                assert (stage, step) not in _NEXT_STEP, (
+                    f"{stage.value}/{step.value} should not be scheduled — "
+                    "merged into JUDGE."
+                )
 
-    def test_main_interrogation_goes_to_report(self):
+    def test_main_run_routes_through_results_reverify_then_judge(self):
+        """MAIN terminal layer: RUN → RESULTS_REVERIFY → JUDGE → FIGURE_COMPOSE
+        → REPORT. Independent subprocess re-run before judging."""
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        key = (PipelineStage.MAIN, PipelineStep.INTERROGATION)
-        assert _NEXT_STEP[key] == PipelineStep.REPORT
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.RUN)]
+            == PipelineStep.RESULTS_REVERIFY
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.RESULTS_REVERIFY)]
+            == PipelineStep.JUDGE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.JUDGE)]
+            == PipelineStep.FIGURE_COMPOSE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.MAIN, PipelineStep.FIGURE_COMPOSE)]
+            == PipelineStep.REPORT
+        )
 
-    def test_fast_fail_skips_interrogation(self):
+    def test_fast_fail_run_goes_directly_to_judge(self):
+        """FAST_FAIL terminal layer: RUN → JUDGE → REPORT. Lighter than MAIN
+        (no results_reverify, no figure_compose)."""
         from researchos.runtime.scheduler import _NEXT_STEP
         from researchos.schemas.pipeline import PipelineStage, PipelineStep
-        key = (PipelineStage.FAST_FAIL, PipelineStep.CRITIC)
-        assert _NEXT_STEP[key] == PipelineStep.REPORT  # Direct, no interrogation
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.RUN)]
+            == PipelineStep.JUDGE
+        )
+        assert (
+            _NEXT_STEP[(PipelineStage.FAST_FAIL, PipelineStep.JUDGE)]
+            == PipelineStep.REPORT
+        )
 
     def test_interrogation_artifact(self):
         from researchos.runtime.scheduler import STEP_ARTIFACT

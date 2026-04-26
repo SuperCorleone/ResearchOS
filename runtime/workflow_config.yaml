@@ -291,6 +291,47 @@ steps:
     retries: 2
     type: llm
 
+  proposal_spec:
+    # Extract structured proposal_spec.yaml from pipeline_<id>/proposal.md.
+    # Captures change_type, new_components.replaces|adds_to (referencing
+    # paper_spec method_step ids), borrowed_from_paper, divergences.
+    agent: proposal_spec_extractor
+    output: proposal_spec.yaml
+    timeout: 300
+    retries: 2
+    type: llm
+
+  alignment:
+    # Synthesize alignment_contract.yaml — 9-dim contract that locks
+    # baseline / dataset / metrics / RQ alignment between paper and proposal.
+    # LOCKED dimensions store value_ref pointers, not inline copies.
+    agent: alignment_synthesizer
+    output: alignment_contract.yaml
+    timeout: 360
+    retries: 2
+    type: llm
+
+  alignment_validator:
+    # Pure-Python preflight gate. 18 hard checks: schema round-trip,
+    # evidence coverage ≥0.90, verbatim quote substring match, value_ref
+    # dereferenceability, ARM_DEPENDENT arm presence, etc.
+    # Specialised handler: scheduler._run_alignment_validator.
+    agent: alignment_validator
+    output: alignment_validation_report.json
+    timeout: 60
+    retries: 1
+    type: python
+
+  results_reverify:
+    # Independent subprocess re-run of the experiment to confirm reproducibility.
+    # Compares metric values across the two runs and emits reverify_report.json.
+    # Specialised handler: scheduler._run_results_reverify.
+    agent: results_reverify
+    output: reverify_report.json
+    timeout: 600
+    retries: 1
+    type: python
+
   waiting_approval:
     # Terminal sentinel of every milestone. The scheduler converts this step
     # into a milestone checkpoint + professor decision; no LLM call here.
@@ -334,37 +375,65 @@ review:
 # instead of blindly following the sequence list.
 
 stages:
+  # Canonical sequence per user lifecycle design (2026-04-26):
+  #
+  #   Alignment chain (typed inject only — legacy pipelines SKIP each
+  #   alignment step in the dispatcher's specialised handler):
+  #     paper_spec → proposal_spec → alignment → alignment_validator
+  #
+  #   Research backbone (FAST_FAIL & MAIN share):
+  #     hypothesis → design (with self-review) → code_recon
+  #     → baseline_analyze → data_recon
+  #     → concept_paper → concept_code (2-pass extraction)
+  #     → code → code_preflight → run
+  #
+  #   Terminal layer:
+  #     FAST_FAIL: run → judge → report
+  #     MAIN:      run → results_reverify → judge → figure_compose → report
+  #
+  # AUTO-GATE (FAST_FAIL only): scheduler._check_fast_fail_gate inspects
+  # judge_verdict.json after FAST_FAIL completes; INCONCLUSIVE + all-FAIL
+  # → auto-PAUSE without proceeding to MAIN.
+
   main:
     sequence:
-      - hypothesis
       - paper_spec
+      - proposal_spec
+      - alignment
+      - alignment_validator
+      - hypothesis
+      - design                 # includes integrated scientific self-review
       - code_recon
       - baseline_analyze
       - data_recon
       - concept_paper
-      - concept_code
-      - design                 # includes integrated scientific self-review
+      - concept_code           # 2-pass concept extraction
       - code
       - code_preflight
       - run
-      - judge                  # merged: critic + experiment_analysis + interrogation
+      - results_reverify       # independent subprocess re-run
+      - judge                  # merges critic + experiment_analysis + interrogation
       - figure_compose
       - report
       - waiting_approval
 
   fast_fail:
-    # Identical prefix to main (cached via step_cache when entering main).
-    # Only difference: omits figure_compose since fast_fail is a small-scale
-    # falsification gate, not a publication-grade run.
+    # Same backbone as main; lighter terminal layer (no results_reverify,
+    # no figure_compose). RUN is expected to use a reduced epoch / data
+    # budget — exp_designer writes scale_profile.fast_fail in
+    # experiment_plan.yaml and experiment_runner honours it.
     sequence:
-      - hypothesis
       - paper_spec
+      - proposal_spec
+      - alignment
+      - alignment_validator
+      - hypothesis
+      - design
       - code_recon
       - baseline_analyze
       - data_recon
       - concept_paper
       - concept_code
-      - design
       - code
       - code_preflight
       - run

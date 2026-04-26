@@ -48,51 +48,53 @@ from researchos.schemas.evaluation import GateResult
 
 logger = logging.getLogger(__name__)
 
-# Legacy dicts kept as module-level fallbacks for external code that imports
-# them. The scheduler now uses WorkflowConfig internally.
-#
-# MAIN pipeline: DESIGN -> CODE_RECON -> CONCEPT_EXTRACT -> CODE ->
-#                RUN -> RESULTS_REVERIFY -> JUDGE (or legacy CRITIC chain) ->
-#                REPORT. (DESIGN_REVIEW retired 2026-04 — scientific review
-#                folded into exp_designer self-review; structural checks
-#                still run via design_checks.py.)
-# FAST_FAIL pipeline keeps the lean path: no CODE_RECON, no CONCEPT_EXTRACT,
-# no RESULTS_REVERIFY, no CODE_PREFLIGHT, no INTERROGATION.
-#
-# After the 2026-04 refactor, REPORT is the terminal step — HITL gates
-# (WAITING_APPROVAL, PRE_PUBLISH_GATE) are removed. Professor auto-decides
-# stage transitions via decisions/*.yaml.
-_NEXT_STEP: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {
-    # Alignment workflow (2026-04). All MAIN-stage pipelines enter via
-    # PAPER_SPEC; legacy pipelines without typed evidence_refs SKIP each
-    # alignment step in the dispatcher's specialised handler and advance
-    # immediately to HYPOTHESIS.
-    (PipelineStage.MAIN, None): PipelineStep.PAPER_SPEC,
-    (PipelineStage.MAIN, PipelineStep.PAPER_SPEC): PipelineStep.PROPOSAL_SPEC,
-    (PipelineStage.MAIN, PipelineStep.PROPOSAL_SPEC): PipelineStep.ALIGNMENT,
-    (PipelineStage.MAIN, PipelineStep.ALIGNMENT): PipelineStep.ALIGNMENT_VALIDATOR,
-    (PipelineStage.MAIN, PipelineStep.ALIGNMENT_VALIDATOR): PipelineStep.HYPOTHESIS,
-    (PipelineStage.MAIN, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
-    (PipelineStage.MAIN, PipelineStep.DESIGN): PipelineStep.CODE_RECON,
-    (PipelineStage.MAIN, PipelineStep.CODE_RECON): PipelineStep.BASELINE_ANALYZE,
-    (PipelineStage.MAIN, PipelineStep.BASELINE_ANALYZE): PipelineStep.DATA_RECON,
-    (PipelineStage.MAIN, PipelineStep.DATA_RECON): PipelineStep.CONCEPT_EXTRACT,
-    (PipelineStage.MAIN, PipelineStep.CONCEPT_EXTRACT): PipelineStep.CODE,
-    (PipelineStage.MAIN, PipelineStep.CODE): PipelineStep.CODE_PREFLIGHT,
-    (PipelineStage.MAIN, PipelineStep.CODE_PREFLIGHT): PipelineStep.RUN,
-    (PipelineStage.MAIN, PipelineStep.RUN): PipelineStep.RESULTS_REVERIFY,
-    (PipelineStage.MAIN, PipelineStep.RESULTS_REVERIFY): PipelineStep.CRITIC,
-    (PipelineStage.MAIN, PipelineStep.CRITIC): PipelineStep.EXPERIMENT_ANALYSIS,
-    (PipelineStage.MAIN, PipelineStep.EXPERIMENT_ANALYSIS): PipelineStep.INTERROGATION,
-    (PipelineStage.MAIN, PipelineStep.INTERROGATION): PipelineStep.REPORT,
-    (PipelineStage.FAST_FAIL, None): PipelineStep.HYPOTHESIS,
-    (PipelineStage.FAST_FAIL, PipelineStep.HYPOTHESIS): PipelineStep.DESIGN,
-    # FAST_FAIL skips CODE_PREFLIGHT / INTERROGATION for speed.
-    (PipelineStage.FAST_FAIL, PipelineStep.DESIGN): PipelineStep.CODE,
-    (PipelineStage.FAST_FAIL, PipelineStep.CODE): PipelineStep.RUN,
-    (PipelineStage.FAST_FAIL, PipelineStep.RUN): PipelineStep.CRITIC,
-    (PipelineStage.FAST_FAIL, PipelineStep.CRITIC): PipelineStep.REPORT,
-}
+# ── _NEXT_STEP: yaml-derived backward-compat shim ──────────────────────
+# The single source of routing truth is now ``runtime/workflow_config.yaml``
+# (loaded via :class:`WorkflowConfig` per scheduler instance). This
+# module-level dict is rebuilt from yaml at import time so existing test
+# imports of ``_NEXT_STEP`` keep working — but it is *no longer* the
+# routing source the scheduler uses at runtime. Tests that assert the
+# pre-2026-04-26 wave2 routes (e.g. DATA_RECON → CONCEPT_EXTRACT,
+# FAST_FAIL CODE → RUN bypassing CODE_PREFLIGHT) will fail and should be
+# updated to reflect the canonical user lifecycle now in yaml.
+
+
+def _derive_legacy_next_step_from_yaml() -> dict[
+    tuple[PipelineStage, PipelineStep | None], PipelineStep | None
+]:
+    """Build the legacy enum-keyed _NEXT_STEP shim from the yaml config."""
+    from researchos.runtime.workflow_loader import WorkflowConfig as _WC
+
+    project_root = Path(__file__).resolve().parents[2]
+    cfg = _WC.load(project_root)
+    raw = cfg.build_next_step_map()
+    out: dict[tuple[PipelineStage, PipelineStep | None], PipelineStep | None] = {}
+    for (stage_str, step_str), next_str in raw.items():
+        try:
+            stage = PipelineStage(stage_str)
+        except ValueError:
+            continue
+        step: PipelineStep | None = None
+        if step_str is not None:
+            try:
+                step = PipelineStep(step_str)
+            except ValueError:
+                continue
+        next_step: PipelineStep | None = None
+        if next_str is not None:
+            try:
+                next_step = PipelineStep(next_str)
+            except ValueError:
+                next_step = None
+        out[(stage, step)] = next_step
+    return out
+
+
+try:
+    _NEXT_STEP = _derive_legacy_next_step_from_yaml()
+except Exception:  # pragma: no cover — degrade gracefully if yaml unreadable
+    logger.exception("Failed to derive _NEXT_STEP from yaml; shim is empty.")
+    _NEXT_STEP = {}
 
 STEP_ARTIFACT: dict[PipelineStep, str] = {
     # Alignment workflow artifacts
@@ -119,6 +121,7 @@ STEP_ARTIFACT: dict[PipelineStep, str] = {
     PipelineStep.INTERROGATION: "interrogation_report.md",
     PipelineStep.EXPERIMENT_ANALYSIS: "experiment_analysis.md",
     PipelineStep.JUDGE: "judge_verdict.json",
+    PipelineStep.FIGURE_COMPOSE: "figures/figure_manifest.yaml",
     PipelineStep.BASELINE_CONFIRM: "metric_contract.json",
 }
 
@@ -222,14 +225,14 @@ class ResearchScheduler:
         self.evaluator = TopicEvaluator(project_root, self.dispatcher)
         self.backlog = BacklogManager(project_root)
 
-        # Load workflow configuration (YAML or hardcoded defaults)
+        # Load workflow configuration (YAML or hardcoded defaults).
+        # The yaml workflow_config.yaml is the single source of truth for
+        # routing — `_apply_wave2_edges` was retired 2026-04-26 once the
+        # full alignment chain (PAPER_SPEC → PROPOSAL_SPEC → ALIGNMENT →
+        # ALIGNMENT_VALIDATOR), 2-pass concept extraction, MAIN
+        # results_reverify and figure_compose were brought in-line.
         self.workflow = WorkflowConfig.load(project_root)
         self._next_step_map = self.workflow.build_next_step_map()
-        # Wave 2: overlay new-step edges on top of the workflow-derived map so
-        # CONCEPT_EXTRACT, RESULTS_REVERIFY, BASELINE_CONFIRM, and the
-        # PRE_PUBLISH_GATE land in the routing table even when the YAML
-        # config hasn't been migrated yet.
-        self._apply_wave2_edges()
 
         # Branching support now flows through BranchRunner (per-pipeline).
         # The scheduler only holds the knobs; runners are constructed on
@@ -274,66 +277,6 @@ class ResearchScheduler:
                 logger.exception("Tick failed")
                 self.state.append_log("ERROR: tick failed, see logs")
             await asyncio.sleep(self.interval)
-
-    # ── Wave 2 routing overlay ────────────────────────────────────
-
-    def _apply_wave2_edges(self) -> None:
-        """Patch ``_next_step_map`` with the new Wave 2 edges.
-
-        The YAML-driven WorkflowConfig doesn't (yet) know about
-        CONCEPT_EXTRACT, RESULTS_REVERIFY, BASELINE_CONFIRM, or the
-        PRE_PUBLISH_GATE.  We inject those edges here so the scheduler can
-        route through them without requiring every deployment to migrate
-        the workflow YAML simultaneously.
-        """
-        main_stage = PipelineStage.MAIN.value
-        fast_fail_stage = PipelineStage.FAST_FAIL.value
-        edges_main = {
-            # Alignment workflow (2026-04): PAPER_SPEC -> PROPOSAL_SPEC ->
-            # ALIGNMENT -> ALIGNMENT_VALIDATOR -> HYPOTHESIS. Legacy pipelines
-            # SKIP each alignment step in the dispatcher.
-            (main_stage, None): PipelineStep.PAPER_SPEC.value,
-            (main_stage, PipelineStep.PAPER_SPEC.value): PipelineStep.PROPOSAL_SPEC.value,
-            (main_stage, PipelineStep.PROPOSAL_SPEC.value): PipelineStep.ALIGNMENT.value,
-            (main_stage, PipelineStep.ALIGNMENT.value): PipelineStep.ALIGNMENT_VALIDATOR.value,
-            (main_stage, PipelineStep.ALIGNMENT_VALIDATOR.value): PipelineStep.HYPOTHESIS.value,
-            # DESIGN -> CODE_RECON -> BASELINE_ANALYZE -> DATA_RECON -> CONCEPT_EXTRACT -> CODE
-            # (DESIGN_REVIEW step retired 2026-04; exp_designer self-reviews.)
-            # (BASELINE_ANALYZE inserted v5.3 between CODE_RECON and DATA_RECON:
-            #  LLM analyses cloned baseline package code-first, identifies real
-            #  data files vs. badges/logs/plots; replaces the v5.2 hardcoded
-            #  heuristic tables in data_recon.py.)
-            (main_stage, PipelineStep.DESIGN.value): PipelineStep.CODE_RECON.value,
-            (main_stage, PipelineStep.CODE_RECON.value): PipelineStep.BASELINE_ANALYZE.value,
-            (main_stage, PipelineStep.BASELINE_ANALYZE.value): PipelineStep.DATA_RECON.value,
-            (main_stage, PipelineStep.DATA_RECON.value): PipelineStep.CONCEPT_EXTRACT.value,
-            (main_stage, PipelineStep.CONCEPT_EXTRACT.value): PipelineStep.CODE.value,
-            # RUN -> RESULTS_REVERIFY -> CRITIC -> JUDGE -> REPORT
-            (main_stage, PipelineStep.RUN.value): PipelineStep.RESULTS_REVERIFY.value,
-            (main_stage, PipelineStep.RESULTS_REVERIFY.value): PipelineStep.CRITIC.value,
-            (main_stage, PipelineStep.CRITIC.value): PipelineStep.JUDGE.value,
-            (main_stage, PipelineStep.JUDGE.value): PipelineStep.REPORT.value,
-        }
-        # H1: BASELINE_CONFIRM is the first step on FAST_FAIL entry.  The
-        # handler (_run_baseline_confirm) writes metric_contract.json when
-        # experiment_plan.yaml has a `baseline` block, and SKIPs gracefully
-        # otherwise — so every pipeline passes through, but only baselined
-        # pipelines produce the contract artifact.  After that we resume
-        # the original HYPOTHESIS entry.
-        edges_fast_fail = {
-            (fast_fail_stage, None): PipelineStep.BASELINE_CONFIRM.value,
-            (fast_fail_stage, PipelineStep.BASELINE_CONFIRM.value): PipelineStep.HYPOTHESIS.value,
-        }
-        # FAST_FAIL: stay lean otherwise. Keep existing RUN->CRITIC intact.
-        for key, value in edges_main.items():
-            self._next_step_map[key] = value
-        for key, value in edges_fast_fail.items():
-            self._next_step_map[key] = value
-        # Make sure FAST_FAIL routes don't accidentally pick up the new MAIN
-        # edges if some future YAML declares a shared step.
-        self._next_step_map.setdefault(
-            (fast_fail_stage, PipelineStep.RUN.value), PipelineStep.CRITIC.value
-        )
 
     async def tick(self) -> None:
         """Single scheduling cycle -- idempotent."""
@@ -451,10 +394,12 @@ class ResearchScheduler:
             self.state.save_pipeline(pipeline)
             return
 
-        # Check if all branches have completed CRITIC
-        if runner.all_reached(PipelineStep.CRITIC):
+        # Check if all branches have completed JUDGE
+        # (post-2026-04-26 refactor: branching milestone moved from CRITIC
+        # to JUDGE since the latter absorbed critic + analysis + interrogation).
+        if runner.all_reached(PipelineStep.JUDGE):
             self.state.append_log(
-                "All branches completed CRITIC, selecting winner via journal metrics",
+                "All branches completed JUDGE, selecting winner via journal metrics",
                 pipeline.pipeline_id,
             )
             # branch_selector agent was removed in 2026-04 refactor; the
@@ -477,8 +422,8 @@ class ResearchScheduler:
                 }
                 for n in runner.branch_nodes()
             ]
-            # Resume normal pipeline after CRITIC of winning branch
-            pipeline.step = PipelineStep.CRITIC
+            # Resume normal pipeline after JUDGE of winning branch
+            pipeline.step = PipelineStep.JUDGE
             self.state.save_pipeline(pipeline)
             self.state.append_log(
                 f"Branch {winner_id} selected as winner, resuming pipeline",
@@ -513,9 +458,11 @@ class ResearchScheduler:
 
             if next_step is not None:
                 bdir = runner.branch_dir(node.iter_index)
-                # Stop branches at CRITIC (don't go past it).
+                # Stop branches at JUDGE (post-2026-04-26): don't dispatch
+                # FIGURE_COMPOSE / REPORT inside per-branch sandboxes —
+                # those run on the winning branch only after select_winner.
                 if next_step in (
-                    PipelineStep.INTERROGATION,
+                    PipelineStep.FIGURE_COMPOSE,
                     PipelineStep.REPORT,
                 ):
                     runner.set_status(node.iter_index, "completed")
@@ -645,12 +592,19 @@ class ResearchScheduler:
                 # Propagate falsification_design from evaluated yaml to pipeline dir
                 self._propagate_falsification_design(pipeline)
             elif pipeline.stage in (PipelineStage.MILESTONE, PipelineStage.FAST_FAIL):
+                was_fast_fail = pipeline.stage == PipelineStage.FAST_FAIL
                 if decision.next_milestone and decision.next_milestone.lower() == "paper":
                     pipeline.stage = PipelineStage.PAPER
                     pipeline.step = None
                 else:
                     pipeline.stage = PipelineStage.MAIN
                     pipeline.step = None
+                    if was_fast_fail:
+                        # P4 (2026-04-26): MAIN reuses FAST_FAIL artifacts.
+                        # Skip the entire paper_spec…code_preflight prefix
+                        # when every prerequisite is already on disk; only
+                        # the full-scale RUN (and downstream) needs to fire.
+                        self._maybe_skip_main_prefix(pipeline)
             elif pipeline.stage == PipelineStage.BLOCKED:
                 # Unblock: resume to MAIN (or PAPER if specified)
                 if decision.next_milestone and decision.next_milestone.lower() == "paper":
@@ -659,6 +613,7 @@ class ResearchScheduler:
                 else:
                     pipeline.stage = PipelineStage.MAIN
                     pipeline.step = None
+                    self._maybe_skip_main_prefix(pipeline)
             pipeline.last_error = None
             pipeline.retry_count = 0
 
@@ -1373,6 +1328,21 @@ class ResearchScheduler:
                     pipeline.pipeline_id,
                 )
 
+            # ── 2026-04-26 P3: write run_budget.json ─────────────────
+            # Stage-aware budget contract that experiment_runner reads
+            # before training. FAST_FAIL is hard-capped at 10% epoch /
+            # 10% data; MAIN runs at full scale. exp_designer's
+            # ``scale_profile`` (if present) can override either fraction
+            # within the FAST_FAIL ceiling — values >0.1 are clamped.
+            try:
+                self._inject_run_budget(pipeline, pdir_run, run_mode)
+            except Exception:
+                logger.warning(
+                    "Could not write run_budget.json for pipeline %s",
+                    pipeline.pipeline_id,
+                    exc_info=True,
+                )
+
         # Pre-flight: if RUN step and data.source is file/api, check data exists
         if next_step == PipelineStep.RUN:
             from researchos.runtime.hooks import validate_data_source_compliance
@@ -1432,31 +1402,33 @@ class ResearchScheduler:
             self.state.append_log(
                 f"Step dispatched: {next_step.value}", pipeline.pipeline_id
             )
-            # H3 + H5: post-CRITIC hooks — run VLM figure review and append
-            # a Node snapshot to journal.json.  Both are best-effort, never
-            # block pipeline progress.
-            if next_step == PipelineStep.CRITIC:
+            # Post-JUDGE hooks (renamed from post-CRITIC after 2026-04-26
+            # refactor: JUDGE absorbed critic + experiment_analyser +
+            # interrogator). Run VLM figure review, append a Node snapshot
+            # to journal.json, and route on the verdict's recommendation.
+            # All best-effort — never block pipeline progress.
+            if next_step == PipelineStep.JUDGE:
                 try:
                     await self._post_critic_vlm_review(pipeline)
                 except Exception:
-                    logger.exception("Post-CRITIC VLM review failed (non-fatal)")
+                    logger.exception("Post-JUDGE VLM review failed (non-fatal)")
                 try:
                     self._journal_record_critic(pipeline)
                 except Exception:
                     logger.exception("Journal record failed (non-fatal)")
 
-                # ── Change 4C: route on critic flag ──────────────────────
-                # After CRITIC completes, inspect the verdict and diverge:
-                #   SOFT_FLAG  → dispatch BASELINE_DIAGNOSE (pure Python),
-                #                then either fixer+re-run or escalate to L2.
-                #   HARD_FLAG  → AWAITING_HUMAN_PIVOT (Change 4D).
-                #   KILL_FLAG  → write failure wiki + kill pipeline.
-                #   NONE       → normal flow continues (REPORT on next tick).
+                # Route on the judge verdict's recommendation
+                # (mapped to legacy SOFT_FLAG/HARD_FLAG/KILL_FLAG taxonomy
+                # in `_read_critic_verdict`):
+                #   SOFT_FLAG (ITERATE)  → BASELINE_DIAGNOSE → fixer or L2
+                #   HARD_FLAG (PIVOT)    → AWAITING_HUMAN_PIVOT
+                #   KILL_FLAG            → kill pipeline + failure wiki
+                #   NONE     (ADVANCE)   → normal flow → FIGURE_COMPOSE/REPORT
                 try:
                     await self._handle_post_critic_routing(pipeline)
                 except Exception:
                     logger.exception(
-                        "Post-CRITIC routing failed (non-fatal); pipeline continues normally"
+                        "Post-JUDGE routing failed (non-fatal); pipeline continues normally"
                     )
         else:
             pipeline.retry_count += 1
@@ -1638,11 +1610,67 @@ class ResearchScheduler:
         if step == PipelineStep.BASELINE_CONFIRM:
             return self._run_baseline_confirm(pipeline, pdir)
 
+        # FIGURE_COMPOSE — skip-if-no-plottable-data short-circuit.
+        # Only the MAIN stage routes through here (FAST_FAIL omits it).
+        # The judge_verdict / judge.digest decides whether visualization
+        # is warranted — when ``visualization_plan`` is None / empty and
+        # ``experiment_plan.yaml::figure_specs`` is also empty, we skip
+        # the LLM step entirely and let routing advance to REPORT.
+        if step == PipelineStep.FIGURE_COMPOSE:
+            if not self._has_plottable_data(pdir):
+                self.state.append_log(
+                    f"FIGURE_COMPOSE skipped — no visualization_plan or figure_specs",
+                    pipeline.pipeline_id,
+                )
+                pipeline.artifacts["figure_compose"] = "SKIPPED"
+                return True
+            return None  # fall through to standard dispatch
+
         # REPORT — deterministic milestone renderer (replaced reporter LLM).
         if step == PipelineStep.REPORT:
             return self._run_report(pipeline, pdir)
 
         return None
+
+    def _has_plottable_data(self, pdir: Path) -> bool:
+        """Detect whether FIGURE_COMPOSE has anything to render.
+
+        Sources, in order:
+        1. ``judge.digest.json::visualization_plan`` (preferred — Judge owns
+           the call on whether plots are warranted)
+        2. ``judge_verdict.json::visualization_plan`` (yaml output of judge)
+        3. ``experiment_plan.yaml::figure_specs`` (designer-declared figures)
+
+        Returns False when all three are missing/empty — in which case
+        FIGURE_COMPOSE is skipped to save tokens and prevent a forced
+        empty figure manifest.
+        """
+        import json as _json
+
+        for digest_name in ("judge.digest.json", "judge_verdict.json"):
+            jpath = pdir / digest_name
+            if not jpath.exists():
+                continue
+            try:
+                data = _json.loads(jpath.read_text())
+            except Exception:
+                continue
+            vp = data.get("visualization_plan")
+            if vp:
+                return True
+
+        plan_path = pdir / "experiment_plan.yaml"
+        if plan_path.exists():
+            try:
+                import yaml as _yaml
+                plan = _yaml.safe_load(plan_path.read_text()) or {}
+            except Exception:
+                plan = {}
+            specs = plan.get("figure_specs") or []
+            if isinstance(specs, list) and specs:
+                return True
+
+        return False
 
     def _run_report(
         self, pipeline: PipelineState, pdir: Path
@@ -2457,6 +2485,170 @@ class ResearchScheduler:
     # should be skipped.  Called just before the RUN step is dispatched so the
     # run_mode sidecar file is always fresh.
 
+    # ── P4: MAIN reuses FAST_FAIL artifacts (2026-04-26) ────────────────────
+
+    # The set of prerequisites that, if all present, lets MAIN start at RUN
+    # rather than re-running the alignment + recon + concept + code chain.
+    # Mapped to the canonical filename per yaml workflow_config.steps.<>.output.
+    _MAIN_RUN_PREREQS: tuple[str, ...] = (
+        "experiment_plan.yaml",   # design (also covers paper_spec → alignment_validator outputs)
+        "concepts.digest.json",   # concept_code (final 2-pass merged digest)
+        "code_patch.diff",        # code
+        "preflight_report.json",  # code_preflight
+    )
+
+    def _maybe_skip_main_prefix(self, pipeline: "PipelineState") -> None:
+        """If all RUN prerequisites already exist, jump MAIN straight to RUN.
+
+        The FAST_FAIL stage (per the canonical 2026-04-26 routing) produces
+        the entire alignment + design + recon + concept + code +
+        code_preflight chain. When MAIN re-uses that chain, the only
+        legitimately new work is the **full-scale** RUN (replacing FAST_FAIL's
+        scaled run), the optional RESULTS_REVERIFY, JUDGE, FIGURE_COMPOSE,
+        and REPORT.
+
+        We:
+        1. Verify every prerequisite artifact is on disk under
+           ``artifacts/pipeline_<id>/``.
+        2. Delete the FAST_FAIL terminal artifacts (results.json,
+           judge.digest.json, judge_verdict.json, reverify_report.json,
+           analysis_report.md, figures/*) so MAIN's RUN doesn't see stale
+           lightweight outputs.
+        3. Set ``pipeline.step = CODE_PREFLIGHT`` so the next tick advances
+           to RUN per ``_next_step_map``. (CODE_PREFLIGHT is idempotent —
+           dispatcher SKIPs when preflight_report.json already exists.)
+
+        If any prerequisite is missing, do nothing — MAIN starts from
+        ``step=None`` (paper_spec) and the dispatcher's per-step idempotency
+        cache handles whatever partial reuse is possible.
+        """
+        pid = pipeline.pipeline_id
+        pdir = self.project_root / "artifacts" / f"pipeline_{pid}"
+        missing = [
+            name for name in self._MAIN_RUN_PREREQS
+            if not (pdir / name).exists()
+        ]
+        if missing:
+            self.state.append_log(
+                f"MAIN: full re-run (missing prereqs for skip-to-RUN: "
+                f"{', '.join(missing)})",
+                pid,
+            )
+            return
+
+        # Strip stale lightweight terminal artifacts so MAIN's RUN
+        # produces fresh full-scale results.
+        stale_artifacts = (
+            "results.json",
+            "judge.digest.json",
+            "judge_verdict.json",
+            "reverify_report.json",
+            "analysis_report.md",
+            "experiment_analysis.md",
+            "interrogation_report.md",
+            "critic_verdict.json",
+        )
+        for name in stale_artifacts:
+            stale_path = pdir / name
+            if stale_path.exists():
+                try:
+                    stale_path.unlink()
+                except Exception:
+                    logger.debug(
+                        "Could not unlink stale artifact %s",
+                        stale_path,
+                        exc_info=True,
+                    )
+        # Also clear figures/ from FAST_FAIL (they were generated against
+        # the lightweight run and need to be re-rendered against the full run).
+        figures_dir = pdir / "figures"
+        if figures_dir.exists():
+            try:
+                import shutil as _shutil
+                _shutil.rmtree(figures_dir)
+            except Exception:
+                logger.debug(
+                    "Could not remove figures dir for re-render", exc_info=True
+                )
+
+        # Drop matching keys from the artifact registry so the dispatcher's
+        # idempotency cache re-dispatches them.
+        for key in (
+            "run", "results_reverify", "judge", "figure_compose",
+            "critic", "interrogation", "experiment_analysis",
+        ):
+            pipeline.artifacts.pop(key, None)
+
+        pipeline.step = PipelineStep.CODE_PREFLIGHT
+        pipeline.metadata["main_skipped_prefix"] = True
+        self.state.append_log(
+            f"MAIN: reusing FAST_FAIL artifacts; skipping prefix "
+            f"(paper_spec…code_preflight); next step = RUN",
+            pid,
+        )
+
+    # ── P3: RUN budget injection (2026-04-26) ────────────────────────────────
+
+    def _inject_run_budget(
+        self,
+        pipeline: "PipelineState",
+        pdir: Path,
+        run_mode: str,
+    ) -> None:
+        """Write ``run_budget.json`` describing scaled epoch / data fractions.
+
+        Contract that experiment_runner consumes before launching training:
+        - ``stage``           — fast_fail / main / milestone (mirrors run_mode)
+        - ``epoch_fraction``  — multiply baseline epoch count by this
+        - ``data_fraction``   — keep this share of the training set
+        - ``max_seconds``     — wall-clock cap (FAST_FAIL only)
+
+        FAST_FAIL is hard-capped at 0.1 (10%) for both fractions per user
+        lifecycle design. ``experiment_plan.yaml::scale_profile.<stage>``
+        can request smaller values, but anything above the cap is clamped.
+        MAIN runs at 1.0 (full scale) by default.
+        """
+        import json as _json
+
+        if run_mode == "fast_fail":
+            cap_epoch, cap_data, max_seconds = 0.1, 0.1, 600
+            default_epoch, default_data = 0.05, 0.1
+        elif run_mode == "milestone":
+            cap_epoch, cap_data, max_seconds = 0.5, 1.0, 1800
+            default_epoch, default_data = 0.3, 1.0
+        else:  # main
+            cap_epoch, cap_data, max_seconds = 1.0, 1.0, 7200
+            default_epoch, default_data = 1.0, 1.0
+
+        plan_path = pdir / "experiment_plan.yaml"
+        plan_epoch = default_epoch
+        plan_data = default_data
+        if plan_path.exists():
+            try:
+                import yaml as _yaml
+                plan = _yaml.safe_load(plan_path.read_text()) or {}
+                profile = (plan.get("scale_profile") or {}).get(run_mode) or {}
+                if isinstance(profile, dict):
+                    plan_epoch = float(profile.get("epoch_fraction", default_epoch))
+                    plan_data = float(profile.get("data_fraction", default_data))
+            except Exception:
+                logger.debug(
+                    "scale_profile read failed; using stage defaults",
+                    exc_info=True,
+                )
+
+        epoch_fraction = max(0.0, min(plan_epoch, cap_epoch))
+        data_fraction = max(0.0, min(plan_data, cap_data))
+
+        budget = {
+            "stage": run_mode,
+            "epoch_fraction": epoch_fraction,
+            "data_fraction": data_fraction,
+            "max_seconds": max_seconds,
+            "enforcement": "hard" if run_mode == "fast_fail" else "soft",
+        }
+        (pdir / "run_budget.json").write_text(_json.dumps(budget, indent=2))
+
     def _read_skip_fast_fail(self, pipeline: "PipelineState") -> bool:
         """Return True when experiment_plan.yaml sets skip_fast_fail: true."""
         plan_path = (
@@ -2549,22 +2741,55 @@ class ResearchScheduler:
     def _read_critic_verdict(self, pipeline: "PipelineState") -> dict:
         """Return {'flag': 'NONE'|'SOFT_FLAG'|'HARD_FLAG'|'KILL_FLAG', ...}.
 
-        Tries critic_verdict.json first, then falls back to scanning
-        analysis_report.md or judge_report.md for the literal flag tokens.
+        Source priority (post-2026-04-26 refactor — JUDGE is canonical):
+        1. ``judge.digest.json``           — JudgeVerdict.recommendation
+                                             ITERATE→SOFT_FLAG, PIVOT→HARD_FLAG,
+                                             ADVANCE→NONE
+        2. ``judge_verdict.json``          — yaml output of judge step
+        3. ``critic_verdict.json``         — legacy critic step (back-compat)
+        4. text scan of analysis/judge .md — last-resort token scrape
+
+        This indirection lets the scheduler consume the merged JUDGE
+        verdict via the existing post-quality-gate routing without
+        re-plumbing every call site.
         """
+        import json as _json
+
         pdir = (
             self.project_root
             / "artifacts"
             / f"pipeline_{pipeline.pipeline_id}"
         )
-        json_path = pdir / "critic_verdict.json"
-        if json_path.exists():
+
+        rec_to_flag = {
+            "ITERATE": "SOFT_FLAG",
+            "PIVOT": "HARD_FLAG",
+            "ADVANCE": "NONE",
+        }
+
+        for digest_name in ("judge.digest.json", "judge_verdict.json"):
+            jpath = pdir / digest_name
+            if not jpath.exists():
+                continue
             try:
-                import json as _json
-                return _json.loads(json_path.read_text())
+                data = _json.loads(jpath.read_text())
+            except Exception:
+                continue
+            rec = (data.get("recommendation") or "").upper()
+            flag = rec_to_flag.get(rec, "NONE")
+            if data.get("fully_correct") is False and flag == "NONE":
+                # Defensive: ADVANCE with fully_correct=False is contradictory;
+                # treat as iterate so the soft-flag fixer path engages.
+                flag = "SOFT_FLAG"
+            return {"flag": flag, **data}
+
+        legacy = pdir / "critic_verdict.json"
+        if legacy.exists():
+            try:
+                return _json.loads(legacy.read_text())
             except Exception:
                 pass
-        # Fallback: scan reports for literal flag tokens
+
         for fname in ("analysis_report.md", "judge_report.md"):
             path = pdir / fname
             if not path.exists():

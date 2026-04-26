@@ -103,16 +103,16 @@ researchos inject \
 ```
 
 每个文件按 role 分类：`base_paper` / `proposal` / `ref_code` / `related_work`。
-- `base_paper` 进 wiki + 转 markdown 写 `artifacts/pipeline_<id>/base_paper.md`，并在 `runtime/raw_registry.yaml` 登记 role
-- `proposal` **不**入 wiki（避免被 BM25 当背景污染），写 `artifacts/pipeline_<id>/proposal.md`，**不**进 raw 也**不**进 registry
-- `ref_code` 仅记 git URL，由 CODE_RECON 实际 clone + import 测试
 
-**raw 编译白名单（2026-04-26 起）**：`scheduler.tick()` 每次跑 `compile_all_raw()` 仅
-编译 `runtime/raw_registry.yaml` 中标了 `base_paper` / `related_work` 的文件。即使
-proposal 因为遗留路径或手动复制误入 `knowledge/raw/`，registry 缺它就不进 wiki。
-inject / heartbeat fetch 入口都会调 `register_raw_paper(file, role)` 自动登记，
-普通用户不感知。
-- 同时 wiki frontmatter 不再写启发式抽取的 `evaluation_protocol` / `follow_up_questions`（之前会把"to address RQ1 we executed the?"这种回指误抓为 RQ）；结构化 RQ/metric 一律由 `paper_spec_extractor` 写到 `paper_spec.yaml`
+**完全隔离（2026-04-26 重构）**：typed inject 是 ResearchOS 的一条独立轨道。base_paper + proposal 只入 pipeline 自己的目录，**不**与系统其他 raw / wiki / pipeline 共享任何状态：
+
+- `base_paper` PDF→md 后**只**写 `artifacts/pipeline_<id>/base_paper.md`。**不**复制到 `knowledge/raw/`、**不**编译进 `knowledge/wiki/`、**不**写 `runtime/raw_registry.yaml`
+- `proposal` **只**写 `artifacts/pipeline_<id>/proposal.md`。同样跟 wiki / raw / registry 完全隔离
+- `ref_code` 仅记 git URL，由 CODE_RECON 在 pipeline 内 clone + import 测试，不污染任何全局位置
+- 下游 `kb_retrieve` 在 inject pipeline 内**走专属路径** `search_pipeline_dir()`：检索语料只是 `pipeline_<id>/` 自己的 base_paper.md / proposal.md / 本步前置产物，**完全看不到全局 wiki**。检测键：`state.json::metadata.source` 以 `user_inject` 开头（见 `agent_executor._is_inject_pipeline()`）
+- inject 是一条自驱命令：写完 `runtime/pipelines/new_<id>.json` 后 inline 起 single_run scheduler，tick 到 pipeline 进 COMPLETED / FAILED / BLOCKED 即退出。**不需要再敲 `run autonomous`**
+
+历史背景（旧 typed 行为，已废弃）：旧版会把 base_paper 复制到 `knowledge/raw/` 并 `compile_raw_to_wiki`，再用 `runtime/raw_registry.yaml` 白名单挡 proposal。新行为里 typed inject 根本不接触这三个全局位置，registry 白名单只对 legacy 模式（positional `papers`）有意义。
 
 ### 4 个新 pipeline step
 
@@ -252,7 +252,7 @@ oh  # 启动 OpenHarness 交互会话
 | 全自主 | `launch --auto-select` | 心跳 → 矿工 → 自动创建 Pipeline → 论文 |
 | 试运行 | `trial` | 心跳一次 → 矿工一次 → 跑一个 Pipeline → 停止 |
 | 注入论文 | `inject paper1.pdf paper2.pdf` | PDF → wiki → 矿工 → 候选+简报 → 用户选择（**deprecated**，会有 stderr 警告）|
-| **Typed inject**（推荐） | `inject --base-paper paper.pdf --proposal proposal.md --ref-code <git-url> --title "..." --question "..."` | 启用对齐契约工作流（PAPER_SPEC → ALIGNMENT → ...）；proposal 不入 wiki |
+| **Typed inject**（推荐，自驱） | `inject --base-paper paper.pdf --proposal proposal.md --ref-code <git-url> --title "..." --question "..."` | 完全隔离独立轨道：base_paper / proposal **只**入 `artifacts/pipeline_<id>/`，不写 raw / wiki / registry；kb_retrieve 走 `search_pipeline_dir` 仅查本 pipeline 目录；inline 起 single_run scheduler 自驱到 COMPLETED / FAILED / BLOCKED |
 | 注入 + 提案（旧） | `inject paper.pdf --title "..." --question "..."` | 旧 PDF → wiki + 直接创建 Pipeline 路径，将在下一 milestone 移除 |
 | 手动提案 | `create --title "..." --question "..." --refs ref1.pdf` | 直接创建 Pipeline |
 
@@ -956,6 +956,7 @@ python -m pytest tests/ -q
 18. **HITL 不是默认** — 2026-04 refactor 移除 3 个 HITL gate；保留
     `kill` / `tweak` 决策作紧急制动
 19. **用户输入即对齐源**（2026-04-25）— typed inject 模式下 base_paper / proposal 各自单文档抽取强 schema，禁止 kb_retrieve 跨文档稀释；alignment_contract 是 pipeline 后续所有 paper-aligned 决策的单一真实源
+22. **Inject 是完全隔离的独立轨道**（2026-04-26）— typed inject base_paper / proposal **不**写 `knowledge/raw/` / `knowledge/wiki/` / `runtime/raw_registry.yaml`；下游 kb_retrieve 由 `agent_executor._is_inject_pipeline()` 检测后路由到 `search_pipeline_dir()`，**完全看不见全局 wiki**；inject 命令本身 inline 启动 single_run scheduler 自驱到 pipeline 终态，不需要再敲 `run autonomous`
 20. **value_ref 而非 inline 复制**（2026-04-25）— LOCKED 维度只存 dotted path 引用 paper_spec leaf，下游 dereference；inline 复制 contract 字段值的代码会被 validator BLOCK
 21. **Baseline 直接 import 而非重实现**（2026-04-25）— 当 ref_code 可用时，coder 必须 `from <pkg> import <symbol>`；preflight 扫描重实现并 BLOCK；目的是数值保真而非代码风格一致
 

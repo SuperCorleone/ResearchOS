@@ -145,6 +145,21 @@ def run_preflight(pipeline_dir: Path, project_root: Path) -> dict:
                 "detail": reason,
             })
 
+    # 13. RUN budget honour (P3, 2026-04-26).
+    # When the scheduler has written run_budget.json with enforcement="hard"
+    # (FAST_FAIL), the experiment code MUST reference run_budget.json or one
+    # of the budget keys (``epoch_fraction``, ``data_fraction``,
+    # ``run_budget``). Soft enforcement (MAIN/milestone) only emits a WARN.
+    budget_check = _check_run_budget_honour(code_text, pipeline_dir)
+    checks["run_budget_honoured"] = budget_check["passed"]
+    if not budget_check["passed"]:
+        severity = "ERROR" if budget_check.get("enforcement") == "hard" else "WARN"
+        issues.append({
+            "severity": severity,
+            "check": "run_budget_honoured",
+            "detail": budget_check["reason"],
+        })
+
     # Determine verdict
     errors = [i for i in issues if i["severity"] == "ERROR"]
     warns = [i for i in issues if i["severity"] == "WARN"]
@@ -1194,6 +1209,61 @@ def _load_confidence_threshold(pipeline_dir: Path) -> float:
             break
         candidate = parent
     return _DEFAULT_CONFIDENCE_THRESHOLD
+
+
+def _check_run_budget_honour(code: str, pipeline_dir: Path) -> dict:
+    """Verify experiment code reads ``run_budget.json``.
+
+    Triggered by P3 (2026-04-26): the scheduler writes run_budget.json
+    before RUN with stage-specific epoch/data fractions. FAST_FAIL has
+    ``enforcement: "hard"`` and 10% caps; if the code never references
+    the budget, the run will burn full epochs anyway and defeat the
+    fast-fail promise. We require at least ONE of these markers in the
+    experiment code:
+
+    - ``run_budget.json``           — file read
+    - ``run_budget`` (substring)    — variable / dict reference
+    - ``epoch_fraction`` / ``data_fraction`` — explicit knob use
+
+    For ``main`` / ``milestone`` runs (soft enforcement) the absence is
+    a WARN, not a BLOCK.
+    """
+    budget_path = pipeline_dir / "run_budget.json"
+    if not budget_path.exists():
+        return {
+            "passed": True,
+            "enforcement": "soft",
+            "reason": "run_budget.json absent — preflight skipped (legacy pipeline?).",
+        }
+
+    try:
+        budget = json.loads(budget_path.read_text())
+    except Exception:
+        return {
+            "passed": True,
+            "enforcement": "soft",
+            "reason": "run_budget.json unreadable — preflight skipped.",
+        }
+
+    enforcement = str(budget.get("enforcement", "soft"))
+    markers = ("run_budget.json", "run_budget", "epoch_fraction", "data_fraction")
+    code_lower = code.lower()
+    found = any(m.lower() in code_lower for m in markers)
+    if found:
+        return {
+            "passed": True,
+            "enforcement": enforcement,
+            "reason": "experiment code references run_budget.",
+        }
+
+    msg = (
+        f"Stage={budget.get('stage')} expects epoch_fraction="
+        f"{budget.get('epoch_fraction')} / data_fraction="
+        f"{budget.get('data_fraction')} but experiment code never reads "
+        f"run_budget.json. FAST_FAIL with full-scale RUN defeats the "
+        f"lightweight-falsification contract."
+    )
+    return {"passed": False, "enforcement": enforcement, "reason": msg}
 
 
 def _check_baseline_reuse(pipeline_dir: Path) -> dict:

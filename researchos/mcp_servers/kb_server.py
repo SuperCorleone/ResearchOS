@@ -270,6 +270,86 @@ def _vector_search(
     return results
 
 
+def search_pipeline_dir(
+    query: str,
+    pipeline_dir: Path,
+    max_results: int = 5,
+    max_tokens: int = 4000,
+) -> str:
+    """Inject-dedicated KB retrieval over a single pipeline directory.
+
+    For ``user_inject`` pipelines the only legitimate KB scope is the
+    pipeline's own ``artifacts/pipeline_<id>/`` (base_paper.md, proposal.md,
+    plus whatever artifacts later steps produce). This function scans
+    ``pipeline_dir`` recursively for ``.md``, ``.txt``, ``.yaml``, ``.yml``,
+    and ``.json`` files and runs BM25 + n-gram scoring over them.
+
+    Vector search is skipped — the inject corpus is small (5–20 files) so
+    lexical scoring is sufficient, and the global FAISS index is keyed to
+    WIKI_DIR mtime which would conflict.
+    """
+    pages: list[tuple[Path, str]] = []
+    if not pipeline_dir.exists():
+        return f"Pipeline directory does not exist: {pipeline_dir}"
+
+    for ext in (".md", ".txt", ".yaml", ".yml", ".json"):
+        for path in pipeline_dir.rglob(f"*{ext}"):
+            try:
+                pages.append((path, path.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+
+    if not pages:
+        return f"Inject corpus is empty for {pipeline_dir.name}."
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return "Empty query. Please provide search terms."
+
+    n = len(pages)
+    doc_freq: Counter[str] = Counter()
+    all_page_tokens: list[list[str]] = []
+    for _, content in pages:
+        toks = _tokenize(content)
+        all_page_tokens.append(toks)
+        for t in set(toks):
+            doc_freq[t] += 1
+    idf = {
+        term: math.log((n - df + 0.5) / (df + 0.5) + 1.0)
+        for term, df in doc_freq.items()
+    }
+    avg_dl = sum(len(pt) for pt in all_page_tokens) / max(n, 1)
+
+    query_text = query.lower()
+    scored: list[tuple[float, Path, str]] = []
+    for i, (path, content) in enumerate(pages):
+        bm25 = _score_page_bm25(query_tokens, all_page_tokens[i], idf, avg_dl)
+        ngram = _ngram_similarity(query_text, content)
+        if bm25 > 0 or ngram > 0.15:
+            scored.append((bm25 + ngram, path, content))
+
+    if not scored:
+        return f"No relevant artifacts found for query: {query}"
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:max_results]
+
+    parts: list[str] = []
+    budget = max_tokens
+    for score, path, content in top:
+        try:
+            rel = path.relative_to(pipeline_dir)
+        except ValueError:
+            rel = path.name
+        header = f"## [{rel}] (score: {score:.4f})\n"
+        snippet = _truncate_to_tokens(content, budget // max(len(top), 1))
+        entry = header + snippet + "\n"
+        parts.append(entry)
+        budget -= len(entry) // 4
+
+    return "\n---\n".join(parts)
+
+
 def search_wiki(query: str, max_results: int = 5, max_tokens: int = 4000) -> str:
     """Search wiki pages by BM25 + character n-gram + optional vector reranking.
 
@@ -279,6 +359,9 @@ def search_wiki(query: str, max_results: int = 5, max_tokens: int = 4000) -> str
     3. Combined scoring with configurable weights
 
     Falls back to BM25-only if sentence-transformers/faiss are not installed.
+
+    Note: for ``user_inject`` pipelines this function is bypassed in favour
+    of :func:`search_pipeline_dir`, scoped to the pipeline's own directory.
     """
     pages = _load_wiki_pages()
     if not pages:

@@ -543,12 +543,35 @@ def run_paper_audit(pipeline_id: str, project_root: Path) -> str:
                 evidence_refs = [str(r) for r in refs]
         except Exception:
             pass
-    # Also include any file stems under knowledge/raw as evidence.
-    raw_dir = project_root / "knowledge" / "raw"
-    if raw_dir.exists():
-        for p in raw_dir.rglob("*"):
-            if p.is_file() and p.suffix.lower() in {".pdf", ".md", ".txt", ".bib"}:
-                evidence_refs.append(p.name)
+    # Inject pipelines (typed user_inject) are isolated from the global
+    # knowledge/raw/ corpus by design — see scripts/run_research.py
+    # cmd_inject typed mode comments. For these pipelines the only valid
+    # evidence is the per-pipeline files (base_paper.md, proposal.md,
+    # plus whatever the alignment chain produced). Falling back to
+    # knowledge/raw/ would re-introduce cross-pipeline contamination.
+    state_path = pdir / "state.json"
+    is_inject = False
+    if state_path.exists():
+        try:
+            data = json.loads(state_path.read_text())
+            src = (data.get("metadata") or {}).get("source", "")
+            is_inject = isinstance(src, str) and src.startswith("user_inject")
+        except Exception:
+            pass
+
+    if is_inject:
+        # Add pipeline-local evidence files only.
+        for fname in ("base_paper.md", "proposal.md"):
+            p = pdir / fname
+            if p.exists():
+                evidence_refs.append(fname)
+    else:
+        # Legacy path: include any file stems under knowledge/raw as evidence.
+        raw_dir = project_root / "knowledge" / "raw"
+        if raw_dir.exists():
+            for p in raw_dir.rglob("*"):
+                if p.is_file() and p.suffix.lower() in {".pdf", ".md", ".txt", ".bib"}:
+                    evidence_refs.append(p.name)
 
     bib_check = check_bib_existence(draft_path, bib_path, evidence_refs)
     chktex_output = run_chktex(tex_path) if tex_path.exists() else ""
